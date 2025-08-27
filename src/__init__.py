@@ -9,7 +9,8 @@ load_dotenv()
 
 # declaring flask application
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})
+
 
 # calling the dev configuration
 config = Config().dev_config

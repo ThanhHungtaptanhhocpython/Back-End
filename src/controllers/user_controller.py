@@ -21,7 +21,7 @@ def handle_home():
     )
 @users.route('/singletextsearch', methods = ["POST"])
 def handle_single_text_search():
-    data = request.get_json() 
+    data = request.get_json()
     
     print(data.query)
     print(data.topk)

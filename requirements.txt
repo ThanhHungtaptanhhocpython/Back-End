@@ -3,3 +3,9 @@ pathlib
 python-dotenv
 mysqlclient
 flask_cors
+numpy
+pandas
+faiss-cpu
+git+https://github.com/openai/CLIP.git
+open-clip-torch
+googletrans==4.0.0-rc1

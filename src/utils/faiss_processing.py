@@ -8,7 +8,7 @@ import numpy as np
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))
 
-from utils.nlp_processing import Translation
+from src.utils.nlp_processing import Translation
 
 class MyFaiss:
     def __init__(self, bin_clip_file: str, bin_clipv2_file: str, json_path: str):    

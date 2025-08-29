@@ -23,4 +23,3 @@ from src.controllers.user_controller import users
 
 # register user with api blueprint
 app.register_blueprint(users, url_prefix="/users")
-

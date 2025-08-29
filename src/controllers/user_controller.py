@@ -23,17 +23,12 @@ def handle_home():
 def handle_single_text_search():
     data = request.get_json() 
     
-    print(data.query)
-    print(data.topk)
-    print(data.clip)
-    print(data.clipv2)
+    res = getImageDataSingleTextSearch(data["clip"], data["clipv2"], data["query"], data["topk"])
 
-    res = getImageDataSingleTextSearch()
     response_data = {
         "success": True,
         "data": {
             "items": res,
-            "total_items": len(res)
         }
     }
     return Response(

@@ -29,6 +29,7 @@ def handle_single_text_search():
         "success": True,
         "data": {
             "items": res,
+            ## thêm total_items
         }
     }
     return Response(

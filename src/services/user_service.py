@@ -5,17 +5,12 @@ import random
 import json
 import base64
 
-# Add the 'src' directory to the Python path to resolve module import errors.
-# This allows the script to be run from any directory.
 SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, SRC_DIR)
 
 from utils.faiss_processing import MyFaiss
 from utils.combine_utils import merge_searching_results_by_addition
 
-# Construct absolute paths for data files by joining the source directory
-# with the relative file paths. This makes file access independent of the
-# current working directory.
 json_path = os.path.join(SRC_DIR, 'dict', 'id2img_fps.json')
 bin_clip_file = os.path.join(SRC_DIR, 'dict', 'faiss_clip_cosine.bin')
 bin_clipv2_file = os.path.join(SRC_DIR, 'dict', 'faiss_clipv2_cosine.bin')
@@ -68,12 +63,9 @@ def getImageData():
 
 
 def getImageDataSingleTextSearch(clip, clipv2, text_query, k):
-    
-
     result = []
     index = TotalIndexList
     k = min(k, len(index))
-
 
     if clip and clipv2:
         model_type = 'both'
@@ -81,7 +73,6 @@ def getImageDataSingleTextSearch(clip, clipv2, text_query, k):
         model_type = 'clip'
     else:
         model_type = 'clipv2'
-
     
     if model_type == 'both':
         scores_clip, list_clip_ids, _, _ = CosineFaiss.text_search(text_query, index=index, k=k, model_type='clip')
@@ -95,8 +86,6 @@ def getImageDataSingleTextSearch(clip, clipv2, text_query, k):
     id = 0
     for img_id in list_ids:
         info = CosineFaiss.id2img_fps.get(img_id)
-        # print(info)
-
         if not info:
             continue
 
@@ -123,24 +112,10 @@ def getImageDataSingleTextSearch(clip, clipv2, text_query, k):
             'folder_key': folder_key,
             'video_key': video_key,
             'frame_key': frame_key,
-            'timestamp': timestamp,
+            'timestamp': timestamp, # phần timestamp phải chuyển đổi sang giây, tùy vào mỗi video có fps bao nhiêu (không phải video nào cũng 25fps)
             'image': encoded_string,
-            # 'image_path': full_image_path
+            # thêm 'link': với link là đường dẫn đầy đủ tới video youtube
         })
         id += 1
 
     return result
-
-
-# Test output
-# result = getImageDataSingleTextSearch(
-#     clip=True,
-#     clipv2=True,
-#     text_query="một người đàn ông đang lái xe",
-#     k=5,
-#     map_keyframes_path=map_keyframes_path
-# )
-# print(result)
-
-
-

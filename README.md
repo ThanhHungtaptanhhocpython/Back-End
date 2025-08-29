@@ -3,8 +3,8 @@
 ## Create venv (window users)
 
 ```
-python -m venv venv/
-venv/Scripts/activate
+conda create --name AIChallenge2025
+conda activate AIChallenge2025
 ```
 
 ## Set up

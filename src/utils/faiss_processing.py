@@ -1,72 +1,95 @@
 import os
-import clip
-import open_clip
-import torch
 import json
+
 import faiss
 import numpy as np
-import sys
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))
+import open_clip
+import torch
 
-from src.utils.nlp_processing import Translation
+from .nlp_processing import Translation
 
 class MyFaiss:
-    def __init__(self, bin_clip_file: str, bin_clipv2_file: str, json_path: str):    
-        self.index_clip = self.load_bin_file(bin_clip_file)
-        self.index_clipv2 = self.load_bin_file(bin_clipv2_file)
 
-        self.id2img_fps = self.load_json_file(json_path)
+    def __init__(self, bin_clip_file: str, json_path: str):
+        """
+        Initializes the MyFaiss instance.
+
+        Args:
+            bin_clip_file: Path to the binary file containing the Faiss index.
+            json_path: Path to the JSON file containing metadata (id to image fps).
+        """
+        self.index_clip = self._load_bin_file(bin_clip_file)
+        self.id2img_fps = self._load_json_file(json_path)
         self.translater = Translation()
-        self.__device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.clip_model, _ = clip.load("ViT-B/16", device=self.__device)
-        self.clipv2_model, _, _ = open_clip.create_model_and_transforms('ViT-B-32', device=self.__device, pretrained='openai')
-        self.clipv2_tokenizer = open_clip.get_tokenizer('ViT-B-32')
-                                
-    def load_json_file(self, json_path: str):
-      with open(json_path, 'r') as f: 
-        js = json.load(f)
-      return {int(k):v for k,v in js.items()}
-    
-    def load_bin_file(self, bin_file: str):
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        self.clip_model, self.clip_tokenizer = self._initialize_clip_model()
+
+    def _initialize_clip_model(self) -> tuple[torch.nn.Module, any]:
+        
+        model_name = 'ViT-H-14-quickgelu'
+        pretrained = 'dfn5b'
+        
+        # Load model onto CPU first to prevent memory errors on some systems
+        model, _, _ = open_clip.create_model_and_transforms(
+            model_name, 
+            device='cpu', 
+            pretrained=pretrained
+        )
+        
+        if self.device == "cuda":
+            model = model.to(self.device)
+            
+        tokenizer = open_clip.get_tokenizer(model_name)
+        return model, tokenizer
+
+    def _load_json_file(self, json_path: str) -> dict:
+        """Loads a JSON file and converts its keys to integers."""
+        with open(json_path, 'r') as f:
+            data = json.load(f)
+        return {int(k): v for k, v in data.items()}
+
+    def _load_bin_file(self, bin_file: str) -> faiss.Index:
+        """Loads a Faiss index from a binary file."""
         return faiss.read_index(bin_file)
 
-    def text_search(self, text, index, k, model_type):
-        text = self.translater(text)
-
-        ###### TEXT FEATURES EXTRACTING ###### Embedding
-        if model_type == 'clip':
-            text = clip.tokenize([text]).to(self.__device)  
-            text_features = self.clip_model.encode_text(text)
-        else:
-            text = self.clipv2_tokenizer([text]).to(self.__device)  
-            text_features = self.clipv2_model.encode_text(text)
+    def _get_text_features(self, text: str) -> np.ndarray:
+        """Translates and encodes the input text into a normalized feature vector."""
+        translated_text = self.translater(text)
+        tokens = self.clip_tokenizer([translated_text]).to(self.device)
         
-        text_features /= text_features.norm(dim=-1, keepdim=True)
-        text_features = text_features.cpu().detach().numpy().astype(np.float32)
+        with torch.no_grad():
+            text_features = self.clip_model.encode_text(tokens)
+            text_features /= text_features.norm(dim=-1, keepdim=True)
+            
+        return text_features.cpu().numpy().astype(np.float32)
 
-        ###### SEARCHING #####
-        if model_type == 'clip':
-            index_choosed = self.index_clip
+    def _search_faiss_index(self, text_features: np.ndarray, k: int, index_subset: list[int] | None) -> tuple[np.ndarray, np.ndarray]:
+        """Searches the Faiss index for the given text features."""
+        if index_subset is None:
+            scores, ids = self.index_clip.search(text_features, k=k)
         else:
-            index_choosed = self.index_clipv2
+            id_selector = faiss.IDSelectorArray(index_subset)
+            params = faiss.SearchParametersIVF(sel=id_selector)
+            scores, ids = self.index_clip.search(text_features, k=k, params=params)
+        return scores.flatten(), ids.flatten()
+
+    def _prepare_results(self, image_ids: np.ndarray) -> tuple[list[dict], list[str]]:
+        """Maps image indices to metadata and constructs image paths."""
+        infos_query = [self.id2img_fps.get(int(img_id)) for img_id in image_ids]
+        # Filter out None results for IDs that were not found
+        valid_infos = [info for info in infos_query if info]
         
-        if index is None:
-          scores, idx_image = index_choosed.search(text_features, k=k)
-        else:
-          id_selector = faiss.IDSelectorArray(index)
-          scores, idx_image = index_choosed.search(text_features, k=k, 
-                                                   params=faiss.SearchParametersIVF(sel=id_selector))
-        idx_image = idx_image.flatten()
-        # print("idx_image: ")
-        # print(idx_image)
-        # print("list score: ")
-        # print(scores)
+        image_paths = [
+            os.path.join(info['split'], info['video_id'], info['frame_name'])
+            for info in valid_infos
+        ]
+        return valid_infos, image_paths
 
-        ###### GET INFOS KEYFRAMES_ID ######
-        infos_query = list(map(self.id2img_fps.get, list(idx_image)))
-        image_paths = [info['image_path'] for info in infos_query]
-        # print("image_paths: ")
-        # print(image_paths)
-        return scores.flatten(), idx_image, infos_query, image_paths
-
-               
+    def text_search(self, text: str, k: int, index: list[int] | None = None) -> tuple[np.ndarray, np.ndarray, list[dict], list[str]]:
+        
+        text_features = self._get_text_features(text)
+        scores, image_ids = self._search_faiss_index(text_features, k, index)
+        infos_query, image_paths = self._prepare_results(image_ids)
+        
+        return scores, image_ids, infos_query, image_paths

@@ -1,5 +1,5 @@
 from flask import request, Response, json, Blueprint
-from src.services.user_service import getImageDataSingleTextSearch, getImageDataQAndASearch
+from src.services.user_service import getImageDataSingleTextSearch, getImageDataQAndASearch, getImageSearchById
 
 users = Blueprint("users", __name__)
 
@@ -28,6 +28,33 @@ def handle_qna_search():
     print(data)
 
     res = getImageDataQAndASearch(data["query"], data["topk"])
+    response_data = {
+        "success": True,
+        "data": {
+            "items": res,
+            "total_items": len(res)
+        }
+    }
+    return Response(
+        response=json.dumps(response_data, indent=2),
+        status=200,
+        mimetype="application/json"
+    )
+
+@users.route('/imagesearch', methods = ["POST"])
+def handle_image_search():
+    topk = int(request.form.get("topk"))
+
+    clip = request.form.get("clip")
+
+    clipv2 = request.form.get("clipv2")
+
+    faiss_index = request.form.get("faiss_index", "default")
+    print(f"------------------------------------------faiss_index: {faiss_index}")
+    file = request.files.get("image")
+    
+    res = getImageSearchById(int(faiss_index), topk)
+
     response_data = {
         "success": True,
         "data": {

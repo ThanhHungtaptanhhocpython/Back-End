@@ -22,7 +22,7 @@ class MyFaiss:
         self.id2img_fps = self._load_json_file(json_path)
         self.translater = Translation()
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        
+        self.save_dir = os.path.join(os.path.dirname(__file__), '..', 'data', 'features')
         self.clip_model, self.clip_tokenizer = self._initialize_clip_model()
 
     def _initialize_clip_model(self) -> tuple[torch.nn.Module, any]:
@@ -92,4 +92,44 @@ class MyFaiss:
         scores, image_ids = self._search_faiss_index(text_features, k, index)
         infos_query, image_paths = self._prepare_results(image_ids)
         
+        return scores, image_ids, infos_query, image_paths
+    
+    def _search_image_index(self, id: int, k: int) -> tuple[np.ndarray, np.ndarray]:
+        # Get feature vector for the given ID
+        meta = self.id2img_fps.get(id)
+        if not meta:
+            raise ValueError(f"No feature found for ID {id}")
+        
+        video_id = meta["video_id"]
+        split = meta["split"]
+        frame_index = meta["frame_index"]
+        
+        feature_path = f"{self.save_dir}/{split}/{video_id}.npy"
+        feats = np.load(feature_path).astype(np.float32)
+        query_feature = feats[frame_index:frame_index+1]  # Reshape to (1, feature_dim)
+
+        # Normalize query feature
+        norms = np.linalg.norm(query_feature, axis=1, keepdims=True) + 1e-8
+        query_feature = query_feature / norms
+
+        # Perform Faiss search
+        distances, indices = self.index_clip.search(query_feature, k)
+        
+        return distances[0], indices[0]
+    
+    def _prepare_results(self, image_ids: np.ndarray) -> tuple[list[dict], list[str]]:
+        """Maps image indices to metadata and constructs image paths."""
+        infos_query = [self.id2img_fps.get(int(img_id)) for img_id in image_ids]
+        # Filter out None results for IDs that were not found
+        valid_infos = [info for info in infos_query if info]
+        
+        image_paths = [
+            os.path.join(info['split'], info['video_id'], info['frame_name'])
+            for info in valid_infos
+        ]
+        return valid_infos, image_paths
+
+    def image_search(self, id: int, k: int) -> tuple[np.ndarray, np.ndarray, list[dict], list[str]]: 
+        scores, image_ids = self._search_image_index(id, k)
+        infos_query, image_paths = self._prepare_results(image_ids)
         return scores, image_ids, infos_query, image_paths

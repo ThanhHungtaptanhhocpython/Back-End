@@ -12,7 +12,7 @@ if SRC_DIR not in sys.path:
 from utils.faiss_processing import MyFaiss
 from utils.vlm_processing import VLMProcessor
 
-bin_clip_file = os.path.join(SRC_DIR, 'dict', 'faiss_index_clip.bin')
+bin_clip_file = os.path.join(SRC_DIR, 'dict', 'nw', 'faiss_index_clip.bin')
 meta_data = os.path.join(SRC_DIR, 'dict', 'metadata_clip.json')
 
 CosineFaiss = MyFaiss(bin_clip_file, meta_data)
@@ -77,7 +77,9 @@ def getImageDataSingleTextSearch(query, k):
     result = []
 
     scores, list_ids, infos_query, image_paths = CosineFaiss.text_search(text_query, k)
-    for info, image_path in zip(infos_query, image_paths):
+    id = 0
+    # print("List IDs:", list_ids)  # Debugging line
+    for info, idx, image_path in zip(infos_query, list_ids, image_paths):
         if not info:
             continue
 
@@ -93,12 +95,13 @@ def getImageDataSingleTextSearch(query, k):
         except FileNotFoundError:
             continue
 
-        id = 0
+        
         result.append({
             'id': id,
             'folder_key': folder_key,
             'video_key': video_id,
             'frame_key': frame_name,
+            'faiss_id_clip': int(idx),
             # 'timestamp': timestamp,
             'image': encoded_string
         })
@@ -155,3 +158,49 @@ def getImageDataQAndASearch(query, k):
         id += 1
 
     return result
+
+def getImageSearchById(image_id, k):
+    result = []
+
+    try:
+        scores, image_ids, infos_query, image_paths = CosineFaiss.image_search(image_id, k)
+
+        id = 0
+        for info, image_path in zip(infos_query, image_paths):
+            if not info:
+                continue
+
+            # Extract metadata
+            frame_name = info['global_frame_id']
+            video_id = info['video_id']
+            # timestamp = info['pts']
+            folder_key = info['split'].split('-')[1].upper()
+            full_image_path = os.path.join(SRC_DIR, 'data', 'Keyframes', image_path)
+            try:
+                with open(full_image_path, "rb") as image_file:
+                    encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+            except FileNotFoundError:
+                continue
+
+            
+            result.append({
+                'id': id,
+                'folder_key': folder_key,
+                'video_key': video_id,
+                'frame_key': frame_name,
+                # 'timestamp': timestamp,
+                'image': encoded_string
+            })
+            id += 1 
+        return result
+    except ValueError as e:
+        print(f"Error during image search: {e}")
+
+
+# res = getImageDataSingleTextSearch("Clip đua xe đạp, góc flycam từ trên cao: Một vận động viên áo xanh dương-trắng vượt qua 3 vận động viên khác để lên dẫn đầu, sau đó giữ vị trí này đến khi về đích.", 5)
+# for item in res:
+#     print(item['faiss_id_clip'])
+
+# res2 = getImageSearchById(36244, 5)
+# for item in res2:
+#     print(item['frame_key'])

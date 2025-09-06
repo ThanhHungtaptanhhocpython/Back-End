@@ -11,12 +11,13 @@ if SRC_DIR not in sys.path:
 
 from utils.faiss_processing import MyFaiss
 from utils.vlm_processing import VLMProcessor
+from utils.trake_processing import TRAKE
 
 bin_clip_file = os.path.join(SRC_DIR, 'dict', 'nw', 'faiss_index_clip.bin')
 meta_data = os.path.join(SRC_DIR, 'dict', 'metadata_clip.json')
 
 CosineFaiss = MyFaiss(bin_clip_file, meta_data)
-
+TrakeSearch = TRAKE(bin_clip_file, meta_data)
 def generate_random_answer():
     answers = [
         "This is an example answer",
@@ -204,3 +205,5 @@ def getImageSearchById(image_id, k):
 # res2 = getImageSearchById(36244, 5)
 # for item in res2:
 #     print(item['frame_key'])
+def GetImageDataTrakeSearch(query): 
+    return TrakeSearch.process_temporal_search(query)

@@ -4,7 +4,13 @@ from typing import List, Dict
 import numpy as np
 from collections import defaultdict
 from .faiss_processing import MyFaiss
-
+'''
+"global_frame_id":int17
+"video_id":string"V001"
+"frame_name":string"keyframe_L21_V001_0001.webp"
+"frame_index":int0
+"split":string"videos-l21-a"
+'''
 
 class TRAKE:
     def __init__(self, bin_clip_file: str, json_path: str):
@@ -29,6 +35,13 @@ class TRAKE:
         Returns:
             List of candidate information with scores
         """
+        '''
+"global_frame_id":int17
+"video_id":string"V001"
+"frame_name":string"keyframe_L21_V001_0001.webp"
+"frame_index":int0
+"split":string"videos-l21-a"
+'''
         scores, image_ids, infos_query, image_paths = self.faiss_searcher.text_search(query, k)
         
         candidates = []
@@ -180,17 +193,9 @@ class TRAKE:
             frames = []
             
             for frame_id, frame_detail in enumerate(sequence['frame_details']):
-                # Extract folder_key and video_key from video_id
-                # Assuming video_id format is like "L21_V024"
-                parts = frame_detail['video_id'].split('_', 1)
-                if len(parts) == 2:
-                    folder_key, video_key = parts
-                else:
-                    folder_key = frame_detail['split']
-                    video_key = frame_detail['video_id']
-                
                 # Extract frame_key from frame_name (remove extension)
-                frame_key = frame_detail['frame_name'].split('.')[0].replace('keyframe_', '').split('_')[-1]
+                folder_key = frame_detail['frame_name'].split('.')[0].replace('keyframe_', '').split('_')[1]
+                video_key = frame_detail['frame_name'].split('.')[0].replace('keyframe_', '').split('_')[0] + '_' + folder_key
                 
                 # Get base64 encoded image
                 image_b64 = self._get_image_base64(

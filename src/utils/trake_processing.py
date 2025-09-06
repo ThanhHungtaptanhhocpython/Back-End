@@ -206,7 +206,7 @@ class TRAKE:
                     "id": frame_id,
                     "folder_key": folder_key,
                     "video_key": video_key,
-                    "frame_key": frame_key,
+                    "frame_key": frame_detail['global_frame_id'],
                     # "timestamp": 0.0,  # Not available in current metadata
                     "image": image_b64
                 })

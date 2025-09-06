@@ -12,3 +12,7 @@ googletrans==4.0.0-rc1
 transformers
 torch
 Pillow
+open_clip_torch
+sentence-transformers
+collections
+json

@@ -1,5 +1,5 @@
 from flask import request, Response, json, Blueprint
-from src.services.user_service import getImageDataSingleTextSearch, getImageDataQAndASearch
+from src.services.user_service import getImageDataSingleTextSearch, getImageDataQAndASearch, GetImageDataTrakeSearch
 
 users = Blueprint("users", __name__)
 
@@ -45,7 +45,7 @@ def handle_trake_search():
     data = request.get_json()
     query = data.get("query")
     top_k = data.get("topk", 100) # Default to 100
-    top_results = data.get("top_results", 10) # Default to 10
+   
 
     if not query:
         return Response(
@@ -54,7 +54,7 @@ def handle_trake_search():
             mimetype="application/json"
         )
     
-    res = getImageDataTrakeSearch(query)
+    res = GetImageDataTrakeSearch(query, top_results = top_k)
     response_data = {
         "success": True,
         "data": {

@@ -1,54 +1,102 @@
-# Back-End
+# AI Challenge 2025 - Multimodal Video Retrieval Backend
 
-> For AI agent guidance and repository details, see `skills/README.md`.
+> **Note for AI Agents:** For AI agent guidance and detailed repository context, please refer to `skills/README.md`, `ARCHITECTURE_UPGRADE_PLAN.md`, and `AGENT_TASKS.md`.
 
-# File Structure
-Cần tổ chức lại các thư mục dict và data
-```
+This repository contains the backend system for an advanced image and video keyframe retrieval system. Built currently with **Flask** (with plans to migrate to FastAPI) and powered by **Faiss** and **OpenCLIP**, the system provides robust visual semantic retrieval, temporal sequence search, and Q&A search capabilities.
+
+## 🚀 Features
+
+- **Text-to-Image Search:** Retrieve video keyframes using natural language queries via CLIP embeddings.
+- **Image-to-Image Search:** Find visually similar frames using a base image or Faiss ID.
+- **Temporal Search (TRAKE):** Retrieve sequences of events in chronological order with temporal constraint scoring.
+- **Q&A Search:** Combines retrieval with a VLM (Vision-Language Model) processor to answer questions about the retrieved frames.
+- **Offline Indexing Pipeline:** Dedicated scripts to extract keyframes, encode with OpenCLIP (`ViT-H-14-quickgelu`), and build Faiss indices.
+
+## 📁 Directory Structure
+
+```text
 Back-End/
-├── app.py                     # Entry point chính của ứng dụng
-├── config.py                  # Cấu hình (DB, secret key, env variables)
-├── requirements.txt           # List các package cần cài đặt
-├── src/                       # Thư mục chính cho code
-│   ├── __init__.py
-│   ├── controllers/                # Chứa các route / endpoint
-│   │   ├── __init__.py
-│   │   ├── user_controller.py
-│   ├── services/              # Chứa logic xử lý nghiệp vụ
-│   │   ├── __init__.py
-│   │   ├── user_service.py
-│   ├── utils/                 # Các tiện ích helper, faiss, vlm, logging,...
-│   │   ├── __init__.py
+├── app.py                     # Main Flask application entry point
+├── main.py                    # FastAPI entry point (Phase 1 Migration)
+├── config.py                  # Environment & Database Configurations
+├── requirements.txt           # Python dependencies
+├── scripts/                   # Data processing and indexing scripts
+│   ├── build_clip_faiss_index.py
+│   ├── rebuild_keyframes.py
+│   └── verify_search_assets.py
+├── src/                       
+│   ├── api/                   # FastAPI Routers (WIP)
+│   ├── controllers/           # Flask route controllers (user_controller.py)
+│   ├── services/              # Business logic (user_service.py)
+│   ├── utils/                 # Core AI utilities (Faiss, VLM, NLP, Temporal)
 │   │   ├── faiss_processing.py
+│   │   ├── trake_processing.py
 │   │   ├── vlm_processing.py
-|   |   ├── combine_utils.py
 │   │   └── nlp_processing.py
-│   ├── data/Keyframes                 # Các tiện ích helper, faiss, vlm, logging,...
-│   │   ├── dataset...
-│   ├── dict/                 # Các tiện ích helper, faiss, vlm, logging,...
-|   |   ├── faiss_index_clip.bin
-│   │   └── metadata_clip.json
-├── tests/                     # Chứa các test case
-│   ├── __init__.py
-│   ├── test_user.py
-│   └── test_video.py
-└── README.md
+│   ├── data/                  # Root directory for generated data
+│   │   ├── Keyframes/         # Extracted keyframe images (lossless WebP/JPG)
+│   │   └── features/          # Per-video numpy features (.npy)
+│   └── dict/                  # Metadata and indices
+│       ├── metadata_clip.json
+│       └── nw/
+│           └── faiss_index_clip.bin
+└── tests/                     # Unit tests
 ```
-## Create venv (window users)
 
-```
-conda create --name AIChallenge2025
+## ⚙️ Installation & Setup
+
+### 1. Environment Setup (Windows/Linux)
+
+It is highly recommended to use Conda to manage your environment to prevent dependency conflicts, especially with `faiss` and `torch`.
+
+```bash
+# Create and activate conda environment
+conda create --name AIChallenge2025 python=3.10 -y
 conda activate AIChallenge2025
-```
 
-## Set up
-
-```
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-## Run Backend
+*Note: Ensure you have compatible versions of `torch`, `torchvision`, and `faiss-cpu` (or `faiss-gpu`) for your system.*
 
+### 2. Data Preparation
+
+Before running the backend, you must build the local data assets. Ensure your source videos are placed in a reachable directory and map them properly.
+
+**Step 1: Extract Keyframes**
+Extracts keyframes from videos based on `metadata_clip.json` without losing resolution.
+```bash
+python scripts/rebuild_keyframes.py --video-root <path_to_your_videos_directory>
 ```
+
+**Step 2: Build Faiss Index & Features**
+Encodes the extracted keyframes using OpenCLIP and builds the `faiss_index_clip.bin` and `.npy` features.
+```bash
+python scripts/build_clip_faiss_index.py
+```
+
+**Step 3: Verify Assets**
+Ensure everything was built correctly before starting the server.
+```bash
+python scripts/verify_search_assets.py
+```
+
+## 🏃‍♂️ Running the Server
+
+Once the data pipeline is complete, you can start the Flask backend server:
+
+```bash
 python app.py
 ```
+
+The server will initialize the Faiss index, load the metadata, and start listening for API requests.
+
+## 🛣️ Roadmap
+
+We are currently upgrading the architecture. Future milestones include:
+- Migrating fully to **FastAPI** with strict Pydantic schemas.
+- Integrating **Elasticsearch** for OCR and ASR multimodal retrieval.
+- Implementing Adaptive Fusion and a Query Planner.
+- Upgrading to Temporal Beam Search with exponential time-gap decay.
+*(See `ARCHITECTURE_UPGRADE_PLAN.md` for details).*

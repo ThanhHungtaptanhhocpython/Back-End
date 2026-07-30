@@ -43,6 +43,34 @@ Back-End/
 └── tests/                     # Unit tests
 ```
 
+## 🏗️ Architecture & Pipeline
+
+```mermaid
+graph TD
+    subgraph Offline Data Pipeline
+        A[Raw Videos] --> B[rebuild_keyframes.py]
+        B --> C[Lossless Keyframes]
+        C --> D[extract_ocr.py]
+        A --> E[extract_asr.py]
+        C --> F[build_clip_faiss_index.py]
+        F --> G[(Faiss / Qdrant)]
+        D --> H[master_index_pipeline.py]
+        E --> H
+        H --> I[(Elasticsearch)]
+    end
+
+    subgraph API Search Flow
+        U[User Query] --> V[FastAPI]
+        V --> W[QueryPlanner]
+        W -- Visual Query --> G
+        W -- OCR/ASR Query --> I
+        G --> X[FusionService]
+        I --> X
+        X -- RRF Merging --> Y[BLIP-VQA Reranker]
+        Y -- Image Validation --> Z[Final Ranked Results]
+    end
+```
+
 ## ⚙️ Installation & Setup
 
 ### 1. Environment Setup (Windows/Linux)

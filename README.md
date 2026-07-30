@@ -86,21 +86,36 @@ python scripts/verify_search_assets.py
 
 Once the data pipeline is complete, you can start the backend server. The project has migrated to **FastAPI** as the primary API framework.
 
+### Step 1: Start Elasticsearch
+The backend now supports Multimodal Search (OCR/ASR). You must have Elasticsearch running locally.
+- **Via Docker:** `docker run -d -p 9200:9200 -e "discovery.type=single-node" elasticsearch:8.15.0`
+- **Via Windows Executable:** Run `elasticsearch.bat` in the Elasticsearch `bin` folder.
+
+### Step 2: Start FastAPI
 ```bash
 # Start the FastAPI server directly:
 python main.py
 
-# Alternatively, run via uvicorn for more options:
-uvicorn main:app --host 0.0.0.0 --port 5000 --reload
+# Alternatively, run via uvicorn with auto-reload for development:
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
+*Note: The server uses port 8000 by default (previously 5000 in Flask).*
 
-The server will load environment variables and wait for API requests. Heavy AI models (Faiss, OpenCLIP) are initialized **lazily**, meaning the server starts up instantly and only loads the models into RAM/VRAM when an endpoint is called for the first time.
+The server will load environment variables and wait for API requests. Heavy AI models (Faiss, OpenCLIP, BLIP-VQA, SigLIP) are initialized **lazily**, meaning the server starts up instantly and only loads the models into RAM/VRAM when an endpoint is called for the first time.
 
-## 🛣️ Roadmap
+### Step 3: Test via Swagger UI
+FastAPI automatically generates an interactive API documentation interface.
+- Open your browser and navigate to: **http://localhost:8000/docs**
+- Click on `POST /users/multimodalsearch`.
+- Click **"Try it out"**.
+- Enter your search query in the Request Body (e.g., `{"query": "man riding a bicycle"}`) and click **Execute**.
 
-We are currently upgrading the architecture. Future milestones include:
-- Migrating fully to **FastAPI** with strict Pydantic schemas.
-- Integrating **Elasticsearch** for OCR and ASR multimodal retrieval.
-- Implementing Adaptive Fusion and a Query Planner.
-- Upgrading to Temporal Beam Search with exponential time-gap decay.
-*(See `ARCHITECTURE_UPGRADE_PLAN.md` for details).*
+## 🛣️ Architecture Upgrade Completed
+The massive AI Challenge 2025 Architecture Upgrade is now **100% COMPLETED**:
+- ✅ Migrated fully to **FastAPI** with strict Pydantic schemas.
+- ✅ Integrated **Elasticsearch** for OCR and ASR multimodal retrieval.
+- ✅ Implemented Adaptive Fusion and a rule-based Query Planner.
+- ✅ Added BLIP-VQA Image Validation Reranking.
+- ✅ Upgraded to Temporal Beam Search with exponential time-gap decay.
+- ✅ Integrated Dual Embedding (SigLIP & BEiT-3) with Reciprocal Rank Fusion (RRF).
+*(See `ARCHITECTURE_UPGRADE_PLAN.md` for full details).*

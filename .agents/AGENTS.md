@@ -11,13 +11,14 @@ The **AI Challenge 2025 Backend** is a multimodal image/video keyframe retrieval
 ### Core Tech Stack & AI Models
 - **AI Models:**
   - **OpenCLIP:** Uses the `ViT-H-14-quickgelu` model with `dfn5b` pretrained weights for embedding visual keyframes.
-  - **BLIP-VQA:** Uses `Salesforce/blip-vqa-base` for local visual question answering.
+  - **SigLIP & BEiT-3:** Dual-embedding models for advanced visual reasoning and multilingual queries.
+  - **BLIP-VQA:** Uses `Salesforce/blip-vqa-base` for local visual question answering and reranking.
 - **Search Technologies:**
-  - **Faiss:** Performs cosine similarity indexing and search using CLIP vectors.
-  - **Elasticsearch (Planned):** Will be used for text-based OCR and ASR search.
+  - **Faiss:** Performs cosine similarity indexing and search (fusing vectors via Reciprocal Rank Fusion - RRF).
+  - **Elasticsearch:** Actively used for text-based OCR and ASR multimodal search.
+  - **Qdrant (Planned Backup):** Schema designed for multi-vector migration if Faiss causes OOM.
 - **Frameworks:**
-  - **Flask:** The legacy api application (primarily `app.py`, `src/controllers/user_controller.py`).
-  - **FastAPI:** The new API framework (FastAPI transition is in progress under `main.py` and `src/api/routers/`).
+  - **FastAPI:** The sole API framework for all routing and Pydantic validation (Flask has been retired).
 - **Data Schemas:**
   - Keyframes are stored at: `src/data/Keyframes/{split}/{video_id}/{frame_name}`
   - Video features (.npy) are stored at: `src/data/features/{split}/{video_id}.npy`

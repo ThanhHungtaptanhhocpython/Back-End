@@ -3,7 +3,11 @@ import os
 from typing import List, Dict
 import numpy as np
 from collections import defaultdict
+import math
+import os
 from .faiss_processing import MyFaiss
+from src.services.reranker_service import reranker_service
+from src.utils.nlp_processing import QueryPlanner
 '''
 "global_frame_id":int17
 "video_id":string"V001"
@@ -49,6 +53,7 @@ class TRAKE:
                 candidates.append({
                     'faiss_idx': int(img_id),
                     'global_frame_id': info['global_frame_id'],
+                    'timestamp': info.get('timestamp', 0.0),
                     'frame_name': info['frame_name'],
                     'video_id': info['video_id'],
                     'split': info['split'], 
@@ -77,6 +82,77 @@ class TRAKE:
         
         return video_groups
     
+    def beam_search_sequences(self, video_id: str, event_candidates: List[List[Dict]], beam_width: int = 50) -> List[Dict]:
+        """
+        Find top temporal sequences using beam search.
+        
+        Args:
+            video_id: The ID of the video being processed.
+            event_candidates: List of candidate lists for each event.
+            beam_width: Maximum number of partial sequences to keep at each step.
+        """
+        # Initialize beam with candidates from the first event
+        beam = []
+        for candidate in event_candidates[0]:
+            seq_info = {
+                'video_id': video_id,
+                'frames': [candidate['frame_name']],
+                'global_frame_ids': [candidate['global_frame_id']],
+                'timestamps': [candidate.get('timestamp', 0.0)],
+                'splits': [candidate['split']],
+                'base_score': candidate['score'],
+                'total_score': candidate['score'],
+                'frame_details': [candidate]
+            }
+            beam.append(seq_info)
+        
+        # Sort beam and keep top B
+        beam.sort(key=lambda x: x['total_score'], reverse=True)
+        beam = beam[:beam_width]
+        
+        # Process subsequent events
+        for event_idx in range(1, len(event_candidates)):
+            new_beam = []
+            next_candidates = event_candidates[event_idx]
+            
+            # Sort next candidates by global_frame_id for temporal checks
+            next_candidates.sort(key=lambda x: x['global_frame_id'])
+            
+            for seq in beam:
+                last_frame_id = seq['global_frame_ids'][-1]
+                for candidate in next_candidates:
+                    # Temporal constraint: current frame must come after previous frame
+                    if candidate['global_frame_id'] > last_frame_id:
+                        new_base_score = seq['base_score'] + candidate['score']
+                        time_gap = candidate.get('timestamp', 0.0) - seq['timestamps'][0]
+                        
+                        # Exponential decay penalty
+                        alpha = 0.01
+                        penalty = math.exp(-alpha * time_gap) if time_gap > 0 else 1.0
+                        new_total_score = new_base_score * penalty
+                        
+                        new_seq = {
+                            'video_id': video_id,
+                            'frames': seq['frames'] + [candidate['frame_name']],
+                            'global_frame_ids': seq['global_frame_ids'] + [candidate['global_frame_id']],
+                            'timestamps': seq['timestamps'] + [candidate.get('timestamp', 0.0)],
+                            'splits': list(set(seq['splits'] + [candidate['split']])),
+                            'base_score': new_base_score,
+                            'total_score': new_total_score,
+                            'frame_details': seq['frame_details'] + [candidate]
+                        }
+                        new_beam.append(new_seq)
+            
+            # Keep top B
+            new_beam.sort(key=lambda x: x['total_score'], reverse=True)
+            beam = new_beam[:beam_width]
+            
+            if not beam:
+                # Beam is empty, no valid temporal paths
+                break
+                
+        return beam
+
     def find_valid_sequences(self, video_groups: Dict, n_events: int) -> List[Dict]:
         """
         Find valid sequences where events occur in temporal order
@@ -95,50 +171,10 @@ class TRAKE:
             if any(len(candidates) == 0 for candidates in event_candidates):
                 continue
             
-            self._find_sequences_recursive(
-                video_id, event_candidates, 0, [], 0.0, valid_sequences
-            )
+            sequences = self.beam_search_sequences(video_id, event_candidates, beam_width=50)
+            valid_sequences.extend(sequences)
         
         return valid_sequences
-    
-    def _find_sequences_recursive(self, video_id: str, event_candidates: List[List[Dict]], 
-                                 event_idx: int, current_sequence: List[Dict], 
-                                 current_score: float, valid_sequences: List[Dict]):
-        """
-        Recursively find valid sequences with temporal constraints
-        """
-        if event_idx == len(event_candidates):
-            # Found a valid sequence
-            sequence_info = {
-                'video_id': video_id,
-                'frames': [frame['frame_name'] for frame in current_sequence],
-                'global_frame_ids': [frame['global_frame_id'] for frame in current_sequence],
-                'splits': list(set(frame['split'] for frame in current_sequence)),
-                'total_score': current_score,
-                'frame_details': current_sequence.copy()
-            }
-            valid_sequences.append(sequence_info)
-            return
-        
-        # Sort candidates by global_frame_id for temporal ordering
-        sorted_candidates = sorted(
-            event_candidates[event_idx], 
-            key=lambda x: x['global_frame_id']
-        )
-        
-        for candidate in sorted_candidates:
-            # Check temporal constraint: current frame must come after previous frame
-            if event_idx > 0 and candidate['global_frame_id'] <= current_sequence[-1]['global_frame_id']:
-                continue
-            
-            # Add candidate and continue search
-            current_sequence.append(candidate)
-            self._find_sequences_recursive(
-                video_id, event_candidates, event_idx + 1, 
-                current_sequence, current_score + candidate['score'], 
-                valid_sequences
-            )
-            current_sequence.pop()
     
     def rank_sequences(self, sequences: List[Dict], top_n: int = 20) -> List[Dict]:
         """
@@ -206,7 +242,7 @@ class TRAKE:
                     "folder_key": folder_key,
                     "video_key": video_key,
                     "frame_key": frame_detail['global_frame_id'],
-                    # "timestamp": 0.0,  # Not available in current metadata
+                    "timestamp": frame_detail.get('timestamp', 0.0),
                     "image": image_b64
                 })
             
@@ -256,9 +292,50 @@ class TRAKE:
         if not valid_sequences:
             return []
         
-        # Step 4: Rank sequences
+        # Step 4: Rank sequences initially
         print("Ranking sequences...")
         ranked_sequences = self.rank_sequences(valid_sequences, top_results)
+        
+        # Step 4.5: BLIP-VQA Sequence Validation (Phase 6.4)
+        print("Validating Top sequences with BLIP-VQA...")
+        for seq in ranked_sequences:
+            vqa_scores = []
+            for i, frame_detail in enumerate(seq['frame_details']):
+                event_query = events[i]
+                vqa_question = QueryPlanner.generate_vqa_question(event_query)
+                
+                frame_name = frame_detail['frame_name']
+                split = frame_detail.get('split', '')
+                
+                # Try to locate the image
+                possible_path1 = os.path.join(self.keyframes_base_path, split, frame_name)
+                possible_path2 = os.path.join(self.keyframes_base_path, frame_name)
+                
+                img_path = possible_path1 if os.path.exists(possible_path1) else possible_path2
+                if not os.path.exists(img_path):
+                    # fallback to frame_detail['image_path'] if it is an absolute path
+                    img_path = frame_detail.get('image_path', '')
+                    
+                score = 0.0
+                if os.path.exists(img_path):
+                    score = reranker_service.score_image(img_path, vqa_question)
+                vqa_scores.append(score)
+            
+            # Average VQA score across all frames in the sequence
+            avg_vqa = sum(vqa_scores) / len(vqa_scores) if vqa_scores else 0.0
+            
+            # Blend 70% original decayed score + 30% VQA confidence
+            # Note: total_score could be > 1.0 (since it's a sum of Faiss scores). 
+            # We scale VQA by the number of events to match the magnitude.
+            vqa_scaled = avg_vqa * len(events)
+            
+            old_score = seq['total_score']
+            new_score = (old_score * 0.7) + (vqa_scaled * 0.3)
+            seq['total_score'] = new_score
+            seq['vqa_confidence'] = avg_vqa
+        
+        # Re-sort after VQA validation
+        ranked_sequences.sort(key=lambda x: x['total_score'], reverse=True)
         
         # Step 5: Format response
         print("Formatting response...")

@@ -106,3 +106,26 @@ def handle_ocr_and_od_search(request: TextSearchRequest):
         success=True,
         data=DataResponse(items=res, total_items=len(res))
     )
+
+@router.post("/multimodalsearch", response_model=BaseResponse)
+def handle_multimodal_search(request: TextSearchRequest):
+    from src.utils.nlp_processing import QueryPlanner
+    from src.services.fusion_service import multimodal_search
+    
+    # 1. Parse the query to get visual/ocr/asr sub-queries and weights
+    plan = QueryPlanner.parse_query(request.query)
+    
+    # 2. Execute the multimodal search
+    res = multimodal_search(
+        visual_query=plan["visual_query"],
+        ocr_query=plan["ocr_query"],
+        asr_query=plan["asr_query"],
+        weights=plan["weights"],
+        topk=request.topk,
+        original_query=request.query
+    )
+    
+    return BaseResponse(
+        success=True,
+        data=DataResponse(items=res, total_items=len(res))
+    )

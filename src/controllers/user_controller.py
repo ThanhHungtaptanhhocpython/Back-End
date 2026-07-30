@@ -1,167 +1,248 @@
+"""User controller for search API endpoints.
+
+Handles HTTP request validation and response formatting for all
+search endpoints (text, Q&A, image, temporal, OCR/OD).
+"""
+
 from flask import request, Response, json, Blueprint
-from src.services.user_service import getImageDataSingleTextSearch, getImageDataQAndASearch, getImageSearchById, GetImageDataTrakeSearch, getImageSearchByFile
+
+from src.services.user_service import (
+    getImageDataSingleTextSearch,
+    getImageDataQAndASearch,
+    getImageSearchById,
+    GetImageDataTrakeSearch,
+    getImageSearchByFile,
+)
 
 users = Blueprint("users", __name__)
 
-@users.route('/singletextsearch', methods = ["POST"])
-def handle_single_text_search():
-    data = request.get_json() 
-    
-    res = getImageDataSingleTextSearch(data["query"], data["topk"])
+# ---------------------------------------------------------------------------
+# Default values for optional parameters
+# ---------------------------------------------------------------------------
+DEFAULT_TOPK: int = 100
 
-    response_data = {
-        "success": True,
-        "data": {
-            "items": res,
-            "total_items": len(res)
-        }
+
+# ---------------------------------------------------------------------------
+# Response helpers
+# ---------------------------------------------------------------------------
+
+def _error_response(message: str, status: int = 400) -> Response:
+    """Build a standardised JSON error response.
+
+    Args:
+        message: Human-readable error description.
+        status: HTTP status code (default 400).
+
+    Returns:
+        A Flask ``Response`` with the unified error schema.
+    """
+    payload = {
+        "success": False,
+        "data": None,
+        "error": message,
     }
     return Response(
-        response=json.dumps(response_data, indent=2),
-        status=200,
-        mimetype="application/json"
+        response=json.dumps(payload, indent=2),
+        status=status,
+        mimetype="application/json",
     )
 
-@users.route('/qnasearch', methods = ["POST"])
-def handle_qna_search():
-    data = request.get_json()
-    print(data)
 
-    res = getImageDataQAndASearch(data["query"], data["topk"])
-    response_data = {
+def _success_response(items: list) -> Response:
+    """Build a standardised JSON success response.
+
+    Args:
+        items: List of result dicts to return.
+
+    Returns:
+        A Flask ``Response`` with the unified success schema.
+    """
+    payload = {
         "success": True,
         "data": {
-            "items": res,
-            "total_items": len(res)
-        }
+            "items": items,
+            "total_items": len(items),
+        },
+        "error": None,
     }
     return Response(
-        response=json.dumps(response_data, indent=2),
+        response=json.dumps(payload, indent=2),
         status=200,
-        mimetype="application/json"
+        mimetype="application/json",
     )
 
-@users.route('/imagesearch', methods = ["POST"])
-def handle_image_search():
+
+def _parse_topk(raw_value: str | int | None) -> int | None:
+    """Validate and return *topk* as a positive integer.
+
+    Args:
+        raw_value: The raw value from the request payload.
+
+    Returns:
+        A validated positive integer, or ``None`` if the value is invalid.
+    """
+    if raw_value is None:
+        return DEFAULT_TOPK
     try:
-        topk_str = request.form.get("topk")
-        if topk_str is None:
-            topk = 100
-        else:
-            topk = int(topk_str)
-            if topk <= 0:
-                raise ValueError()
+        value = int(raw_value)
+        if value <= 0:
+            return None
+        return value
     except (TypeError, ValueError):
-        return Response(
-            response=json.dumps({"success": False, "message": "topk must be a positive integer.", "data": {"items": [], "total_items": 0}}),
-            status=400,
-            mimetype="application/json"
-        )
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
+@users.route('/singletextsearch', methods=["POST"])
+def handle_single_text_search() -> Response:
+    """Search keyframes by a single text query using CLIP similarity.
+
+    Required JSON fields:
+        query (str): The text search query.
+
+    Optional JSON fields:
+        topk (int): Number of results to return (default 100).
+
+    Returns:
+        JSON response with matching keyframe items or a 400 error.
+    """
+    data: dict | None = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return _error_response("Request body must be a valid JSON object.")
+
+    query: str | None = data.get("query")
+    if not query or not isinstance(query, str) or not query.strip():
+        return _error_response("Missing required field: query")
+
+    topk: int | None = _parse_topk(data.get("topk"))
+    if topk is None:
+        return _error_response("topk must be a positive integer.")
+
+    res = getImageDataSingleTextSearch(query.strip(), topk)
+    return _success_response(res)
+
+
+@users.route('/qnasearch', methods=["POST"])
+def handle_qna_search() -> Response:
+    """Search keyframes by text query and answer each result using VLM.
+
+    Required JSON fields:
+        query (str): The text search query.
+
+    Optional JSON fields:
+        topk (int): Number of results to return (default 100).
+
+    Returns:
+        JSON response with matching keyframe items (with VLM answers)
+        or a 400 error.
+    """
+    data: dict | None = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return _error_response("Request body must be a valid JSON object.")
+
+    query: str | None = data.get("query")
+    if not query or not isinstance(query, str) or not query.strip():
+        return _error_response("Missing required field: query")
+
+    topk: int | None = _parse_topk(data.get("topk"))
+    if topk is None:
+        return _error_response("topk must be a positive integer.")
+
+    res = getImageDataQAndASearch(query.strip(), topk)
+    return _success_response(res)
+
+
+@users.route('/imagesearch', methods=["POST"])
+def handle_image_search() -> Response:
+    """Search keyframes by an uploaded image file or a Faiss index ID.
+
+    Form fields:
+        image (file, optional): An uploaded image file.
+        faiss_index (str, optional): A Faiss index ID for similarity search.
+        topk (int, optional): Number of results to return (default 100).
+
+    At least one of ``image`` or ``faiss_index`` must be provided.
+
+    Returns:
+        JSON response with matching keyframe items or a 400 error.
+    """
+    topk: int | None = _parse_topk(request.form.get("topk"))
+    if topk is None:
+        return _error_response("topk must be a positive integer.")
 
     file = request.files.get("image")
-    faiss_index = request.form.get("faiss_index", "default")
-    
-    res = []
+    faiss_index: str | None = request.form.get("faiss_index", "default")
+
     if file and file.filename != '':
         res = getImageSearchByFile(file, topk)
     elif faiss_index and faiss_index not in ("default", "null"):
         try:
             faiss_index_int = int(faiss_index)
         except (TypeError, ValueError):
-            return Response(
-                response=json.dumps({"success": False, "message": "faiss_index must be an integer.", "data": {"items": [], "total_items": 0}}),
-                status=400,
-                mimetype="application/json"
-            )
+            return _error_response("faiss_index must be an integer.")
         res = getImageSearchById(faiss_index_int, topk)
     else:
-        return Response(
-            response=json.dumps({"success": False, "message": "Either an uploaded image file or a valid faiss_index must be provided.", "data": {"items": [], "total_items": 0}}),
-            status=400,
-            mimetype="application/json"
+        return _error_response(
+            "Either an uploaded image file or a valid faiss_index must be "
+            "provided."
         )
 
-    response_data = {
-        "success": True,
-        "data": {
-            "items": res,
-            "total_items": len(res)
-        }
-    }
-    return Response(
-        response=json.dumps(response_data, indent=2),
-        status=200,
-        mimetype="application/json"
-    )
+    return _success_response(res)
 
-@users.route('/trakesearch', methods=["POST"])
+
 @users.route('/temporalsearch', methods=["POST"])
-def handle_trake_search():
-    data = request.get_json(silent=True)
+def handle_temporal_search() -> Response:
+    """Search keyframes using temporal (multi-event) queries.
+
+    Required JSON fields:
+        query (list[dict]): A non-empty list of event objects, each
+            containing a ``query`` string.
+
+    Optional JSON fields:
+        topk (int): Number of results to return (default 100).
+
+    Returns:
+        JSON response with matching keyframe items or a 400 error.
+    """
+    data: dict | None = request.get_json(silent=True)
     if not isinstance(data, dict):
-        return Response(
-            response=json.dumps({"success": False, "message": "Request must be a JSON object.", "data": {"items": [], "total_items": 0}}),
-            status=400,
-            mimetype="application/json"
-        )
-        
+        return _error_response("Request body must be a valid JSON object.")
+
     query = data.get("query")
     if not query or not isinstance(query, list) or len(query) == 0:
-        return Response(
-            response=json.dumps({"success": False, "message": "Query must be a non-empty list of events.", "data": {"items": [], "total_items": 0}}),
-            status=400,
-            mimetype="application/json"
+        return _error_response(
+            "Missing required field: query (must be a non-empty list of "
+            "events)."
         )
-        
+
     for item in query:
-        if not isinstance(item, dict) or not item.get("query") or not isinstance(item.get("query"), str) or not item.get("query").strip():
-            return Response(
-                response=json.dumps({"success": False, "message": "Each event in query list must have a non-empty 'query' string.", "data": {"items": [], "total_items": 0}}),
-                status=400,
-                mimetype="application/json"
+        if (
+            not isinstance(item, dict)
+            or not item.get("query")
+            or not isinstance(item.get("query"), str)
+            or not item.get("query").strip()
+        ):
+            return _error_response(
+                "Each event in query list must have a non-empty 'query' "
+                "string."
             )
 
-    try:
-        top_k = data.get("topk")
-        if top_k is None:
-            top_k = 100
-        top_k = int(top_k)
-        if top_k <= 0:
-            raise ValueError()
-    except (TypeError, ValueError):
-        return Response(
-            response=json.dumps({"success": False, "message": "topk must be a positive integer.", "data": {"items": [], "total_items": 0}}),
-            status=400,
-            mimetype="application/json"
-        )
-    
-    res = GetImageDataTrakeSearch(query, top_results = top_k)
-    response_data = {
-        "success": True,
-        "data": {
-            "items": res,
-            "total_items": len(res)
-        }
-    }
-    return Response(
-        response=json.dumps(response_data, indent=2),
-        status=200,
-        mimetype="application/json"
-    )
+    topk: int | None = _parse_topk(data.get("topk"))
+    if topk is None:
+        return _error_response("topk must be a positive integer.")
+
+    res = GetImageDataTrakeSearch(query, top_results=topk)
+    return _success_response(res)
+
 
 @users.route('/ocrandodsearch', methods=["POST"])
-def handle_ocr_and_od_search():
-    # Explicit placeholder to prevent silent empty successful results
-    response_data = {
-        "success": False,
-        "message": "OCR/OD search is not implemented yet.",
-        "data": {
-            "items": [],
-            "total_items": 0
-        }
-    }
-    return Response(
-        response=json.dumps(response_data, indent=2),
-        status=501,
-        mimetype="application/json"
-    )
+def handle_ocr_and_od_search() -> Response:
+    """Placeholder endpoint for OCR and object-detection search.
+
+    Returns:
+        A 501 Not Implemented response.
+    """
+    return _error_response("OCR/OD search is not implemented yet.", status=501)

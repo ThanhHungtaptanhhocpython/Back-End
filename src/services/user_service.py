@@ -4,6 +4,7 @@ import numpy as np
 import random
 import json
 import base64
+import logging
 from PIL import Image
 
 SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -18,7 +19,8 @@ bin_clip_file = os.path.join(SRC_DIR, 'dict', 'nw', 'faiss_index_clip.bin')
 meta_data = os.path.join(SRC_DIR, 'dict', 'metadata_clip.json')
 
 CosineFaiss = MyFaiss(bin_clip_file, meta_data)
-TrakeSearch = TRAKE(bin_clip_file, meta_data)
+TrakeSearch = TRAKE(CosineFaiss)
+VlmProcessorInstance = VLMProcessor()
 def generate_random_answer():
     answers = [
         "This is an example answer",
@@ -94,7 +96,8 @@ def getImageDataSingleTextSearch(query, k):
         try:
             with open(full_image_path, "rb") as image_file:
                 encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
-        except FileNotFoundError:
+        except Exception as e:
+            logging.error(f"Failed to load image {full_image_path}: {e}")
             continue
 
         
@@ -126,12 +129,13 @@ def getImageDataQAndASearch(query, k):
         # timestamp = info['pts']
         folder_key = info['split'].split('-')[1].upper()
         full_image_path = os.path.join(SRC_DIR, 'data', 'Keyframes', image_path)
-        list_full_paths.append(full_image_path)
         try:
             with open(full_image_path, "rb") as image_file:
                 encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
-        except FileNotFoundError:
+        except Exception as e:
+            logging.error(f"Failed to load image {full_image_path}: {e}")
             continue
+        list_full_paths.append(full_image_path)
         id = 0
         list_paths.append({
             'id': id,
@@ -142,8 +146,7 @@ def getImageDataQAndASearch(query, k):
             'image': encoded_string
         })
         id += 1
-    vlm = VLMProcessor()
-    answers = vlm.batch_answer(list_full_paths, text_query, batch_size=4)
+    answers = VlmProcessorInstance.batch_answer(list_full_paths, text_query, batch_size=4)
    
     
     result = []
@@ -181,7 +184,8 @@ def getImageSearchById(image_id, k):
             try:
                 with open(full_image_path, "rb") as image_file:
                     encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
-            except FileNotFoundError:
+            except Exception as e:
+                logging.error(f"Failed to load image {full_image_path}: {e}")
                 continue
 
             
@@ -196,7 +200,7 @@ def getImageSearchById(image_id, k):
             id += 1 
         return result
     except ValueError as e:
-        print(f"Error during image search: {e}")
+        logging.error(f"Error during image search: {e}")
 
 
 # res = getImageDataSingleTextSearch("Clip đua xe đạp, góc flycam từ trên cao: Một vận động viên áo xanh dương-trắng vượt qua 3 vận động viên khác để lên dẫn đầu, sau đó giữ vị trí này đến khi về đích.", 5)
@@ -223,7 +227,8 @@ def getImageSearchByFile(image_file, k):
             try:
                 with open(full_image_path, "rb") as img_file_read:
                     encoded_string = base64.b64encode(img_file_read.read()).decode('utf-8')
-            except FileNotFoundError:
+            except Exception as e:
+                logging.error(f"Failed to load image {full_image_path}: {e}")
                 continue
 
             result.append({
@@ -236,7 +241,7 @@ def getImageSearchByFile(image_file, k):
             id += 1 
         return result
     except Exception as e:
-        print(f"Error during image file search: {e}")
+        logging.error(f"Error during image file search: {e}")
         return []
 
 def GetImageDataTrakeSearch(query, top_results=100): 

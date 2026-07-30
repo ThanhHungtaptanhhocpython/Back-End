@@ -13,15 +13,14 @@ from .faiss_processing import MyFaiss
 '''
 
 class TRAKE:
-    def __init__(self, bin_clip_file: str, json_path: str):
+    def __init__(self, faiss_searcher: MyFaiss):
         """
         Initialize TRAKE system with MyFaiss
         
         Args:
-            bin_clip_file: Path to the binary file containing the Faiss index
-            json_path: Path to the JSON file containing metadata
+            faiss_searcher: Existing instance of MyFaiss
         """
-        self.faiss_searcher = MyFaiss(bin_clip_file, json_path)
+        self.faiss_searcher = faiss_searcher
         self.keyframes_base_path = "./src/data/Keyframes" 
         
     def retrieve_top_k(self, query: str, k: int = 200) -> List[Dict]:
@@ -266,17 +265,3 @@ class TRAKE:
         formatted_response = self.format_response(ranked_sequences)
         
         return formatted_response
-
-
-def create_trake_instance(bin_clip_file: str, json_path: str) -> TRAKE:
-    """
-    Factory function to create TRAKE instance
-    
-    Args:
-        bin_clip_file: Path to the binary file containing the Faiss index
-        json_path: Path to the JSON file containing metadata
-        
-    Returns:
-        TRAKE instance
-    """
-    return TRAKE(bin_clip_file, json_path)

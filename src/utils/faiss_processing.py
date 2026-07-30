@@ -8,6 +8,7 @@ import torch
 from PIL import Image
 
 from .nlp_processing import Translation
+import logging
 
 class MyFaiss:
 
@@ -46,13 +47,21 @@ class MyFaiss:
 
     def _load_json_file(self, json_path: str) -> dict:
         """Loads a JSON file and converts its keys to integers."""
-        with open(json_path, 'r') as f:
-            data = json.load(f)
-        return {int(k): v for k, v in data.items()}
+        try:
+            with open(json_path, 'r') as f:
+                data = json.load(f)
+            return {int(k): v for k, v in data.items()}
+        except Exception as e:
+            logging.critical(f"Failed to load JSON metadata from {json_path}: {e}")
+            return {}
 
     def _load_bin_file(self, bin_file: str) -> faiss.Index:
         """Loads a Faiss index from a binary file."""
-        return faiss.read_index(bin_file)
+        try:
+            return faiss.read_index(bin_file)
+        except Exception as e:
+            logging.critical(f"Failed to load Faiss index from {bin_file}: {e}")
+            return None
 
     def _get_text_features(self, text: str) -> np.ndarray:
         """Translates and encodes the input text into a normalized feature vector."""
@@ -73,6 +82,15 @@ class MyFaiss:
         return image_features.cpu().numpy().astype(np.float32)
 
     def image_search_by_file(self, image: Image.Image, k: int) -> tuple[np.ndarray, np.ndarray, list[dict], list[str]]:
+        """Searches for similar keyframes using a PIL Image as the query.
+
+        Args:
+            image: A PIL Image to encode and search with.
+            k: Number of top results to return.
+
+        Returns:
+            A tuple of (scores, image_ids, infos_query, image_paths).
+        """
         image_features = self._get_image_features(image)
         scores, image_ids = self._search_faiss_index(image_features, k, None)
         infos_query, image_paths = self._prepare_results(image_ids)
@@ -80,6 +98,10 @@ class MyFaiss:
 
     def _search_faiss_index(self, text_features: np.ndarray, k: int, index_subset: list[int] | None) -> tuple[np.ndarray, np.ndarray]:
         """Searches the Faiss index for the given text features."""
+        if self.index_clip is None:
+            logging.error("Faiss index is missing. Returning empty search results.")
+            return np.array([]), np.array([])
+            
         if index_subset is None:
             scores, ids = self.index_clip.search(text_features, k=k)
         else:
@@ -87,18 +109,6 @@ class MyFaiss:
             params = faiss.SearchParametersIVF(sel=id_selector)
             scores, ids = self.index_clip.search(text_features, k=k, params=params)
         return scores.flatten(), ids.flatten()
-
-    def _prepare_results(self, image_ids: np.ndarray) -> tuple[list[dict], list[str]]:
-        """Maps image indices to metadata and constructs image paths."""
-        infos_query = [self.id2img_fps.get(int(img_id)) for img_id in image_ids]
-        # Filter out None results for IDs that were not found
-        valid_infos = [info for info in infos_query if info]
-        
-        image_paths = [
-            os.path.join(info['split'], info['video_id'], info['frame_name'])
-            for info in valid_infos
-        ]
-        return valid_infos, image_paths
 
     def text_search(self, text: str, k: int, index: list[int] | None = None) -> tuple[np.ndarray, np.ndarray, list[dict], list[str]]:
         
@@ -109,17 +119,27 @@ class MyFaiss:
         return scores, image_ids, infos_query, image_paths
     
     def _search_image_index(self, id: int, k: int) -> tuple[np.ndarray, np.ndarray]:
+        if self.index_clip is None:
+            logging.error("Faiss index is missing. Returning empty search results.")
+            return np.array([]), np.array([])
+            
         # Get feature vector for the given ID
         meta = self.id2img_fps.get(id)
         if not meta:
-            raise ValueError(f"No feature found for ID {id}")
+            logging.error(f"No feature found for ID {id}")
+            return np.array([]), np.array([])
         
         video_id = meta["video_id"]
         split = meta["split"]
         frame_index = meta["frame_index"]
         
         feature_path = f"{self.save_dir}/{split}/{video_id}.npy"
-        feats = np.load(feature_path).astype(np.float32)
+        try:
+            feats = np.load(feature_path).astype(np.float32)
+        except Exception as e:
+            logging.error(f"Failed to load feature file {feature_path}: {e}")
+            return np.array([]), np.array([])
+            
         query_feature = feats[frame_index:frame_index+1]  # Reshape to (1, feature_dim)
 
         # Normalize query feature

@@ -4,6 +4,7 @@ import numpy as np
 import random
 import json
 import base64
+from PIL import Image
 
 SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if SRC_DIR not in sys.path:
@@ -205,5 +206,38 @@ def getImageSearchById(image_id, k):
 # res2 = getImageSearchById(36244, 5)
 # for item in res2:
 #     print(item['frame_key'])
-def GetImageDataTrakeSearch(query): 
-    return TrakeSearch.process_temporal_search(query)
+def getImageSearchByFile(image_file, k):
+    result = []
+    try:
+        img = Image.open(image_file).convert("RGB")
+        scores, image_ids, infos_query, image_paths = CosineFaiss.image_search_by_file(img, k)
+        id = 0
+        for info, image_path in zip(infos_query, image_paths):
+            if not info:
+                continue
+
+            frame_name = info['global_frame_id']
+            video_id = info['video_id']
+            folder_key = info['split'].split('-')[1].upper()
+            full_image_path = os.path.join(SRC_DIR, 'data', 'Keyframes', image_path)
+            try:
+                with open(full_image_path, "rb") as img_file_read:
+                    encoded_string = base64.b64encode(img_file_read.read()).decode('utf-8')
+            except FileNotFoundError:
+                continue
+
+            result.append({
+                'id': id,
+                'folder_key': folder_key,
+                'video_key': video_id,
+                'frame_key': frame_name,
+                'image': encoded_string
+            })
+            id += 1 
+        return result
+    except Exception as e:
+        print(f"Error during image file search: {e}")
+        return []
+
+def GetImageDataTrakeSearch(query, top_results=100): 
+    return TrakeSearch.process_temporal_search(query, top_results=top_results)

@@ -1,11 +1,20 @@
 # Importing the libraries that we will use in this notebook.
-import googletrans
+try:
+    import googletrans
+except Exception:
+    googletrans = None
 
 class Translation():
     def __init__(self, from_lang='vi', to_lang='en'):
         # The class Translation is a wrapper for the two translation libraries, googletrans and translate. 
         self.__to_lang = to_lang
-        self.translator = googletrans.Translator()
+        try:
+            if googletrans:
+                self.translator = googletrans.Translator()
+            else:
+                self.translator = None
+        except Exception:
+            self.translator = None
 
     def preprocessing(self, text):
         """
@@ -24,4 +33,9 @@ class Translation():
         :return: The translated text.
         """
         text = self.preprocessing(text)
-        return self.translator.translate(text, dest=self.__to_lang).text
+        if self.translator is None:
+            return text
+        try:
+            return self.translator.translate(text, dest=self.__to_lang).text
+        except Exception:
+            return text

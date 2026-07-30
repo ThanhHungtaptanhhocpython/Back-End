@@ -5,6 +5,7 @@ import faiss
 import numpy as np
 import open_clip
 import torch
+from PIL import Image
 
 from .nlp_processing import Translation
 
@@ -23,15 +24,15 @@ class MyFaiss:
         self.translater = Translation()
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.save_dir = os.path.join(os.path.dirname(__file__), '..', 'data', 'features')
-        self.clip_model, self.clip_tokenizer = self._initialize_clip_model()
+        self.clip_model, self.clip_tokenizer, self.preprocess = self._initialize_clip_model()
 
-    def _initialize_clip_model(self) -> tuple[torch.nn.Module, any]:
+    def _initialize_clip_model(self) -> tuple[torch.nn.Module, any, any]:
         
         model_name = 'ViT-H-14-quickgelu'
         pretrained = 'dfn5b'
         
         # Load model onto CPU first to prevent memory errors on some systems
-        model, _, _ = open_clip.create_model_and_transforms(
+        model, _, preprocess = open_clip.create_model_and_transforms(
             model_name, 
             device='cpu', 
             pretrained=pretrained
@@ -41,7 +42,7 @@ class MyFaiss:
             model = model.to(self.device)
             
         tokenizer = open_clip.get_tokenizer(model_name)
-        return model, tokenizer
+        return model, tokenizer, preprocess
 
     def _load_json_file(self, json_path: str) -> dict:
         """Loads a JSON file and converts its keys to integers."""
@@ -61,8 +62,21 @@ class MyFaiss:
         with torch.no_grad():
             text_features = self.clip_model.encode_text(tokens)
             text_features /= text_features.norm(dim=-1, keepdim=True)
-            
         return text_features.cpu().numpy().astype(np.float32)
+            
+    def _get_image_features(self, image: Image.Image) -> np.ndarray:
+        """Encodes a PIL Image into a normalized feature vector."""
+        image_input = self.preprocess(image).unsqueeze(0).to(self.device)
+        with torch.no_grad():
+            image_features = self.clip_model.encode_image(image_input)
+            image_features /= image_features.norm(dim=-1, keepdim=True)
+        return image_features.cpu().numpy().astype(np.float32)
+
+    def image_search_by_file(self, image: Image.Image, k: int) -> tuple[np.ndarray, np.ndarray, list[dict], list[str]]:
+        image_features = self._get_image_features(image)
+        scores, image_ids = self._search_faiss_index(image_features, k, None)
+        infos_query, image_paths = self._prepare_results(image_ids)
+        return scores, image_ids, infos_query, image_paths
 
     def _search_faiss_index(self, text_features: np.ndarray, k: int, index_subset: list[int] | None) -> tuple[np.ndarray, np.ndarray]:
         """Searches the Faiss index for the given text features."""

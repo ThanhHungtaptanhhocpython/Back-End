@@ -1,5 +1,5 @@
 from flask import request, Response, json, Blueprint
-from src.services.user_service import getImageDataSingleTextSearch, getImageDataQAndASearch, getImageSearchById, GetImageDataTrakeSearch
+from src.services.user_service import getImageDataSingleTextSearch, getImageDataQAndASearch, getImageSearchById, GetImageDataTrakeSearch, getImageSearchByFile
 
 users = Blueprint("users", __name__)
 
@@ -43,17 +43,43 @@ def handle_qna_search():
 
 @users.route('/imagesearch', methods = ["POST"])
 def handle_image_search():
-    topk = int(request.form.get("topk"))
+    try:
+        topk_str = request.form.get("topk")
+        if topk_str is None:
+            topk = 100
+        else:
+            topk = int(topk_str)
+            if topk <= 0:
+                raise ValueError()
+    except (TypeError, ValueError):
+        return Response(
+            response=json.dumps({"success": False, "message": "topk must be a positive integer.", "data": {"items": [], "total_items": 0}}),
+            status=400,
+            mimetype="application/json"
+        )
 
-    clip = request.form.get("clip")
-
-    clipv2 = request.form.get("clipv2")
-
-    faiss_index = request.form.get("faiss_index", "default")
-    print(f"------------------------------------------faiss_index: {faiss_index}")
     file = request.files.get("image")
+    faiss_index = request.form.get("faiss_index", "default")
     
-    res = getImageSearchById(int(faiss_index), topk)
+    res = []
+    if file and file.filename != '':
+        res = getImageSearchByFile(file, topk)
+    elif faiss_index and faiss_index not in ("default", "null"):
+        try:
+            faiss_index_int = int(faiss_index)
+        except (TypeError, ValueError):
+            return Response(
+                response=json.dumps({"success": False, "message": "faiss_index must be an integer.", "data": {"items": [], "total_items": 0}}),
+                status=400,
+                mimetype="application/json"
+            )
+        res = getImageSearchById(faiss_index_int, topk)
+    else:
+        return Response(
+            response=json.dumps({"success": False, "message": "Either an uploaded image file or a valid faiss_index must be provided.", "data": {"items": [], "total_items": 0}}),
+            status=400,
+            mimetype="application/json"
+        )
 
     response_data = {
         "success": True,
@@ -69,15 +95,42 @@ def handle_image_search():
     )
 
 @users.route('/trakesearch', methods=["POST"])
+@users.route('/temporalsearch', methods=["POST"])
 def handle_trake_search():
-    data = request.get_json()
-    query = data.get("query")
-    top_k = data.get("topk", 100) # Default to 100
-   
-
-    if not query:
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
         return Response(
-            response=json.dumps({"success": False, "message": "Query parameter 'query' is required."}),
+            response=json.dumps({"success": False, "message": "Request must be a JSON object.", "data": {"items": [], "total_items": 0}}),
+            status=400,
+            mimetype="application/json"
+        )
+        
+    query = data.get("query")
+    if not query or not isinstance(query, list) or len(query) == 0:
+        return Response(
+            response=json.dumps({"success": False, "message": "Query must be a non-empty list of events.", "data": {"items": [], "total_items": 0}}),
+            status=400,
+            mimetype="application/json"
+        )
+        
+    for item in query:
+        if not isinstance(item, dict) or not item.get("query") or not isinstance(item.get("query"), str) or not item.get("query").strip():
+            return Response(
+                response=json.dumps({"success": False, "message": "Each event in query list must have a non-empty 'query' string.", "data": {"items": [], "total_items": 0}}),
+                status=400,
+                mimetype="application/json"
+            )
+
+    try:
+        top_k = data.get("topk")
+        if top_k is None:
+            top_k = 100
+        top_k = int(top_k)
+        if top_k <= 0:
+            raise ValueError()
+    except (TypeError, ValueError):
+        return Response(
+            response=json.dumps({"success": False, "message": "topk must be a positive integer.", "data": {"items": [], "total_items": 0}}),
             status=400,
             mimetype="application/json"
         )
@@ -93,5 +146,22 @@ def handle_trake_search():
     return Response(
         response=json.dumps(response_data, indent=2),
         status=200,
+        mimetype="application/json"
+    )
+
+@users.route('/ocrandodsearch', methods=["POST"])
+def handle_ocr_and_od_search():
+    # Explicit placeholder to prevent silent empty successful results
+    response_data = {
+        "success": False,
+        "message": "OCR/OD search is not implemented yet.",
+        "data": {
+            "items": [],
+            "total_items": 0
+        }
+    }
+    return Response(
+        response=json.dumps(response_data, indent=2),
+        status=501,
         mimetype="application/json"
     )

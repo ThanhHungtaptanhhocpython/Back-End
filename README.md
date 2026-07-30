@@ -1,5 +1,7 @@
 # Back-End
 
+> For AI agent guidance and repository details, see `skills/README.md`.
+
 # File Structure
 Cần tổ chức lại các thư mục dict và data
 ```

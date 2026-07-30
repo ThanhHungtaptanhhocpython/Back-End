@@ -14,13 +14,40 @@ if SRC_DIR not in sys.path:
 from utils.faiss_processing import MyFaiss
 from utils.vlm_processing import VLMProcessor
 from utils.trake_processing import TRAKE
+from utils.elastic_processing import ElasticProcessor
 
 bin_clip_file = os.path.join(SRC_DIR, 'dict', 'nw', 'faiss_index_clip.bin')
 meta_data = os.path.join(SRC_DIR, 'dict', 'metadata_clip.json')
 
-CosineFaiss = MyFaiss(bin_clip_file, meta_data)
-TrakeSearch = TRAKE(CosineFaiss)
-VlmProcessorInstance = VLMProcessor()
+_cosine_faiss = None
+_trake_search = None
+_vlm_processor = None
+_elastic_processor = None
+
+def get_cosine_faiss():
+    global _cosine_faiss
+    if _cosine_faiss is None:
+        _cosine_faiss = MyFaiss(bin_clip_file, meta_data)
+    return _cosine_faiss
+
+def get_trake_search():
+    global _trake_search
+    if _trake_search is None:
+        _trake_search = TRAKE(get_cosine_faiss())
+    return _trake_search
+
+def get_vlm_processor():
+    global _vlm_processor
+    if _vlm_processor is None:
+        _vlm_processor = VLMProcessor()
+    return _vlm_processor
+
+def get_elastic_processor():
+    global _elastic_processor
+    if _elastic_processor is None:
+        _elastic_processor = ElasticProcessor()
+    return _elastic_processor
+
 def generate_random_answer():
     answers = [
         "This is an example answer",
@@ -80,7 +107,7 @@ def getImageDataSingleTextSearch(query, k):
     text_query = query.strip()
     result = []
 
-    scores, list_ids, infos_query, image_paths = CosineFaiss.text_search(text_query, k)
+    scores, list_ids, infos_query, image_paths = get_cosine_faiss().text_search(text_query, k)
     id = 0
     # print("List IDs:", list_ids)  # Debugging line
     for info, idx, image_path in zip(infos_query, list_ids, image_paths):
@@ -117,7 +144,7 @@ def getImageDataSingleTextSearch(query, k):
 
 def getImageDataQAndASearch(query, k):
     text_query = query.strip()
-    _, _, infos_query, image_paths = CosineFaiss.text_search(text_query, k)
+    _, _, infos_query, image_paths = get_cosine_faiss().text_search(text_query, k)
     list_paths = []
     list_full_paths = []
     for info, image_path in zip(infos_query, image_paths):
@@ -146,7 +173,7 @@ def getImageDataQAndASearch(query, k):
             'image': encoded_string
         })
         id += 1
-    answers = VlmProcessorInstance.batch_answer(list_full_paths, text_query, batch_size=4)
+    answers = get_vlm_processor().batch_answer(list_full_paths, text_query, batch_size=4)
    
     
     result = []
@@ -168,7 +195,7 @@ def getImageSearchById(image_id, k):
     result = []
 
     try:
-        scores, image_ids, infos_query, image_paths = CosineFaiss.image_search(image_id, k)
+        scores, image_ids, infos_query, image_paths = get_cosine_faiss().image_search(image_id, k)
 
         id = 0
         for info, image_path in zip(infos_query, image_paths):
@@ -214,7 +241,7 @@ def getImageSearchByFile(image_file, k):
     result = []
     try:
         img = Image.open(image_file).convert("RGB")
-        scores, image_ids, infos_query, image_paths = CosineFaiss.image_search_by_file(img, k)
+        scores, image_ids, infos_query, image_paths = get_cosine_faiss().image_search_by_file(img, k)
         id = 0
         for info, image_path in zip(infos_query, image_paths):
             if not info:
@@ -245,4 +272,10 @@ def getImageSearchByFile(image_file, k):
         return []
 
 def GetImageDataTrakeSearch(query, top_results=100): 
-    return TrakeSearch.process_temporal_search(query, top_results=top_results)
+    return get_trake_search().process_temporal_search(query, top_results=top_results)
+
+def getTextSearchOCR(query: str, topk: int = 100):
+    return get_elastic_processor().search_ocr(query, topk=topk)
+
+def getTextSearchASR(query: str, topk: int = 100):
+    return get_elastic_processor().search_asr(query, topk=topk)

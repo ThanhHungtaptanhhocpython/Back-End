@@ -18,3 +18,4 @@ pydantic-settings
 python-multipart
 opencv-python
 tqdm
+elasticsearch>=8.0.0

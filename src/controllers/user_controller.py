@@ -1,7 +1,7 @@
-"""User controller for search API endpoints.
+"""DEPRECATED: User controller for search API endpoints (Flask).
 
-Handles HTTP request validation and response formatting for all
-search endpoints (text, Q&A, image, temporal, OCR/OD).
+This module contains the legacy Flask route controllers.
+It is deprecated in favor of the new FastAPI routers in `src/api/routers/`.
 """
 
 from flask import request, Response, json, Blueprint

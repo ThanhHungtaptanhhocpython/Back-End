@@ -76,11 +76,33 @@ def handle_trake_search(request: TemporalSearchRequest):
         data=DataResponse(items=res, total_items=len(res))
     )
 
-@router.post("/ocrandodsearch", response_model=BaseResponse)
-def handle_ocr_and_od_search(response: Response):
-    response.status_code = status.HTTP_501_NOT_IMPLEMENTED
+@router.post("/ocrsearch", response_model=BaseResponse)
+def handle_ocr_search(request: TextSearchRequest):
+    from src.services.user_service import getTextSearchOCR
+    
+    res = getTextSearchOCR(request.query, request.topk)
     return BaseResponse(
-        success=False,
-        message="OCR/OD search is not implemented yet.",
-        data=DataResponse(items=[], total_items=0)
+        success=True,
+        data=DataResponse(items=res, total_items=len(res))
+    )
+
+@router.post("/asrsearch", response_model=BaseResponse)
+def handle_asr_search(request: TextSearchRequest):
+    from src.services.user_service import getTextSearchASR
+    
+    res = getTextSearchASR(request.query, request.topk)
+    return BaseResponse(
+        success=True,
+        data=DataResponse(items=res, total_items=len(res))
+    )
+
+@router.post("/ocrandodsearch", response_model=BaseResponse)
+def handle_ocr_and_od_search(request: TextSearchRequest):
+    # This acts as a fallback for the legacy endpoint name
+    from src.services.user_service import getTextSearchOCR
+    
+    res = getTextSearchOCR(request.query, request.topk)
+    return BaseResponse(
+        success=True,
+        data=DataResponse(items=res, total_items=len(res))
     )

@@ -1,0 +1,42 @@
+[
+  {
+    "video_id": "V001",
+    "start_time": 0.0,
+    "end_time": 2.5,
+    "text": "Chào mừng các bạn đến với bản tin thời sự buổi tối ngày hôm nay.",
+    "nearest_faiss_id": 10001,
+    "nearest_frame_name": "keyframe_L01_V001_0001.webp"
+  },
+  {
+    "video_id": "V001",
+    "start_time": 2.5,
+    "end_time": 5.0,
+    "text": "Thưa quý vị, hiện tại tình hình giao thông đang ùn tắc nghiêm trọng.",
+    "nearest_faiss_id": 10002,
+    "nearest_frame_name": "keyframe_L01_V001_0002.webp"
+  },
+  {
+    "video_id": "V002",
+    "start_time": 8.0,
+    "end_time": 12.0,
+    "text": "Các bác sĩ tại bệnh viện Chợ Rẫy đang nỗ lực hết mình để cứu chữa.",
+    "nearest_faiss_id": 10003,
+    "nearest_frame_name": "keyframe_L01_V002_0010.webp"
+  },
+  {
+    "video_id": "V003",
+    "start_time": 48.0,
+    "end_time": 52.0,
+    "text": "Lực lượng chức năng đã có mặt tại hiện trường để phân luồng.",
+    "nearest_faiss_id": 10004,
+    "nearest_frame_name": "keyframe_L02_V003_0050.webp"
+  },
+  {
+    "video_id": "V003",
+    "start_time": 53.0,
+    "end_time": 58.0,
+    "text": "Khu vực nhà hàng bán đồ ăn nhanh này luôn đông đúc vào giờ trưa.",
+    "nearest_faiss_id": 10005,
+    "nearest_frame_name": "keyframe_L02_V003_0055.webp"
+  }
+]

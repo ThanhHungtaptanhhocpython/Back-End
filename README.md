@@ -84,13 +84,17 @@ python scripts/verify_search_assets.py
 
 ## 🏃‍♂️ Running the Server
 
-Once the data pipeline is complete, you can start the Flask backend server:
+Once the data pipeline is complete, you can start the backend server. The project has migrated to **FastAPI** as the primary API framework.
 
 ```bash
-python app.py
+# Start the FastAPI server directly:
+python main.py
+
+# Alternatively, run via uvicorn for more options:
+uvicorn main:app --host 0.0.0.0 --port 5000 --reload
 ```
 
-The server will initialize the Faiss index, load the metadata, and start listening for API requests.
+The server will load environment variables and wait for API requests. Heavy AI models (Faiss, OpenCLIP) are initialized **lazily**, meaning the server starts up instantly and only loads the models into RAM/VRAM when an endpoint is called for the first time.
 
 ## 🛣️ Roadmap
 

@@ -1,0 +1,52 @@
+[
+  {
+    "faiss_id": 10001,
+    "video_id": "V001",
+    "frame_name": "keyframe_L01_V001_0001.webp",
+    "split": "videos-l01",
+    "global_frame_id": 15,
+    "timestamp": 0.5,
+    "ocr_text": "BẢN TIN THỜI SỰ 19H",
+    "language": "vi"
+  },
+  {
+    "faiss_id": 10002,
+    "video_id": "V001",
+    "frame_name": "keyframe_L01_V001_0002.webp",
+    "split": "videos-l01",
+    "global_frame_id": 45,
+    "timestamp": 1.5,
+    "ocr_text": "SALE 50% TẤT CẢ MẶT HÀNG",
+    "language": "vi"
+  },
+  {
+    "faiss_id": 10003,
+    "video_id": "V002",
+    "frame_name": "keyframe_L01_V002_0010.webp",
+    "split": "videos-l01",
+    "global_frame_id": 300,
+    "timestamp": 10.0,
+    "ocr_text": "BỆNH VIỆN CHỢ RẪY",
+    "language": "vi"
+  },
+  {
+    "faiss_id": 10004,
+    "video_id": "V003",
+    "frame_name": "keyframe_L02_V003_0050.webp",
+    "split": "videos-l02",
+    "global_frame_id": 1500,
+    "timestamp": 50.0,
+    "ocr_text": "Cảnh sát giao thông đang làm nhiệm vụ",
+    "language": "vi"
+  },
+  {
+    "faiss_id": 10005,
+    "video_id": "V003",
+    "frame_name": "keyframe_L02_V003_0055.webp",
+    "split": "videos-l02",
+    "global_frame_id": 1650,
+    "timestamp": 55.0,
+    "ocr_text": "KFC FAST FOOD DRIVETHRU",
+    "language": "en"
+  }
+]

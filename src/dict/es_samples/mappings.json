@@ -1,0 +1,28 @@
+{
+  "aic_ocr": {
+    "mappings": {
+      "properties": {
+        "faiss_id": { "type": "integer" },
+        "video_id": { "type": "keyword" },
+        "frame_name": { "type": "keyword" },
+        "split": { "type": "keyword" },
+        "global_frame_id": { "type": "integer" },
+        "timestamp": { "type": "float" },
+        "ocr_text": { "type": "text" },
+        "language": { "type": "keyword" }
+      }
+    }
+  },
+  "aic_asr": {
+    "mappings": {
+      "properties": {
+        "video_id": { "type": "keyword" },
+        "start_time": { "type": "float" },
+        "end_time": { "type": "float" },
+        "text": { "type": "text" },
+        "nearest_faiss_id": { "type": "integer" },
+        "nearest_frame_name": { "type": "keyword" }
+      }
+    }
+  }
+}

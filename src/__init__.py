@@ -20,7 +20,6 @@ app.env = config.ENV
 
 
 import os
-if not os.environ.get("FASTAPI_MODE"):
-    from src.controllers.user_controller import users
-    # register user with api blueprint
-    app.register_blueprint(users, url_prefix="/users")
+from src.controllers.user_controller import users
+# register user with api blueprint
+app.register_blueprint(users, url_prefix="/users")

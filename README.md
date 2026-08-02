@@ -99,13 +99,13 @@ Before running the backend, you must build the local data assets. Ensure your so
 
 ### Step 2: Start FastAPI
 ```bash
-uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-*Note: Heavy AI models (Faiss, OpenCLIP, BLIP-VQA) are initialized **lazily**, meaning the server starts up instantly and only loads the models into RAM/VRAM when their respective tools are called.*
+*Note: The server uses port 8000 if you run via uvicorn with the `--port 8000` flag, or port 3000 by default if you just run `python main.py`.*
 
 ### Step 3: Test via Swagger UI
-- Open your browser and navigate to: **http://localhost:8000/docs**
+- Open your browser and navigate to: **http://localhost:8000/docs** (hoặc port 3000 tùy cách chạy)
 - Use the **`/chat/conversational_kis`** endpoint to chat with the Agent.
 - Use the **`/chat/feedback`** endpoint to send reflections to the Agent's memory.
 

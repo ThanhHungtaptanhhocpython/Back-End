@@ -14,29 +14,23 @@ logger = logging.getLogger(__name__)
 async def conversational_kis(request: ChatRequest):
     """
     Conversational KIS endpoint.
-    Maintains multi-turn context using memory_manager.
+    Maintains multi-turn context using memory_manager and LLM Planner.
     """
     try:
+        from src.agent.llm_planner import execute_chat_turn
+        
         session_id = request.session_id
         user_message = request.message
         
-        # 1. Add user message to memory
-        memory_manager.add_user_message(session_id, user_message)
+        # 1. Gọi LLM Planner (Tự động cập nhật history)
+        agent_result = execute_chat_turn(session_id, user_message)
         
-        # 2. Get history context
         history = memory_manager.get_messages(session_id)
         
-        # 3. Call LLM / Agent Planner (Mock for Phase 1)
-        # TODO (Phase 2): Pass history to LLM Planner along with Tools (Faiss, Elasticsearch)
-        ai_response_text = f"Tác nhân AI đã nhận được yêu cầu: '{user_message}'. (Lịch sử: {len(history)} tin nhắn). Đang chờ tích hợp Tool ở Phase 2."
-        
-        # 4. Add AI response to memory
-        memory_manager.add_ai_message(session_id, ai_response_text)
-        
         return ChatResponse(
-            success=True,
+            success=agent_result.get("success", True),
             session_id=session_id,
-            response=ai_response_text,
+            response=agent_result.get("response", ""),
             data={"history_length": len(history)}
         )
     except Exception as e:

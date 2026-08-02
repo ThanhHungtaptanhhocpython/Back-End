@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
-from src.schemas.chat import ChatRequest, ChatResponse
+from src.schemas.chat import ChatRequest, ChatResponse, FeedbackRequest
 from src.agent.memory_manager import memory_manager
 import logging
 
@@ -36,3 +36,18 @@ async def conversational_kis(request: ChatRequest):
     except Exception as e:
         logger.error(f"Error in conversational KIS: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/feedback")
+async def submit_feedback(request: FeedbackRequest):
+    """
+    Nhận phản hồi từ người dùng cho một truy vấn.
+    Sử dụng LLM Reflection để Agent tự rút kinh nghiệm cho lượt chat sau.
+    """
+    try:
+        from src.services.feedback_service import feedback_service
+        result = feedback_service.process_feedback(request)
+        return result
+    except Exception as e:
+        logger.error(f"Error processing feedback: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+

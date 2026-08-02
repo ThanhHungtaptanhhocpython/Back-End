@@ -12,3 +12,9 @@ class ChatResponse(BaseModel):
     response: str
     data: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+
+class FeedbackRequest(BaseModel):
+    session_id: str
+    feedback_score: int  # e.g., 1 for thumbs up, -1 for thumbs down
+    feedback_text: Optional[str] = None
+    video_key: Optional[str] = None

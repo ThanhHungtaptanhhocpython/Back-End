@@ -15,6 +15,7 @@ from fastapi.exceptions import RequestValidationError
 
 from src.api.routers.health_router import router as health_router
 from src.api.routers.search_router import router as search_router
+from src.api.routers.chat_router import router as chat_router
 from src.api.middleware import RequestLoggingMiddleware, global_exception_handler
 from src.config.settings import get_settings
 
@@ -68,6 +69,7 @@ app.add_exception_handler(Exception, global_exception_handler)
 
 app.include_router(health_router, prefix="")
 app.include_router(search_router, prefix="/users")
+app.include_router(chat_router)
 
 
 if __name__ == "__main__":

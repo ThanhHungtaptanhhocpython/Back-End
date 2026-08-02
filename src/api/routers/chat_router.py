@@ -17,13 +17,14 @@ async def conversational_kis(request: ChatRequest):
     Maintains multi-turn context using memory_manager and LLM Planner.
     """
     try:
+        import asyncio
         from src.agent.llm_planner import execute_chat_turn
         
         session_id = request.session_id
         user_message = request.message
         
-        # 1. Gọi LLM Planner (Tự động cập nhật history)
-        agent_result = execute_chat_turn(session_id, user_message)
+        # 1. Gọi LLM Planner (Tự động cập nhật history) trên một thread riêng biệt để không chặn Event Loop
+        agent_result = await asyncio.to_thread(execute_chat_turn, session_id, user_message)
         
         history = memory_manager.get_messages(session_id)
         
@@ -45,7 +46,8 @@ async def submit_feedback(request: FeedbackRequest):
     """
     try:
         from src.services.feedback_service import feedback_service
-        result = feedback_service.process_feedback(request)
+        import asyncio
+        result = await asyncio.to_thread(feedback_service.process_feedback, request)
         return result
     except Exception as e:
         logger.error(f"Error processing feedback: {str(e)}")

@@ -41,8 +41,7 @@ def get_llm():
     elif os.getenv("OPENAI_API_KEY"):
         return ChatOpenAI(model="gpt-4o-mini", temperature=0)
     else:
-        logger.warning("No GOOGLE_API_KEY or OPENAI_API_KEY found. Falling back to ChatOpenAI with dummy key for initialization.")
-        return ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key="dummy")
+        raise ValueError("Missing GOOGLE_API_KEY or OPENAI_API_KEY in environment variables. Cannot initialize LLM Planner.")
 
 # Initialize LLM and tools
 llm = get_llm()

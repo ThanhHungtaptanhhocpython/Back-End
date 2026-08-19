@@ -1,0 +1,302 @@
+/* ============================================================
+   DESIGN TOKENS + SHARED PRIMITIVES
+   Calm light-neutral theme shared across all features.
+   ============================================================ */
+
+.legacy-root {
+  min-height: 100vh;
+  background: #cbd7e2;
+  color: #000;
+}
+
+.ws-root {
+  --ws-bg: #f8fafc;
+  --ws-surface: #ffffff;
+  --ws-surface-2: #f1f5f9;
+  --ws-border: #e2e8f0;
+  --ws-border-strong: #cbd5e1;
+  --ws-text: #0f172a;
+  --ws-muted: #64748b;
+  --ws-faint: #94a3b8;
+  --ws-primary: #2563eb;
+  --ws-primary-strong: #1d4ed8;
+  --ws-primary-soft: #eff6ff;
+  --ws-green: #16a34a;
+  --ws-red: #dc2626;
+  --ws-amber: #b45309;
+  position: relative;
+  min-height: 100vh;
+  background: var(--ws-bg);
+  color: var(--ws-text);
+  padding-bottom: 230px;
+  font-family: "Inter", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  user-select: none;
+}
+
+.ws-root * {
+  box-sizing: border-box;
+}
+
+.ws-root input,
+.ws-root textarea {
+  user-select: text;
+}
+
+.ws-root :focus-visible {
+  outline: 3px solid var(--ws-primary);
+  outline-offset: 2px;
+}
+
+.ws-mono,
+.ws-root .ws-rank,
+.ws-root .ws-score,
+.ws-root .ws-tc,
+.ws-root .ws-meta-row .v,
+.ws-root .ws-clock-time,
+.ws-root .ws-tab-count,
+.ws-root .ws-tray-thumb-label,
+.ws-root .ws-exp-preview,
+.ws-root .ws-ribbon {
+  font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+}
+
+.ws-amber {
+  color: var(--ws-amber);
+}
+.ws-cyan {
+  color: var(--ws-primary);
+}
+.ws-green {
+  color: var(--ws-green);
+}
+.ws-faint {
+  color: var(--ws-faint);
+}
+.ws-dim {
+  color: var(--ws-muted);
+}
+
+/* ---------- buttons ---------- */
+.ws-btn {
+  font-family: inherit;
+  font-size: 13px;
+  padding: 9px 14px;
+  min-height: 40px;
+  border: 1px solid var(--ws-border-strong);
+  border-radius: 8px;
+  background: var(--ws-surface);
+  color: var(--ws-text);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+
+.ws-btn:hover {
+  border-color: var(--ws-primary);
+  color: var(--ws-primary);
+}
+
+.ws-btn.primary {
+  flex: 1;
+  min-height: 44px;
+  background: var(--ws-primary);
+  border-color: var(--ws-primary);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.ws-btn.primary:hover {
+  background: var(--ws-primary-strong);
+  border-color: var(--ws-primary-strong);
+  color: #ffffff;
+}
+
+.ws-btn.small {
+  padding: 7px 12px;
+  min-height: 38px;
+  font-size: 13px;
+}
+
+.ws-btn.export {
+  border-color: var(--ws-primary);
+  color: var(--ws-primary);
+  font-weight: 600;
+}
+
+.ws-btn.export:hover {
+  background: var(--ws-primary);
+  border-color: var(--ws-primary);
+  color: #ffffff;
+}
+
+.ws-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ws-runbar {
+  display: flex;
+  gap: 8px;
+}
+
+/* ---------- shared form atoms ---------- */
+.ws-type {
+  flex: 1;
+  min-width: 86px;
+  min-height: 40px;
+  padding: 8px 6px;
+  background: var(--ws-surface);
+  border: 1px solid var(--ws-border);
+  border-radius: 8px;
+  color: var(--ws-muted);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+
+.ws-type:hover {
+  color: var(--ws-text);
+  border-color: var(--ws-border-strong);
+}
+
+.ws-type.active {
+  background: var(--ws-primary-soft);
+  border-color: var(--ws-primary);
+  color: var(--ws-primary-strong);
+  font-weight: 600;
+}
+
+.ws-param-label {
+  font-size: 12px;
+  color: var(--ws-muted);
+}
+
+.ws-panel-tag {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ws-text);
+}
+
+.ws-panel-tag::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--ws-border);
+}
+
+/* ---------- keycap ---------- */
+.ws-keycap {
+  display: inline-grid;
+  place-items: center;
+  min-width: 24px;
+  height: 20px;
+  padding: 0 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ws-text);
+  background: var(--ws-surface);
+  border: 1px solid var(--ws-border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+}
+
+.ws-keycap.amber {
+  color: #ffffff;
+  background: var(--ws-primary);
+  border-color: var(--ws-primary-strong);
+}
+
+/* ---------- overlays / modals ---------- */
+.ws-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgba(15, 23, 42, 0.35);
+  backdrop-filter: blur(2px);
+  padding: 24px;
+}
+
+.ws-modal {
+  width: min(900px, 96vw);
+  max-height: 90vh;
+  overflow: auto;
+  background: var(--ws-surface);
+  border: 1px solid var(--ws-border);
+  border-top: 3px solid var(--ws-primary);
+  border-radius: 10px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
+}
+
+.ws-modal-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--ws-border);
+  position: sticky;
+  top: 0;
+  background: var(--ws-surface);
+  z-index: 1;
+  border-radius: 10px 10px 0 0;
+}
+
+.ws-modal-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ws-text);
+}
+
+.ws-modal-title.cyan {
+  color: var(--ws-primary);
+}
+
+.ws-modal-close {
+  margin-left: auto;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--ws-border);
+  border-radius: 6px;
+  background: var(--ws-surface);
+  color: var(--ws-muted);
+  cursor: pointer;
+}
+
+.ws-modal-close:hover {
+  color: var(--ws-red);
+  border-color: var(--ws-red);
+}
+
+.ws-modal-body {
+  padding: 16px;
+}
+
+/* ---------- scrollbars ---------- */
+.ws-root ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.ws-root ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.ws-root ::-webkit-scrollbar-thumb {
+  background: var(--ws-border-strong);
+  border: 2px solid var(--ws-surface);
+  border-radius: 6px;
+}
+
+.ws-root ::-webkit-scrollbar-thumb:hover {
+  background: var(--ws-faint);
+}

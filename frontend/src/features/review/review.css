@@ -1,0 +1,354 @@
+/* Review feature: full-screen frame review surface + filmstrip + QA answer. */
+
+.ws-review {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: var(--ws-bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.ws-review-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  background: var(--ws-surface);
+  border-bottom: 1px solid var(--ws-border);
+  flex-wrap: wrap;
+}
+
+.ws-review-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ws-text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ws-review-ctx {
+  font-size: 12px;
+  color: var(--ws-muted);
+  font-weight: 400;
+}
+
+.ws-review-pos {
+  font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--ws-faint);
+  padding: 3px 8px;
+  border: 1px solid var(--ws-border);
+  border-radius: 6px;
+}
+
+.ws-review-head-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ws-review-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.ws-review-stage {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: #0b1220;
+}
+
+.ws-review-viewport {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+  overflow: hidden;
+}
+
+.ws-review-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #000;
+  box-shadow: 0 6px 24px rgba(2, 6, 23, 0.45);
+}
+
+.ws-review-cmp {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+}
+
+.ws-review-cmp-item {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ws-review-cmp-item img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #000;
+}
+
+.ws-review-cmp-label {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1;
+  font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: #e2e8f0;
+  background: rgba(2, 6, 23, 0.6);
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+
+.ws-review-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 42px;
+  height: 60px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.45);
+  color: #e2e8f0;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.ws-review-nav:hover:not(:disabled) {
+  background: rgba(30, 41, 59, 0.8);
+}
+
+.ws-review-nav:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.ws-review-nav.prev {
+  left: 12px;
+}
+
+.ws-review-nav.next {
+  right: 12px;
+}
+
+/* ---------- filmstrip ---------- */
+.ws-filmstrip {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 16px 12px;
+  background: #0b1220;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.ws-filmstrip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ws-filmstrip-tag {
+  font-size: 11px;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.ws-filmstrip-clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  border-radius: 6px;
+  background: transparent;
+  color: #cbd5e1;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+
+.ws-filmstrip-clear:hover {
+  border-color: #e2e8f0;
+  color: #ffffff;
+}
+
+.ws-filmstrip-track {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.ws-film {
+  position: relative;
+  flex: 0 0 auto;
+  width: 128px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: #000;
+  cursor: pointer;
+  overflow: hidden;
+  transition: border-color 0.12s;
+}
+
+.ws-film:hover {
+  border-color: rgba(148, 163, 184, 0.6);
+}
+
+.ws-film img {
+  display: block;
+  width: 128px;
+  height: 72px;
+  object-fit: cover;
+}
+
+.ws-film-tc {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 10px;
+  color: #ffffff;
+  background: rgba(2, 6, 23, 0.65);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.ws-film.current {
+  border-color: var(--ws-primary);
+}
+
+.ws-film-cur {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  color: #0f172a;
+  background: var(--ws-primary);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+/* ---------- review side panel ---------- */
+.ws-review-side {
+  flex: 0 0 300px;
+  width: 300px;
+  background: var(--ws-surface);
+  border-left: 1px solid var(--ws-border);
+  overflow-y: auto;
+  padding: 14px 16px;
+}
+
+.ws-review-side-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ws-text);
+  margin-bottom: 10px;
+}
+
+.ws-review-meta {
+  margin: 0;
+}
+
+.ws-review-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--ws-border);
+  font-size: 12px;
+}
+
+.ws-review-row .k {
+  color: var(--ws-faint);
+  flex: 0 0 auto;
+}
+
+.ws-review-row .v {
+  font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  text-align: right;
+  word-break: break-all;
+  color: var(--ws-text);
+}
+
+.ws-review-row .v.cyan {
+  color: var(--ws-primary);
+}
+
+.ws-review-row .v.amber {
+  color: var(--ws-amber);
+  font-weight: 600;
+}
+
+.ws-review-note {
+  font-size: 12px;
+  color: var(--ws-faint);
+  margin: 10px 0 0;
+}
+
+.ws-review-cmp-field {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ws-review-cmp-field select {
+  width: 100%;
+  padding: 8px 9px;
+  background: var(--ws-surface);
+  border: 1px solid var(--ws-border-strong);
+  border-radius: 6px;
+  color: var(--ws-text);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.ws-review-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.ws-answer {
+  margin-top: 12px;
+  background: #f0fdf4;
+  border-left: 3px solid var(--ws-green);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: #14532d;
+}

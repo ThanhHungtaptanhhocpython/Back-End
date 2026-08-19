@@ -65,9 +65,9 @@ sys.modules.setdefault("torch.nn.functional", MagicMock())
 # Mock transformers (for VLMProcessor)
 sys.modules.setdefault("transformers", MagicMock())
 
-# Mock googletrans (for Translation)
-_mock_googletrans = MagicMock()
-sys.modules.setdefault("googletrans", _mock_googletrans)
+# Mock deep-translator (for Translation)
+_mock_deep_translator = MagicMock()
+sys.modules.setdefault("deep_translator", _mock_deep_translator)
 
 # Mock sentence_transformers
 sys.modules.setdefault("sentence_transformers", MagicMock())

@@ -7,7 +7,7 @@ pandas
 faiss-cpu
 open-clip-torch
 git+https://github.com/openai/CLIP.git
-googletrans==4.0.0-rc1
+deep-translator>=1.11.4
 transformers
 torch
 Pillow
@@ -20,3 +20,11 @@ opencv-python
 tqdm
 elasticsearch>=8.0.0
 easyocr
+
+langchain==0.2.16
+langchain-core==0.2.39
+langchain-community==0.2.16
+langchain-openai==0.1.23
+langchain-google-genai==1.0.10
+ffmpeg-python  
+ 

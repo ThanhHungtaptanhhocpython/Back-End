@@ -7,17 +7,18 @@ import re
 from typing import Dict, Any
 
 try:
-    import googletrans
+    from deep_translator import GoogleTranslator
 except Exception:
-    googletrans = None
+    GoogleTranslator = None
 
 class Translation():
     def __init__(self, from_lang='vi', to_lang='en'):
-        # The class Translation is a wrapper for the two translation libraries, googletrans and translate. 
+        # The class Translation is a wrapper for deep-translator
         self.__to_lang = to_lang
+        self.__from_lang = from_lang
         try:
-            if googletrans:
-                self.translator = googletrans.Translator()
+            if GoogleTranslator:
+                self.translator = GoogleTranslator(source=self.__from_lang, target=self.__to_lang)
             else:
                 self.translator = None
         except Exception:
@@ -31,7 +32,7 @@ class Translation():
         if self.translator is None:
             return text
         try:
-            return self.translator.translate(text, dest=self.__to_lang).text
+            return self.translator.translate(text)
         except Exception:
             return text
 

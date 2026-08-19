@@ -1,0 +1,82 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  BackendSearchError,
+  isTransportError,
+  normalizeBackendResponse,
+  probeBackend,
+  runBackendSearch,
+} from "../src/services/backendSearch.js";
+
+const successPayload = {
+  success: true,
+  data: {
+    total_items: 1,
+    items: [{ faiss_id: 7, video_id: "cam-01", frame_name: "cam-01_0007", timestamp: 12.5, image: "ZmFrZQ==", final_score: 0.92 }],
+  },
+};
+
+test("normalizes a FastAPI BaseResponse into a workstation card", () => {
+  const result = normalizeBackendResponse(successPayload, { type: "TEXT", latency: 18 });
+  assert.equal(result.totalItems, 1);
+  assert.equal(result.items[0].faissIndex, 7);
+  assert.equal(result.items[0].frameName, "cam-01_0007");
+  assert.equal(result.items[0].image, "data:image/webp;base64,ZmFrZQ==");
+  assert.equal(result.items[0].score, 0.92);
+});
+
+test("routes a text query to FastAPI's users endpoint", async () => {
+  let call;
+  await runBackendSearch(
+    { searchType: "TEXT", query: "forklift", params: { topk: 3, clip: true, clipv2: false } },
+    null,
+    {
+      config: { baseUrl: "http://localhost:3000", mode: "live" },
+      fetchImpl: async (url, init) => {
+        call = { url, init };
+        return { ok: true, json: async () => successPayload };
+      },
+    }
+  );
+
+  assert.equal(call.url, "http://localhost:3000/users/singletextsearch");
+  assert.deepEqual(JSON.parse(call.init.body), { query: "forklift", topk: 3, clip: true, clipv2: false });
+});
+
+test("routes an image pivot as multipart data", async () => {
+  let body;
+  await runBackendSearch(
+    { searchType: "IMAGE", params: { topk: 2, clip: true, clipv2: false, imageFile: null } },
+    { faissIndex: 7 },
+    {
+      config: { baseUrl: "http://localhost:3000/users", mode: "live" },
+      fetchImpl: async (url, init) => {
+        assert.equal(url, "http://localhost:3000/users/imagesearch");
+        body = init.body;
+        return { ok: true, json: async () => successPayload };
+      },
+    }
+  );
+
+  assert.equal(body.get("faiss_index"), "7");
+  assert.equal(body.get("topk"), "2");
+});
+
+test("does not classify valid HTTP failures as transport failures", async () => {
+  await assert.rejects(
+    runBackendSearch(
+      { searchType: "QA", query: "invalid", params: { topk: 1 } },
+      null,
+      { config: { baseUrl: "http://localhost:3000", mode: "auto" }, fetchImpl: async () => ({ ok: false, status: 422, json: async () => ({ message: "topk invalid" }) }) }
+    ),
+    (error) => error instanceof BackendSearchError && !isTransportError(error) && error.status === 422
+  );
+});
+
+test("probe reports live FastAPI and demo-safe unavailable states", async () => {
+  const online = await probeBackend({ config: { mode: "live", baseUrl: "http://localhost:3000/users" }, fetchImpl: async (url) => ({ ok: url === "http://localhost:3000/health", status: 200 }) });
+  const offline = await probeBackend({ config: { mode: "auto", baseUrl: "http://localhost:3000" }, fetchImpl: async () => { throw new Error("offline"); } });
+  assert.deepEqual(online, { backend: "online", demo: false, note: "FASTAPI" });
+  assert.deepEqual(offline, { backend: "offline", demo: true, note: "FASTAPI UNAVAILABLE" });
+});

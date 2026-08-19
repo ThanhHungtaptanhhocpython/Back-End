@@ -1,0 +1,33 @@
+schema: spec-driven
+
+context: |
+  Product: AI Challenge 2026 multimodal video keyframe retrieval workstation.
+  Deadline: September 2026; optimize for a reliable competition demo.
+  Frontend: existing React 19 + Vite 7 + Ant Design 5 application. Migrate
+  JavaScript to TypeScript incrementally; do not rewrite frameworks.
+  Backend: FastAPI is the source of truth. Search uses FAISS, metadata JSON,
+  Elasticsearch, and optional VLM pipelines. Qdrant is not active.
+  Repository boundary: this OpenSpec home governs Front-End only. Back-End is a
+  separate repository and is read-only unless a change explicitly includes it.
+  Delivery: implement thin vertical slices and preserve a demo-safe checkpoint.
+  Evidence: never mark work complete without build and relevant runtime proof.
+  Project knowledge and work logs live in ../project-vault/.
+
+rules:
+  proposal:
+    - State the demo outcome and why it matters before implementation details.
+    - Include explicit Non-goals and backend dependencies.
+    - Identify missing assets or unknown contracts as risks, not assumptions.
+  design:
+    - Treat the FastAPI request and response schemas as authoritative.
+    - Prefer incremental migration and adapters over broad rewrites.
+    - Include loading, empty, error, retry, and fallback behavior.
+    - Define rollback or demo-safe behavior for risky changes.
+  specs:
+    - Every requirement must have at least one measurable WHEN/THEN scenario.
+    - Separate live-backend behavior from mock or fallback behavior.
+  tasks:
+    - Keep tasks independently verifiable and normally below four hours.
+    - Order tasks by dependency and vertical-slice value.
+    - End each milestone with build, API-contract, and browser verification.
+    - Do not include Qdrant migration, relational databases, or framework rewrites.

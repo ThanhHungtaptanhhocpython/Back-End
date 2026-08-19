@@ -1,0 +1,464 @@
+/* Copilot feature: resizable Q&A + translation panel, chat focus, reopen button. */
+
+.ws-chat {
+  position: sticky;
+  top: 14px;
+  grid-column: 3;
+  display: flex;
+  flex-direction: column;
+  background: var(--ws-surface);
+  border: 1px solid var(--ws-border);
+  border-radius: 10px;
+  height: calc(100vh - 340px);
+  min-height: 420px;
+  overflow: hidden;
+}
+
+.ws-chat-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  width: 10px;
+  cursor: col-resize;
+  z-index: 2;
+}
+
+.ws-chat-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--ws-border);
+  background: var(--ws-surface-2);
+}
+
+.ws-chat-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.ws-chat-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ws-muted);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  min-height: 36px;
+}
+
+.ws-chat-tabs button.active {
+  background: var(--ws-surface);
+  border-color: var(--ws-border);
+  color: var(--ws-primary-strong);
+  font-weight: 600;
+}
+
+.ws-chat-head-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+
+.ws-icon-btn {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--ws-border);
+  border-radius: 6px;
+  background: var(--ws-surface);
+  color: var(--ws-muted);
+  cursor: pointer;
+}
+
+.ws-icon-btn:hover {
+  border-color: var(--ws-primary);
+  color: var(--ws-primary);
+}
+
+.ws-chat-foot {
+  border-top: 1px solid var(--ws-border);
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--ws-faint);
+  background: var(--ws-surface-2);
+}
+
+/* ---------- Q&A tab ---------- */
+.ws-qa {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ws-qa-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+  color: var(--ws-muted);
+  font-size: 13px;
+}
+
+.ws-qa-empty-sub {
+  color: var(--ws-faint);
+  font-size: 12px;
+}
+
+.ws-qa-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ws-msg {
+  max-width: 92%;
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ws-msg.user {
+  align-self: flex-end;
+  background: var(--ws-primary);
+  color: #ffffff;
+  border-bottom-right-radius: 2px;
+}
+
+.ws-msg.assistant {
+  align-self: flex-start;
+  background: var(--ws-surface-2);
+  color: var(--ws-text);
+  border: 1px solid var(--ws-border);
+  border-bottom-left-radius: 2px;
+}
+
+.ws-msg.focus {
+  max-width: 100%;
+  font-size: 15px;
+}
+
+.ws-msg-ctx {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--ws-primary);
+  margin-bottom: 5px;
+}
+
+.ws-demo-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: var(--ws-amber);
+  border: 1px solid var(--ws-amber);
+  border-radius: 4px;
+  padding: 0 4px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.ws-typing {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  padding: 4px 2px;
+}
+
+.ws-typing i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ws-muted);
+  animation: ws-blink 1.2s infinite;
+}
+
+.ws-typing i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.ws-typing i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes ws-blink {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.ws-qa-error {
+  align-self: stretch;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: var(--ws-red);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.ws-qa-composer {
+  border-top: 1px solid var(--ws-border);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--ws-surface);
+}
+
+.ws-qa-ctxchip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ws-primary-strong);
+  background: var(--ws-primary-soft);
+  border: 1px solid var(--ws-border);
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+
+.ws-qa-ctxchip button {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--ws-primary);
+  cursor: pointer;
+}
+
+.ws-qa-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 56px;
+  padding: 9px 10px;
+  background: var(--ws-surface);
+  border: 1px solid var(--ws-border-strong);
+  border-radius: 8px;
+  color: var(--ws-text);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  outline: none;
+}
+
+.ws-qa-input:focus {
+  border-color: var(--ws-primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.ws-qa-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ws-qa-hint {
+  font-size: 11px;
+  color: var(--ws-faint);
+}
+
+/* ---------- translation tab ---------- */
+.ws-tr {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ws-tr-dir {
+  display: flex;
+  gap: 6px;
+}
+
+.ws-tr-dir button {
+  flex: 1;
+  min-height: 38px;
+  padding: 7px 6px;
+  background: var(--ws-surface);
+  border: 1px solid var(--ws-border);
+  border-radius: 8px;
+  color: var(--ws-muted);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ws-tr-dir button.active {
+  background: var(--ws-primary-soft);
+  border-color: var(--ws-primary);
+  color: var(--ws-primary-strong);
+  font-weight: 600;
+}
+
+.ws-tr-src {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  padding: 9px 10px;
+  background: var(--ws-surface);
+  border: 1px solid var(--ws-border-strong);
+  border-radius: 8px;
+  color: var(--ws-text);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  outline: none;
+}
+
+.ws-tr-src:focus {
+  border-color: var(--ws-primary);
+}
+
+.ws-tr-empty {
+  font-size: 12px;
+  color: var(--ws-faint);
+  padding: 8px 2px;
+}
+
+.ws-tr-out {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ws-tr-orig,
+.ws-tr-trans {
+  border: 1px solid var(--ws-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.ws-tr-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--ws-surface-2);
+  font-size: 11px;
+  color: var(--ws-muted);
+  font-weight: 600;
+}
+
+.ws-tr-box {
+  padding: 9px 10px;
+  font-size: 13px;
+  color: var(--ws-text);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.ws-tr-trans .ws-tr-box {
+  background: var(--ws-primary-soft);
+  border-top: 1px solid var(--ws-border);
+}
+
+.ws-tr-edit {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  padding: 9px 10px;
+  background: var(--ws-surface);
+  border: none;
+  border-top: 1px solid var(--ws-border);
+  color: var(--ws-text);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  outline: none;
+}
+
+.ws-tr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ws-tr-note {
+  font-size: 11px;
+  color: var(--ws-faint);
+  margin: 0;
+}
+
+/* ---------- reopen button ---------- */
+.ws-chat-reopen {
+  position: fixed;
+  right: 20px;
+  bottom: 46px;
+  z-index: 45;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 14px;
+  min-height: 44px;
+  border: 1px solid var(--ws-border);
+  border-radius: 999px;
+  background: var(--ws-surface);
+  color: var(--ws-primary-strong);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.12);
+}
+
+.ws-chat-reopen:hover {
+  border-color: var(--ws-primary);
+}
+
+/* ---------- focused reading mode ---------- */
+.ws-chat-focus {
+  width: min(900px, 96vw);
+  max-height: 88vh;
+  background: var(--ws-surface);
+  border: 1px solid var(--ws-border);
+  border-top: 3px solid var(--ws-primary);
+  border-radius: 10px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.ws-chat-focus-body {
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}

@@ -51,6 +51,8 @@ async def validation_exception_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
     """Return a standard error response for Pydantic validation failures."""
+    print(f"Validation Error: {exc.errors()}")
+    print(f"Request body: {await request.body()}")
     return JSONResponse(
         status_code=400,
         content={

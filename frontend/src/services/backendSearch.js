@@ -1,0 +1,262 @@
+import { toTimecode } from "../shared/format.js";
+
+const SEARCH_ENDPOINTS = Object.freeze({
+  TEXT: "singletextsearch",
+  QA: "qnasearch",
+  IMAGE: "imagesearch",
+  TEMPORAL: "temporalsearch",
+  OCR: "ocrsearch",
+  ASR: "asrsearch",
+  "OCR+OD": "ocrandodsearch",
+  MULTIMODAL: "multimodalsearch",
+});
+
+const SEARCH_MODES = new Set(["demo", "auto", "live"]);
+
+export class BackendSearchError extends Error {
+  constructor(message, { kind = "response", status, cause } = {}) {
+    super(message, { cause });
+    this.name = "BackendSearchError";
+    this.kind = kind;
+    this.status = status;
+  }
+}
+
+function viteEnv() {
+  return import.meta.env || {};
+}
+
+function positiveInteger(value, fallback = 24) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function finiteNumber(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function firstDefined(...values) {
+  return values.find((value) => value !== undefined && value !== null && value !== "");
+}
+
+function normaliseScore(value, rank, total) {
+  const score = Number(value);
+  if (Number.isFinite(score)) return Math.max(0, Math.min(1, score));
+  return total > 0 ? Math.max(0, 1 - (rank - 1) / total) : 0;
+}
+
+function imageSource(value) {
+  if (!value || typeof value !== "string") return "";
+  if (/^(data:|blob:|https?:\/\/|\/)/i.test(value)) return value;
+  return `data:image/webp;base64,${value}`;
+}
+
+function temporalEvents(query) {
+  const events = String(query || "")
+    .split(/\n+/)
+    .map((event) => event.trim())
+    .filter(Boolean)
+    .map((event) => ({ query: event }));
+  return events.length ? events : [{ query: "" }];
+}
+
+function endpointFor(searchType) {
+  const endpoint = SEARCH_ENDPOINTS[searchType || "TEXT"];
+  if (!endpoint) {
+    throw new BackendSearchError(`Unsupported search type: ${searchType || "unknown"}.`, { kind: "request" });
+  }
+  return endpoint;
+}
+
+function apiUrl(baseUrl, endpoint) {
+  const trimmed = baseUrl.replace(/\/+$/, "");
+  const usersBase = /\/users$/i.test(trimmed) ? trimmed : `${trimmed}/users`;
+  return `${usersBase}/${endpoint}`;
+}
+
+function healthUrl(baseUrl) {
+  return `${baseUrl.replace(/\/users$/i, "").replace(/\/+$/, "")}/health`;
+}
+
+function requestFor(tab, pivot) {
+  const type = tab?.searchType || "TEXT";
+  const params = tab?.params || {};
+  const topk = positiveInteger(params.topk);
+  const query = String(tab?.query || "").trim();
+  const endpoint = endpointFor(type);
+
+  if (type === "IMAGE") {
+    const body = new FormData();
+    const image = params.imageFile;
+    const faissIndex = firstDefined(pivot?.faissIndex, pivot?.faiss_id_clip, pivot?.faiss_id, pivot?.faiss_idx);
+    if (image instanceof Blob) body.append("image", image, image.name || "reference-image");
+    if (faissIndex !== undefined) body.append("faiss_index", String(faissIndex));
+    body.append("topk", String(topk));
+    body.append("clip", String(Boolean(params.clip)));
+    body.append("clipv2", String(Boolean(params.clipv2)));
+    return { endpoint, body };
+  }
+
+  if (type === "TEMPORAL") {
+    return {
+      endpoint,
+      body: { query: temporalEvents(query), topk, cascaded: Boolean(params.cascaded) },
+      headers: { "Content-Type": "application/json" },
+    };
+  }
+
+  return {
+    endpoint,
+    body: { query, topk, clip: Boolean(params.clip), clipv2: Boolean(params.clipv2) },
+    headers: { "Content-Type": "application/json" },
+  };
+}
+
+/** Read and validate Vite search settings without making a request. */
+export function getSearchConfig(env = viteEnv()) {
+  const configuredMode = String(env.VITE_SEARCH_MODE || "auto").trim().toLowerCase();
+  const mode = SEARCH_MODES.has(configuredMode) ? configuredMode : "auto";
+  const baseUrl = String(env.VITE_SEARCH_API_BASE_URL || "").trim().replace(/\/+$/, "");
+  return { mode, baseUrl };
+}
+
+/** Convert a FastAPI result record into the card shape consumed by ResultCard. */
+export function normalizeBackendItem(item, rank, total) {
+  const raw = item && typeof item === "object" ? item : {};
+  const faissIndex = firstDefined(raw.faiss_index, raw.faiss_id_clip, raw.faiss_id, raw.faiss_idx, raw.nearest_faiss_id);
+  const frameKey = firstDefined(raw.frame_key, raw.global_frame_id, raw.frame_id, raw.id, faissIndex, rank);
+  const videoKey = String(firstDefined(raw.video_key, raw.video_id, raw.videoKey, "unknown-video"));
+  const folderKey = String(firstDefined(raw.folder_key, raw.folderKey, raw.split, "UNKNOWN"));
+  const timestamp = finiteNumber(raw.timestamp);
+  const fps = positiveInteger(raw.fps, 25);
+  const scoreValue = firstDefined(raw.final_score, raw.normalized_score, raw.score, raw._score);
+  const frameName = String(firstDefined(raw.frame_name, raw.frameName, `${videoKey}_${frameKey}`));
+
+  return {
+    id: String(firstDefined(raw.global_frame_id, raw.frame_key, raw.frame_name, raw.id, faissIndex, `backend-${rank}`)),
+    gid: finiteNumber(firstDefined(raw.global_frame_id, raw.id, rank), rank),
+    globalFrameId: finiteNumber(firstDefined(raw.global_frame_id, raw.frame_key, raw.id, rank), rank),
+    folderKey,
+    videoKey,
+    camera: String(firstDefined(raw.camera, raw.camera_id, "BACKEND")),
+    frameKey: String(frameKey),
+    frameName,
+    timestamp,
+    timecode: String(firstDefined(raw.timecode, toTimecode(timestamp, fps))),
+    fps,
+    width: finiteNumber(raw.width),
+    height: finiteNumber(raw.height),
+    image: imageSource(firstDefined(raw.image, raw.thumbnail, raw.image_url)),
+    link: String(firstDefined(raw.link, raw.video_url, "")),
+    real: true,
+    faissIndex: faissIndex === undefined ? undefined : finiteNumber(faissIndex),
+    score: normaliseScore(scoreValue, rank, total),
+    rank,
+    answer: raw.answer,
+    ocrText: firstDefined(raw.ocr_text, raw.ocrText),
+    backend: raw,
+    ranking: {
+      score: raw.score,
+      normalizedScore: raw.normalized_score,
+      finalScore: raw.final_score,
+      scoreBreakdown: raw.score_breakdown,
+      faissIndex,
+    },
+  };
+}
+
+/** Normalize FastAPI's BaseResponse envelope into the stable workstation result contract. */
+export function normalizeBackendResponse(payload, { type, latency }) {
+  if (!payload || typeof payload !== "object") {
+    throw new BackendSearchError("Backend returned an invalid response.");
+  }
+  if (payload.success !== true) {
+    throw new BackendSearchError(payload.message || "Backend search was not successful.");
+  }
+  if (!payload.data || !Array.isArray(payload.data.items)) {
+    throw new BackendSearchError("Backend response did not include a result list.");
+  }
+
+  const totalItems = positiveInteger(payload.data.total_items, payload.data.items.length);
+  return {
+    items: payload.data.items.map((item, index) => normalizeBackendItem(item, index + 1, totalItems)),
+    totalItems,
+    latency,
+    type,
+    mode: "FASTAPI LIVE",
+    source: "live",
+  };
+}
+
+export function isTransportError(error) {
+  return error instanceof BackendSearchError && error.kind === "transport";
+}
+
+/** Execute one FastAPI search request. Callers decide whether a transport error may fall back. */
+export async function runBackendSearch(tab, pivot, { config = getSearchConfig(), fetchImpl = globalThis.fetch } = {}) {
+  if (!config.baseUrl) {
+    throw new BackendSearchError("VITE_SEARCH_API_BASE_URL is required for a live search.", { kind: "config" });
+  }
+  if (typeof fetchImpl !== "function") {
+    throw new BackendSearchError("Fetch is unavailable in this environment.", { kind: "transport" });
+  }
+
+  const request = requestFor(tab, pivot);
+  const startedAt = Date.now();
+  let response;
+  try {
+    response = await fetchImpl(apiUrl(config.baseUrl, request.endpoint), {
+      method: "POST",
+      headers: request.headers,
+      body: request.headers ? JSON.stringify(request.body) : request.body,
+    });
+  } catch (cause) {
+    throw new BackendSearchError("FastAPI search service is unavailable.", { kind: "transport", cause });
+  }
+
+  let payload;
+  try {
+    payload = await response.json();
+  } catch (cause) {
+    throw new BackendSearchError(`Backend returned an unreadable HTTP ${response.status} response.`, {
+      kind: "response",
+      status: response.status,
+      cause,
+    });
+  }
+  if (!response.ok) {
+    throw new BackendSearchError(payload?.message || `Backend search failed with HTTP ${response.status}.`, {
+      kind: "response",
+      status: response.status,
+    });
+  }
+
+  return normalizeBackendResponse(payload, {
+    type: tab?.searchType || "TEXT",
+    latency: Date.now() - startedAt,
+  });
+}
+
+/** Probe FastAPI without sending a search request, keeping demo mode explicit. */
+export async function probeBackend({ config = getSearchConfig(), fetchImpl = globalThis.fetch } = {}) {
+  if (config.mode === "demo") {
+    return { backend: "offline", demo: true, note: "LOCAL MOCK" };
+  }
+  if (!config.baseUrl) {
+    return { backend: "offline", demo: true, note: "NO API URL" };
+  }
+  if (typeof fetchImpl !== "function") {
+    return { backend: "offline", demo: true, note: "FETCH UNAVAILABLE" };
+  }
+
+  try {
+    const response = await fetchImpl(healthUrl(config.baseUrl));
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return { backend: "online", demo: false, note: "FASTAPI" };
+  } catch {
+    return { backend: "offline", demo: true, note: "FASTAPI UNAVAILABLE" };
+  }
+}
+
+export { SEARCH_ENDPOINTS };

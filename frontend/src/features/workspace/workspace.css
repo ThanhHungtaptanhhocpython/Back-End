@@ -1,0 +1,429 @@
+/* Workspace chrome: top bar, body, shortcut ribbon, shortcuts overlay, export modal. */
+
+/* ---------- top bar ---------- */
+.ws-topbar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 0 20px;
+  background: var(--ws-surface);
+  border-bottom: 1px solid var(--ws-border);
+  min-height: 60px;
+}
+
+.ws-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+}
+
+.ws-brand-mark {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  background: var(--ws-primary);
+  border-radius: 8px;
+}
+
+.ws-brand-mark span {
+  font-weight: 700;
+  font-size: 15px;
+  color: #ffffff;
+  letter-spacing: 0.5px;
+}
+
+.ws-brand-txt {
+  line-height: 1.2;
+}
+
+.ws-brand-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ws-text);
+  white-space: nowrap;
+}
+
+.ws-brand-title em {
+  font-style: normal;
+  color: var(--ws-primary);
+  font-weight: 700;
+}
+
+.ws-brand-sub {
+  font-size: 12px;
+  color: var(--ws-muted);
+}
+
+.ws-topsep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--ws-border);
+  margin: 12px 0;
+}
+
+.ws-status-panel {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 8px 0;
+  flex-wrap: wrap;
+}
+
+.ws-status-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ws-status-cell-label {
+  font-size: 11px;
+  color: var(--ws-faint);
+}
+
+.ws-status-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.ws-led {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--ws-border-strong);
+}
+
+.ws-led.on {
+  background: var(--ws-green);
+}
+
+.ws-led.off {
+  background: var(--ws-red);
+}
+
+.ws-led.demo {
+  background: var(--ws-amber);
+}
+
+.ws-led.check {
+  background: var(--ws-primary);
+}
+
+.ws-status-btn {
+  background: transparent;
+  border: 1px solid var(--ws-border-strong);
+  color: var(--ws-muted);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.12s;
+}
+
+.ws-status-btn:hover {
+  border-color: var(--ws-primary);
+  color: var(--ws-primary);
+}
+
+.ws-topright {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 0;
+}
+
+.ws-clock {
+  text-align: right;
+  line-height: 1.2;
+}
+
+.ws-clock-time {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ws-text);
+}
+
+.ws-clock-date {
+  font-size: 11px;
+  color: var(--ws-faint);
+}
+
+.ws-viewtoggle {
+  display: flex;
+  border: 1px solid var(--ws-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.ws-viewtoggle button {
+  background: var(--ws-surface);
+  border: none;
+  color: var(--ws-muted);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 7px 12px;
+  cursor: pointer;
+  min-height: 36px;
+}
+
+.ws-viewtoggle button + button {
+  border-left: 1px solid var(--ws-border);
+}
+
+.ws-viewtoggle button.active {
+  background: var(--ws-primary-soft);
+  color: var(--ws-primary-strong);
+  font-weight: 600;
+}
+
+/* ---------- body ---------- */
+.ws-body {
+  padding: 18px 20px 24px;
+  max-width: 1720px;
+  margin: 0 auto;
+}
+
+/* ---------- bottom shortcut ribbon ---------- */
+.ws-ribbon {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 6px 16px;
+  background: var(--ws-surface);
+  border-top: 1px solid var(--ws-border);
+  font-size: 12px;
+  color: var(--ws-muted);
+  min-height: 34px;
+}
+
+.ws-ribbon-label {
+  font-weight: 600;
+  color: var(--ws-faint);
+}
+
+.ws-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--ws-muted);
+  white-space: nowrap;
+}
+
+.ws-key.off {
+  opacity: 0.45;
+}
+
+.ws-key.on {
+  color: var(--ws-primary-strong);
+  font-weight: 600;
+}
+
+.ws-key.on .ws-keycap {
+  border-color: var(--ws-primary);
+  color: var(--ws-primary-strong);
+}
+
+.ws-kbd-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 3px;
+  border: 1px solid var(--ws-border);
+  border-radius: 6px;
+  background: var(--ws-surface);
+  cursor: pointer;
+  transition: border-color 0.12s;
+}
+
+.ws-kbd-toggle:hover {
+  border-color: var(--ws-primary);
+}
+
+.ws-kbd-toggle.on {
+  border-color: var(--ws-primary);
+}
+
+/* ---------- remove-with-undo chip ---------- */
+.ws-undo {
+  position: fixed;
+  left: 16px;
+  bottom: 96px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--ws-surface);
+  border: 1px solid var(--ws-border-strong);
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.12);
+  font-size: 13px;
+  color: var(--ws-text);
+}
+
+.ws-undo-text {
+  color: var(--ws-muted);
+}
+
+.ws-undo .ws-btn {
+  min-height: 32px;
+  padding: 4px 12px;
+}
+
+.ws-undo-x {
+  border: none;
+  background: transparent;
+  color: var(--ws-faint);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px;
+}
+
+.ws-undo-x:hover {
+  color: var(--ws-red);
+}
+
+/* ---------- shortcuts overlay ---------- */
+.ws-kbd-switch {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  background: var(--ws-surface-2);
+  border: 1px solid var(--ws-border);
+  border-radius: 8px;
+}
+
+.ws-kbd-switch-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ws-text);
+}
+
+.ws-kbd-switch-sub {
+  font-size: 12px;
+  color: var(--ws-faint);
+}
+
+.ws-kbd-switch .ws-switch {
+  margin-left: auto;
+}
+
+.ws-shortcuts-group {
+  margin-bottom: 16px;
+}
+
+.ws-shortcuts-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--ws-primary-strong);
+  margin-bottom: 8px;
+}
+
+.ws-shortcuts-note {
+  margin: 14px 0 0;
+  font-size: 12px;
+  color: var(--ws-muted);
+  background: var(--ws-primary-soft);
+  border: 1px solid var(--ws-border);
+  border-left: 3px solid var(--ws-primary);
+  border-radius: 6px;
+  padding: 10px 12px;
+  line-height: 1.5;
+}
+
+.ws-shortcuts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 18px;
+}
+
+@media (max-width: 640px) {
+  .ws-shortcuts {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ws-sc-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--ws-surface-2);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--ws-text);
+}
+
+.ws-sc-keys {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+/* ---------- export modal ---------- */
+.ws-exp-fmt {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.ws-exp-preview {
+  margin-top: 8px;
+  background: var(--ws-surface-2);
+  border: 1px solid var(--ws-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--ws-muted);
+  white-space: pre-wrap;
+  max-height: 180px;
+  overflow: auto;
+  user-select: text;
+}
+
+.ws-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.ws-field-label {
+  font-size: 12px;
+  color: var(--ws-muted);
+}
+
+.ws-field input {
+  padding: 9px 10px;
+  background: var(--ws-surface);
+  border: 1px solid var(--ws-border-strong);
+  border-radius: 6px;
+  color: var(--ws-text);
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.ws-field input:focus {
+  border-color: var(--ws-primary);
+}

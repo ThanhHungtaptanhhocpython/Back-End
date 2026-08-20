@@ -14,6 +14,13 @@ build/
 .tox/
 .cache/
 .pytest_cache/
+.hypothesis/
+cover/
+
+# Data directories
+src/data/
+data/
+
 .idea/
 docs/_build/
 .vscode
@@ -23,6 +30,11 @@ htmlcov/
 .coverage
 .coverage.*
 *,cover
+
+# Dict folders
+src/dict/map-keyframes/
+src/dict/media-info/
+src/dict/objects/
 
 # BEiT3 / Faiss runtime artifacts (large, machine-specific; never commit)
 *.pth

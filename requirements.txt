@@ -4,7 +4,10 @@ python-dotenv
 mysqlclient
 numpy
 pandas
+pyarrow
 faiss-cpu
+sentencepiece
+torchscale
 open-clip-torch
 git+https://github.com/openai/CLIP.git
 deep-translator>=1.11.4

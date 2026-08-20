@@ -63,6 +63,28 @@ class Settings(BaseSettings):
     clip_model_name: str = "ViT-H-14-quickgelu"
     clip_pretrained: str = "dfn5b"
 
+    # --- BEiT3 Retrieval (real visual-search path) ---
+    # All paths are machine-specific runtime artifacts and must be set via
+    # the environment; there is no in-repo default because the checkpoint,
+    # FAISS index, and parquet files are not committed to Git.
+    beit3_faiss_index_path: Path | None = None
+    beit3_global_ids_path: Path | None = None
+    beit3_video_metadata_path: Path | None = None
+    beit3_index_meta_path: Path | None = None
+    beit3_checkpoint_path: Path | None = None
+    beit3_tokenizer_path: Path | None = None
+    beit3_device: str = "cuda"
+    beit3_max_seq_len: int = 64
+
+    # Optional overrides when the real global_ids.parquet column names don't
+    # match the auto-detected candidates (see BEiT3Retriever._detect_columns).
+    beit3_col_vector_id: str | None = None
+    beit3_col_video_id: str | None = None
+    beit3_col_frame_id: str | None = None
+    beit3_col_frame_path: str | None = None
+    beit3_col_timestamp: str | None = None
+    beit3_col_namespace: str | None = None
+
     # --- Logging ---
     log_level: str = "INFO"
 

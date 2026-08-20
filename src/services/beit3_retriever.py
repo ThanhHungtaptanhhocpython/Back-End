@@ -1,0 +1,402 @@
+"""BEiT-3 text-to-image visual retrieval service.
+
+Owns every piece of the real retrieval path:
+    text query -> SentencePiece tokens -> BEiT3 language head ->
+    normalized 1024-d query vector -> FAISS IndexIDMap2(IndexFlatIP) search ->
+    global_ids.parquet lookup -> structured results.
+
+The BEiT3 model, FAISS index, and parquet metadata are loaded exactly once
+(lazy singleton, see `get_beit3_retriever`) and reused for every request.
+This module intentionally does not import `src.utils.beit3_processing`
+(that file wraps `bert-base-uncased`, not BEiT3, and its 768-d output is
+incompatible with this 1024-d FAISS index).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import threading
+from pathlib import Path
+from typing import Any
+
+import faiss
+import numpy as np
+import pandas as pd
+import sentencepiece as spm
+import torch
+
+from src.config.settings import Settings, get_settings
+from src.utils.beit3_backbone import BEiT3ForRetrieval, build_large_retrieval_config
+
+logger = logging.getLogger(__name__)
+
+# Historical fairseq/XLM-R offset mapping (see module docstring in the task
+# spec): fairseq reserves ids 0-3 for <s>, <pad>, </s>, <unk>; every other
+# SentencePiece piece id is shifted by +1, except spm's own id 0 (its <unk>)
+# which collapses onto fairseq's <unk> (3).
+BOS_ID = 0
+PAD_ID = 1
+EOS_ID = 2
+UNK_ID = 3
+
+EXPECTED_DIM = 1024
+
+_VECTOR_ID_CANDIDATES = ["global_id", "global_frame_id", "vector_id", "faiss_id", "id"]
+_VIDEO_ID_CANDIDATES = ["video_id", "video"]
+_FRAME_ID_CANDIDATES = ["frame_id", "frame_index", "keyframe_id", "frame_name"]
+_FRAME_PATH_CANDIDATES = ["frame_path", "image_path", "keyframe_path", "path"]
+_TIMESTAMP_CANDIDATES = ["timestamp", "pts", "time_sec", "time"]
+_NAMESPACE_CANDIDATES = ["namespace", "source_namespace", "parent_namespace", "split", "scope"]
+
+
+class BEiT3RetrieverError(RuntimeError):
+    """Raised for any BEiT3 startup or search invariant violation.
+
+    Callers must not catch this and silently fall back to another encoder;
+    that would silently return results from the wrong embedding space.
+    """
+
+
+def _first_matching_column(columns: list[str], candidates: list[str]) -> str | None:
+    lower_map = {c.lower(): c for c in columns}
+    for candidate in candidates:
+        if candidate.lower() in lower_map:
+            return lower_map[candidate.lower()]
+    return None
+
+
+class BEiT3Retriever:
+    """Owns the BEiT3 model, tokenizer, FAISS index, and metadata tables."""
+
+    def __init__(self, settings: Settings | None = None):
+        self._settings = settings or get_settings()
+        self._device = self._resolve_device(self._settings.beit3_device)
+        self._max_seq_len = self._settings.beit3_max_seq_len
+
+        self._tokenizer = self._load_tokenizer(self._settings.beit3_tokenizer_path)
+        self._model = self._load_model(self._settings.beit3_checkpoint_path)
+        self._index = self._load_faiss_index(self._settings.beit3_faiss_index_path)
+        self._global_ids = self._load_global_ids(self._settings.beit3_global_ids_path)
+        self._video_metadata = self._load_optional_parquet(
+            self._settings.beit3_video_metadata_path, label="video_metadata.parquet"
+        )
+        self._index_meta = self._load_optional_json(
+            self._settings.beit3_index_meta_path, label="index_meta.json"
+        )
+
+        self._validate_consistency()
+        self._columns = self._detect_columns(self._global_ids)
+        self._id_to_row = self._build_id_lookup(self._global_ids, self._columns["vector_id"])
+        self._video_meta_by_id: dict[Any, dict] | None = self._build_video_metadata_lookup()
+
+        logger.info(
+            "BEiT3Retriever ready: device=%s ntotal=%d rows=%d columns=%s",
+            self._device,
+            self._index.ntotal,
+            len(self._global_ids),
+            self._columns,
+        )
+
+    # ------------------------------------------------------------------
+    # Startup / loading
+    # ------------------------------------------------------------------
+
+    def _resolve_device(self, requested: str | None) -> torch.device:
+        requested_norm = (requested or "cpu").strip().lower()
+        if requested_norm not in ("cuda", "cpu"):
+            raise BEiT3RetrieverError(
+                f"Invalid BEIT3_DEVICE={requested!r}; expected 'cuda' or 'cpu'."
+            )
+        if requested_norm == "cuda" and not torch.cuda.is_available():
+            logger.warning(
+                "BEIT3_DEVICE=cuda was requested but CUDA is not available; "
+                "falling back to CPU. The model architecture is unchanged."
+            )
+            return torch.device("cpu")
+        return torch.device(requested_norm)
+
+    def _require_path(self, path: Path | None, env_var: str) -> Path:
+        if path is None:
+            raise BEiT3RetrieverError(f"{env_var} is not set.")
+        resolved = Path(path)
+        if not resolved.exists():
+            raise BEiT3RetrieverError(f"{env_var} points to a missing file: {resolved}")
+        return resolved
+
+    def _load_tokenizer(self, path: Path | None) -> spm.SentencePieceProcessor:
+        resolved = self._require_path(path, "BEIT3_TOKENIZER_PATH")
+        processor = spm.SentencePieceProcessor()
+        ok = processor.load(str(resolved))
+        if not ok:
+            raise BEiT3RetrieverError(f"Failed to load SentencePiece tokenizer from {resolved}")
+        return processor
+
+    def _load_model(self, checkpoint_path: Path | None) -> BEiT3ForRetrieval:
+        resolved = self._require_path(checkpoint_path, "BEIT3_CHECKPOINT_PATH")
+        config = build_large_retrieval_config(img_size=384)
+        model = BEiT3ForRetrieval(config)
+
+        checkpoint = torch.load(str(resolved), map_location="cpu")
+        state_dict = checkpoint.get("model", checkpoint) if isinstance(checkpoint, dict) else checkpoint
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
+        if missing or unexpected:
+            raise BEiT3RetrieverError(
+                "BEiT3 checkpoint does not match the expected "
+                "beit3_large_patch16_384_retrieval architecture "
+                f"(missing={len(missing)}, unexpected={len(unexpected)}). "
+                f"First missing keys: {missing[:5]}. First unexpected keys: {unexpected[:5]}."
+            )
+
+        model.eval()
+        model.to(self._device)
+        return model
+
+    def _load_faiss_index(self, index_path: Path | None) -> faiss.Index:
+        resolved = self._require_path(index_path, "BEIT3_FAISS_INDEX_PATH")
+        index = faiss.read_index(str(resolved))
+        if index.d != EXPECTED_DIM:
+            raise BEiT3RetrieverError(
+                f"FAISS index dimension {index.d} != {EXPECTED_DIM} (path={resolved})."
+            )
+        return index
+
+    def _load_global_ids(self, path: Path | None) -> pd.DataFrame:
+        resolved = self._require_path(path, "BEIT3_GLOBAL_IDS_PATH")
+        df = pd.read_parquet(resolved)
+        if df.empty:
+            raise BEiT3RetrieverError(f"global_ids.parquet at {resolved} is empty.")
+        return df
+
+    def _load_optional_parquet(self, path: Path | None, label: str) -> pd.DataFrame | None:
+        if path is None:
+            logger.warning("%s path not configured; enrichment from it will be skipped.", label)
+            return None
+        resolved = self._require_path(path, f"path for {label}")
+        return pd.read_parquet(resolved)
+
+    def _load_optional_json(self, path: Path | None, label: str) -> dict | None:
+        if path is None:
+            return None
+        resolved = self._require_path(path, f"path for {label}")
+        with resolved.open("r", encoding="utf-8") as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError as exc:
+                raise BEiT3RetrieverError(f"Failed to parse {label} at {resolved}: {exc}") from exc
+
+    def _validate_consistency(self) -> None:
+        ntotal = self._index.ntotal
+        n_rows = len(self._global_ids)
+        if ntotal != n_rows:
+            raise BEiT3RetrieverError(
+                f"FAISS index ntotal={ntotal} does not match global_ids.parquet "
+                f"row count={n_rows}. The index and metadata are out of sync."
+            )
+
+    def _detect_columns(self, df: pd.DataFrame) -> dict[str, str | None]:
+        columns = list(df.columns)
+        settings = self._settings
+
+        vector_id = settings.beit3_col_vector_id or _first_matching_column(
+            columns, _VECTOR_ID_CANDIDATES
+        )
+        video_id = settings.beit3_col_video_id or _first_matching_column(
+            columns, _VIDEO_ID_CANDIDATES
+        )
+        if vector_id is None:
+            raise BEiT3RetrieverError(
+                "Could not identify the vector-id column in global_ids.parquet "
+                f"(looked for {_VECTOR_ID_CANDIDATES}, found columns={columns}). "
+                "Set BEIT3_COL_VECTOR_ID explicitly."
+            )
+        if video_id is None:
+            raise BEiT3RetrieverError(
+                "Could not identify the video-id column in global_ids.parquet "
+                f"(looked for {_VIDEO_ID_CANDIDATES}, found columns={columns}). "
+                "Set BEIT3_COL_VIDEO_ID explicitly."
+            )
+
+        resolved = {
+            "vector_id": vector_id,
+            "video_id": video_id,
+            "frame_id": settings.beit3_col_frame_id or _first_matching_column(columns, _FRAME_ID_CANDIDATES),
+            "frame_path": settings.beit3_col_frame_path or _first_matching_column(columns, _FRAME_PATH_CANDIDATES),
+            "timestamp": settings.beit3_col_timestamp or _first_matching_column(columns, _TIMESTAMP_CANDIDATES),
+            "namespace": settings.beit3_col_namespace or _first_matching_column(columns, _NAMESPACE_CANDIDATES),
+        }
+        for logical_name in ("frame_id", "frame_path", "timestamp", "namespace"):
+            if resolved[logical_name] is None:
+                logger.info(
+                    "global_ids.parquet has no detected '%s' column; it will be null in results.",
+                    logical_name,
+                )
+        return resolved
+
+    def _build_id_lookup(self, df: pd.DataFrame, vector_id_col: str) -> dict[Any, dict]:
+        records = df.to_dict(orient="records")
+        lookup: dict[Any, dict] = {}
+        for row in records:
+            lookup[row[vector_id_col]] = row
+        return lookup
+
+    def _build_video_metadata_lookup(self) -> dict[Any, dict] | None:
+        if self._video_metadata is None:
+            return None
+        video_id_col = _first_matching_column(list(self._video_metadata.columns), _VIDEO_ID_CANDIDATES)
+        if video_id_col is None:
+            logger.warning(
+                "video_metadata.parquet has no recognizable video-id column "
+                "(columns=%s); skipping enrichment.",
+                list(self._video_metadata.columns),
+            )
+            return None
+        return {
+            row[video_id_col]: row
+            for row in self._video_metadata.to_dict(orient="records")
+        }
+
+    # ------------------------------------------------------------------
+    # Query encoding
+    # ------------------------------------------------------------------
+
+    def _encode_piece_ids(self, text: str) -> list[int]:
+        spm_ids = self._tokenizer.encode(text, out_type=int)
+        return [UNK_ID if spm_id == 0 else spm_id + 1 for spm_id in spm_ids]
+
+    def _tokenize(self, text: str) -> tuple[torch.Tensor, torch.Tensor]:
+        piece_ids = self._encode_piece_ids(text)
+        max_len = self._max_seq_len
+        if len(piece_ids) > max_len - 2:
+            piece_ids = piece_ids[: max_len - 2]
+
+        tokens = [BOS_ID] + piece_ids + [EOS_ID]
+        num_tokens = len(tokens)
+        padding_mask = [False] * num_tokens + [True] * (max_len - num_tokens)
+        tokens = tokens + [PAD_ID] * (max_len - num_tokens)
+
+        token_tensor = torch.tensor([tokens], dtype=torch.long, device=self._device)
+        mask_tensor = torch.tensor([padding_mask], dtype=torch.bool, device=self._device)
+        return token_tensor, mask_tensor
+
+    def _validate_query_vector(self, vec: np.ndarray) -> None:
+        if vec.shape != (1, EXPECTED_DIM):
+            raise BEiT3RetrieverError(
+                f"Query embedding has shape {vec.shape}, expected (1, {EXPECTED_DIM})."
+            )
+        if not np.isfinite(vec).all():
+            raise BEiT3RetrieverError("Query embedding contains NaN/Inf values.")
+        norm = float(np.linalg.norm(vec))
+        if not np.isclose(norm, 1.0, atol=1e-2):
+            raise BEiT3RetrieverError(f"Query embedding L2 norm={norm:.4f}, expected ~1.0.")
+
+    def encode_text(self, query: str) -> np.ndarray:
+        """Encode `query` into a normalized (1, 1024) float32 vector."""
+        if not query or not query.strip():
+            raise BEiT3RetrieverError("Query text must be a non-empty string.")
+
+        tokens, padding_mask = self._tokenize(query.strip())
+        with torch.no_grad():
+            _, language_cls = self._model(
+                text_description=tokens, padding_mask=padding_mask, only_infer=True
+            )
+        vec = language_cls.detach().cpu().numpy().astype(np.float32)
+        self._validate_query_vector(vec)
+        return vec
+
+    # ------------------------------------------------------------------
+    # Search
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _to_json_safe(value: Any) -> Any:
+        """Convert a pandas/numpy scalar to a native, JSON-safe Python value.
+
+        pandas `.to_dict()` leaves numpy scalar dtypes (np.int64, np.float64,
+        ...) in the row values, and NaN is a float, not None. Both break the
+        "return null, never invent a value" contract and can fail JSON
+        serialization outright, so every field that reaches the API response
+        goes through this first.
+        """
+        if value is None:
+            return None
+        if isinstance(value, (np.floating, float)):
+            f = float(value)
+            return None if np.isnan(f) else f
+        if isinstance(value, np.integer):
+            return int(value)
+        if isinstance(value, np.bool_):
+            return bool(value)
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if pd.isna(value) if not isinstance(value, (list, dict)) else False:
+            return None
+        return value
+
+    def _build_result(self, rank: int, score: float, vector_id: int, row: dict) -> dict:
+        cols = self._columns
+        video_id = self._to_json_safe(row.get(cols["video_id"]))
+
+        result = {
+            "rank": rank,
+            "score": score,
+            "vector_id": vector_id,
+            "video_id": video_id,
+            "frame_id": self._to_json_safe(row.get(cols["frame_id"])) if cols["frame_id"] else None,
+            "frame_path": self._to_json_safe(row.get(cols["frame_path"])) if cols["frame_path"] else None,
+            "timestamp": self._to_json_safe(row.get(cols["timestamp"])) if cols["timestamp"] else None,
+            "namespace": self._to_json_safe(row.get(cols["namespace"])) if cols["namespace"] else None,
+        }
+
+        if self._video_meta_by_id is not None and video_id in self._video_meta_by_id:
+            video_row = {
+                k: self._to_json_safe(v) for k, v in self._video_meta_by_id[video_id].items()
+            }
+            result["video_metadata"] = video_row
+
+        return result
+
+    def search_visual(self, query: str, top_k: int = 20) -> list[dict]:
+        """Encode `query` with BEiT3 and search the exact FAISS index.
+
+        Returns a list of dicts with real FAISS inner-product scores
+        (never rank-derived placeholders), ordered by descending score.
+        """
+        if not isinstance(top_k, int) or isinstance(top_k, bool) or top_k <= 0:
+            raise BEiT3RetrieverError(f"top_k must be a positive integer, got {top_k!r}.")
+
+        query_vec = self.encode_text(query)
+        scores, ids = self._index.search(query_vec, top_k)
+        scores = scores[0]
+        ids = ids[0]
+
+        results: list[dict] = []
+        rank = 0
+        for score, vector_id in zip(scores, ids):
+            if vector_id == -1:
+                continue
+            row = self._id_to_row.get(int(vector_id))
+            if row is None:
+                logger.error(
+                    "FAISS returned vector_id=%s with no matching row in global_ids.parquet.",
+                    vector_id,
+                )
+                continue
+            rank += 1
+            results.append(self._build_result(rank, float(score), int(vector_id), row))
+
+        return results
+
+
+_retriever: BEiT3Retriever | None = None
+_retriever_lock = threading.Lock()
+
+
+def get_beit3_retriever() -> BEiT3Retriever:
+    """Return the process-wide BEiT3Retriever singleton, loading it on first use."""
+    global _retriever
+    if _retriever is None:
+        with _retriever_lock:
+            if _retriever is None:
+                _retriever = BEiT3Retriever()
+    return _retriever

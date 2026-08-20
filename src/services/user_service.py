@@ -104,42 +104,17 @@ def generate_random_answer():
 
 
 def getImageDataSingleTextSearch(query, k):
-    text_query = query.strip()
-    result = []
+    """Real visual text search: BEiT3 text encoder -> exact FAISS IP search.
 
-    scores, list_ids, infos_query, image_paths = get_cosine_faiss().text_search(text_query, k)
-    id = 0
-    # print("List IDs:", list_ids)  # Debugging line
-    for info, idx, image_path in zip(infos_query, list_ids, image_paths):
-        if not info:
-            continue
+    This is the production `/singletextsearch` path. It intentionally does
+    NOT use the legacy OpenCLIP `MyFaiss` index (`get_cosine_faiss()`),
+    which lives in a different embedding space than the BEiT3 corpus
+    vectors. Returned scores are the real FAISS inner-product similarity,
+    never a rank-derived placeholder.
+    """
+    from src.services.beit3_retriever import get_beit3_retriever
 
-        # Extract metadata
-        frame_name = info['global_frame_id']
-        video_id = info['video_id']
-        # timestamp = info['pts']
-        folder_key = info['split'].split('-')[1].upper()
-        full_image_path = os.path.join(SRC_DIR, 'data', 'Keyframes', image_path)
-        try:
-            with open(full_image_path, "rb") as image_file:
-                encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
-        except Exception as e:
-            logging.error(f"Failed to load image {full_image_path}: {e}")
-            continue
-
-        
-        result.append({
-            'id': id,
-            'folder_key': folder_key,
-            'video_key': video_id,
-            'frame_key': frame_name,
-            'faiss_id_clip': int(idx),
-            # 'timestamp': timestamp,
-            'image': encoded_string
-        })
-        id += 1
-
-    return result
+    return get_beit3_retriever().search_visual(query, top_k=k)
 
 
 def getImageDataQAndASearch(query, k):

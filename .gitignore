@@ -23,3 +23,10 @@ htmlcov/
 .coverage
 .coverage.*
 *,cover
+
+# BEiT3 / Faiss runtime artifacts (large, machine-specific; never commit)
+*.pth
+*.index
+*.parquet
+*.spm
+src/dict/nw/*.bin

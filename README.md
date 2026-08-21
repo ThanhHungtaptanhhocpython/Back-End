@@ -1,6 +1,6 @@
 # AI Challenge 2026 - Agentic AI Multimodal Retrieval System
 
-> **Note for AI Agents:** For AI agent guidance and detailed repository context, please refer to `skills/README.md`, `ARCHITECTURE_UPGRADE_PLAN.md`, and `AGENT_TASKS.md`.
+> **Note for AI Agents:** For competition rules, query types (Textual KIS, Q&A, TRAKE), and scoring mechanics ($R@k$), see [agent_prompts/aic_2026_competition_context.md](agent_prompts/aic_2026_competition_context.md). For agent tasks and architecture, see `ARCHITECTURE_UPGRADE_PLAN.md` and `AGENT_TASKS.md`.
 
 This repository contains the backend system for an advanced multimodal image and video keyframe retrieval system. Built with **FastAPI** and powered by **Agentic AI** (LangChain, Gemini/OpenAI), **Faiss**, **OpenCLIP**, and **Elasticsearch**, the system provides robust visual semantic retrieval, temporal sequence search, and a fully conversational reasoning AI assistant.
 

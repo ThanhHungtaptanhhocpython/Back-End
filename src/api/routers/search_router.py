@@ -1,10 +1,23 @@
 from typing import Optional
 from fastapi import APIRouter, Form, UploadFile, File, Response, status
-from src.schemas.search import TextSearchRequest
+from src.schemas.search import TextSearchRequest, TranslateRequest, TranslateResponse
 from src.schemas.temporal import TemporalSearchRequest
 from src.schemas.results import BaseResponse, DataResponse
 
 router = APIRouter()
+
+@router.post("/translate", response_model=TranslateResponse)
+def handle_translate(request: TranslateRequest):
+    from src.utils.nlp_processing import Translation
+    translator = Translation(from_lang=request.from_lang, to_lang=request.to_lang)
+    translated_text = translator(request.text)
+    return TranslateResponse(
+        success=True,
+        translated_text=translated_text,
+        from_lang=request.from_lang,
+        to_lang=request.to_lang
+    )
+
 
 @router.post("/singletextsearch", response_model=BaseResponse)
 def handle_single_text_search(request: TextSearchRequest):
@@ -129,3 +142,27 @@ def handle_multimodal_search(request: TextSearchRequest):
         success=True,
         data=DataResponse(items=res, total_items=len(res))
     )
+
+@router.get("/video_keyframes/{video_id}", response_model=BaseResponse)
+@router.get("/videos/{video_id}/keyframes", response_model=BaseResponse)
+def handle_video_keyframes(
+    video_id: str,
+    around: Optional[str] = None,
+    limit: Optional[int] = 60
+):
+    from src.services.beit3_retriever import get_beit3_retriever
+    try:
+        retriever = get_beit3_retriever()
+        items = retriever.get_video_timeline(video_id=video_id, around_frame_id=around, limit=limit or 60)
+        return BaseResponse(
+            success=True,
+            data=DataResponse(items=items, total_items=len(items))
+        )
+    except Exception as exc:
+        logging.error(f"Error fetching timeline for video {video_id}: {exc}")
+        return BaseResponse(
+            success=False,
+            message=str(exc),
+            data=DataResponse(items=[], total_items=0)
+        )
+

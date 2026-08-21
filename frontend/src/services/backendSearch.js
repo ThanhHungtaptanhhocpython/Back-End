@@ -79,6 +79,10 @@ function healthUrl(baseUrl) {
   return `${baseUrl.replace(/\/users$/i, "").replace(/\/+$/, "")}/health`;
 }
 
+function chatUrl(baseUrl) {
+  return `${baseUrl.replace(/\/users$/i, "").replace(/\/+$/, "")}/chat/conversational_kis`;
+}
+
 function requestFor(tab, pivot) {
   const type = tab?.searchType || "TEXT";
   const params = tab?.params || {};
@@ -89,9 +93,20 @@ function requestFor(tab, pivot) {
   if (type === "IMAGE") {
     const body = new FormData();
     const image = params.imageFile;
-    const faissIndex = firstDefined(pivot?.faissIndex, pivot?.faiss_id_clip, pivot?.faiss_id, pivot?.faiss_idx);
+    const effectivePivot = pivot || tab?.pivotItem;
+    const faissIndex = firstDefined(
+      effectivePivot?.faissIndex,
+      effectivePivot?.vector_id,
+      effectivePivot?.backend?.vector_id,
+      effectivePivot?.faiss_id_clip,
+      effectivePivot?.faiss_id,
+      effectivePivot?.faiss_idx,
+      effectivePivot?.backend?.faiss_id,
+      effectivePivot?.backend?.faiss_idx,
+      effectivePivot?.gid
+    );
     if (image instanceof Blob) body.append("image", image, image.name || "reference-image");
-    if (faissIndex !== undefined) body.append("faiss_index", String(faissIndex));
+    if (faissIndex !== undefined && faissIndex !== null) body.append("faiss_index", String(faissIndex));
     body.append("topk", String(topk));
     body.append("clip", String(Boolean(params.clip)));
     body.append("clipv2", String(Boolean(params.clipv2)));
@@ -122,21 +137,47 @@ export function getSearchConfig(env = viteEnv()) {
 }
 
 /** Convert a FastAPI result record into the card shape consumed by ResultCard. */
-export function normalizeBackendItem(item, rank, total) {
+export function normalizeBackendItem(item, rank, total, baseUrl = "") {
   const raw = item && typeof item === "object" ? item : {};
-  const faissIndex = firstDefined(raw.faiss_index, raw.faiss_id_clip, raw.faiss_id, raw.faiss_idx, raw.nearest_faiss_id);
-  const frameKey = firstDefined(raw.frame_key, raw.global_frame_id, raw.frame_id, raw.id, faissIndex, rank);
+  const faissIndex = firstDefined(raw.faiss_index, raw.faiss_id_clip, raw.faiss_id, raw.faiss_idx, raw.nearest_faiss_id, raw.vector_id);
+  const submissionFrameId = firstDefined(raw.submission_frame_id, raw.frame_idx, raw.frame_key, raw.frame_id, raw.global_frame_id);
+  const frameKey = firstDefined(submissionFrameId, raw.id, faissIndex, rank);
   const videoKey = String(firstDefined(raw.video_key, raw.video_id, raw.videoKey, "unknown-video"));
-  const folderKey = String(firstDefined(raw.folder_key, raw.folderKey, raw.split, "UNKNOWN"));
+  const folderKey = String(firstDefined(raw.folder_key, raw.folderKey, raw.namespace, raw.split, "UNKNOWN"));
   const timestamp = finiteNumber(raw.timestamp);
   const fps = positiveInteger(raw.fps, 25);
   const scoreValue = firstDefined(raw.final_score, raw.normalized_score, raw.score, raw._score);
   const frameName = String(firstDefined(raw.frame_name, raw.frameName, `${videoKey}_${frameKey}`));
 
+  const framePath = firstDefined(raw.frame_path, raw.framePath);
+  let resolvedImage = firstDefined(raw.image, raw.thumbnail, raw.image_url);
+  if (!resolvedImage && framePath) {
+    if (baseUrl) {
+      resolvedImage = `${baseUrl.replace(/\/+$/, "")}/keyframes/${framePath.replace(/^\/+/, "")}`;
+    } else {
+      resolvedImage = `/keyframes/${framePath.replace(/^\/+/, "")}`;
+    }
+  }
+
+  // Keyframe ID must be uniquely tied to the actual video keyframe across all searches (NOT position-dependent rank)
+  const uniqueId = String(
+    firstDefined(
+      videoKey !== "unknown-video" && submissionFrameId !== undefined ? `${videoKey}_${submissionFrameId}` : undefined,
+      raw.frame_name,
+      framePath,
+      raw.global_frame_id,
+      raw.vector_id !== undefined ? `vec-${raw.vector_id}` : undefined,
+      faissIndex !== undefined ? `faiss-${faissIndex}` : undefined,
+      raw.id,
+      `frame-${videoKey}-${rank}`
+    )
+  );
+
   return {
-    id: String(firstDefined(raw.global_frame_id, raw.frame_key, raw.frame_name, raw.id, faissIndex, `backend-${rank}`)),
-    gid: finiteNumber(firstDefined(raw.global_frame_id, raw.id, rank), rank),
-    globalFrameId: finiteNumber(firstDefined(raw.global_frame_id, raw.frame_key, raw.id, rank), rank),
+    id: uniqueId,
+    gid: finiteNumber(firstDefined(faissIndex, raw.id, rank), rank),
+    globalFrameId: finiteNumber(firstDefined(submissionFrameId, raw.id, rank), rank),
+    submissionFrameId: finiteNumber(firstDefined(submissionFrameId, raw.id, rank), rank),
     folderKey,
     videoKey,
     camera: String(firstDefined(raw.camera, raw.camera_id, "BACKEND")),
@@ -147,7 +188,7 @@ export function normalizeBackendItem(item, rank, total) {
     fps,
     width: finiteNumber(raw.width),
     height: finiteNumber(raw.height),
-    image: imageSource(firstDefined(raw.image, raw.thumbnail, raw.image_url)),
+    image: imageSource(resolvedImage),
     link: String(firstDefined(raw.link, raw.video_url, "")),
     real: true,
     faissIndex: faissIndex === undefined ? undefined : finiteNumber(faissIndex),
@@ -167,7 +208,7 @@ export function normalizeBackendItem(item, rank, total) {
 }
 
 /** Normalize FastAPI's BaseResponse envelope into the stable workstation result contract. */
-export function normalizeBackendResponse(payload, { type, latency }) {
+export function normalizeBackendResponse(payload, { type, latency }, baseUrl = "") {
   if (!payload || typeof payload !== "object") {
     throw new BackendSearchError("Backend returned an invalid response.");
   }
@@ -180,7 +221,7 @@ export function normalizeBackendResponse(payload, { type, latency }) {
 
   const totalItems = positiveInteger(payload.data.total_items, payload.data.items.length);
   return {
-    items: payload.data.items.map((item, index) => normalizeBackendItem(item, index + 1, totalItems)),
+    items: payload.data.items.map((item, index) => normalizeBackendItem(item, index + 1, totalItems, baseUrl)),
     totalItems,
     latency,
     type,
@@ -232,12 +273,69 @@ export async function runBackendSearch(tab, pivot, { config = getSearchConfig(),
     });
   }
 
-  return normalizeBackendResponse(payload, {
-    type: tab?.searchType || "TEXT",
-    latency: Date.now() - startedAt,
-  });
+  return normalizeBackendResponse(
+    payload,
+    {
+      type: tab?.searchType || "TEXT",
+      latency: Date.now() - startedAt,
+    },
+    config.baseUrl
+  );
 }
 
+/** Execute one conversational KIS turn through the FastAPI agent router. */
+export async function runAgentChat(
+  { sessionId, message, topk = 100 },
+  { config = getSearchConfig(), fetchImpl = globalThis.fetch } = {}
+) {
+  if (!config.baseUrl) {
+    throw new BackendSearchError("VITE_SEARCH_API_BASE_URL is required for live agent chat.", { kind: "config" });
+  }
+  if (typeof fetchImpl !== "function") {
+    throw new BackendSearchError("Fetch is unavailable in this environment.", { kind: "transport" });
+  }
+
+  let response;
+  try {
+    response = await fetchImpl(chatUrl(config.baseUrl), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: sessionId,
+        message,
+        topk: positiveInteger(topk, 100),
+      }),
+    });
+  } catch (cause) {
+    throw new BackendSearchError("FastAPI agent service is unavailable.", { kind: "transport", cause });
+  }
+
+  let payload;
+  try {
+    payload = await response.json();
+  } catch (cause) {
+    throw new BackendSearchError(`Agent returned an unreadable HTTP ${response.status} response.`, {
+      kind: "response",
+      status: response.status,
+      cause,
+    });
+  }
+
+  if (!response.ok || payload?.success !== true) {
+    throw new BackendSearchError(payload?.response || payload?.message || `Agent failed with HTTP ${response.status}.`, {
+      kind: "response",
+      status: response.status,
+    });
+  }
+
+  return {
+    sessionId: payload.session_id || sessionId,
+    response: String(payload.response || ""),
+    data: payload.data ?? null,
+    mode: "AGENT LIVE",
+    source: "live",
+  };
+}
 /** Probe FastAPI without sending a search request, keeping demo mode explicit. */
 export async function probeBackend({ config = getSearchConfig(), fetchImpl = globalThis.fetch } = {}) {
   if (config.mode === "demo") {
@@ -259,4 +357,26 @@ export async function probeBackend({ config = getSearchConfig(), fetchImpl = glo
   }
 }
 
+/** Fetch sequential keyframes for a specific video to power the Review timeline strip. */
+export async function fetchVideoTimeline(videoId, aroundFrameId = null, limit = 60, { config = getSearchConfig(), fetchImpl = globalThis.fetch } = {}) {
+  if (!videoId || videoId === "unknown-video") return [];
+  const queryParams = new URLSearchParams();
+  if (aroundFrameId) queryParams.set("around", String(aroundFrameId));
+  if (limit) queryParams.set("limit", String(limit));
+
+  const url = `${config.baseUrl ? config.baseUrl.replace(/\/+$/, "") : ""}/users/video_keyframes/${encodeURIComponent(videoId)}?${queryParams.toString()}`;
+  try {
+    const response = await fetchImpl(url);
+    if (!response.ok) return [];
+    const payload = await response.json();
+    if (!payload?.data?.items) return [];
+    const baseUrl = config.baseUrl || "";
+    return payload.data.items.map((item, idx) => normalizeBackendItem(item, idx + 1, payload.data.items.length, baseUrl));
+  } catch (err) {
+    console.warn("Failed to fetch video timeline:", err);
+    return [];
+  }
+}
+
 export { SEARCH_ENDPOINTS };
+

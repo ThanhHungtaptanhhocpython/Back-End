@@ -167,42 +167,14 @@ def getImageDataQAndASearch(query, k):
     return result
 
 def getImageSearchById(image_id, k):
-    result = []
-
+    """Search similar keyframes using BEiT-3 vector ID."""
+    from src.services.beit3_retriever import get_beit3_retriever
     try:
-        scores, image_ids, infos_query, image_paths = get_cosine_faiss().image_search(image_id, k)
+        return get_beit3_retriever().search_by_vector_id(int(image_id), top_k=k)
+    except Exception as e:
+        logging.error(f"Error during BEiT-3 image search by id: {e}")
+        return []
 
-        id = 0
-        for info, image_path in zip(infos_query, image_paths):
-            if not info:
-                continue
-
-            # Extract metadata
-            frame_name = info['global_frame_id']
-            video_id = info['video_id']
-            # timestamp = info['pts']
-            folder_key = info['split'].split('-')[1].upper()
-            full_image_path = os.path.join(SRC_DIR, 'data', 'Keyframes', image_path)
-            try:
-                with open(full_image_path, "rb") as image_file:
-                    encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
-            except Exception as e:
-                logging.error(f"Failed to load image {full_image_path}: {e}")
-                continue
-
-            
-            result.append({
-                'id': id,
-                'folder_key': folder_key,
-                'video_key': video_id,
-                'frame_key': frame_name,
-                # 'timestamp': timestamp,
-                'image': encoded_string
-            })
-            id += 1 
-        return result
-    except ValueError as e:
-        logging.error(f"Error during image search: {e}")
 
 
 # res = getImageDataSingleTextSearch("Clip đua xe đạp, góc flycam từ trên cao: Một vận động viên áo xanh dương-trắng vượt qua 3 vận động viên khác để lên dẫn đầu, sau đó giữ vị trí này đến khi về đích.", 5)

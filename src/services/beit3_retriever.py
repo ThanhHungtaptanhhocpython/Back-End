@@ -89,13 +89,15 @@ class BEiT3Retriever:
         self._columns = self._detect_columns(self._global_ids)
         self._id_to_row = self._build_id_lookup(self._global_ids, self._columns["vector_id"])
         self._video_meta_by_id: dict[Any, dict] | None = self._build_video_metadata_lookup()
+        self._video_to_rows: dict[str, list[dict]] = self._build_video_to_rows()
 
         logger.info(
-            "BEiT3Retriever ready: device=%s ntotal=%d rows=%d columns=%s",
+            "BEiT3Retriever ready: device=%s ntotal=%d rows=%d columns=%s videos=%d",
             self._device,
             self._index.ntotal,
             len(self._global_ids),
             self._columns,
+            len(self._video_to_rows),
         )
 
     # ------------------------------------------------------------------
@@ -336,13 +338,20 @@ class BEiT3Retriever:
     def _build_result(self, rank: int, score: float, vector_id: int, row: dict) -> dict:
         cols = self._columns
         video_id = self._to_json_safe(row.get(cols["video_id"]))
+        frame_id = self._to_json_safe(row.get(cols["frame_id"])) if cols["frame_id"] else None
+        frame_submission_id = self._normalize_submission_frame_id(frame_id)
+        frame_name = f"{video_id}_{frame_id}" if (video_id and frame_id) else None
 
         result = {
             "rank": rank,
             "score": score,
             "vector_id": vector_id,
+            "faiss_id": vector_id,
+            "global_frame_id": frame_submission_id,
+            "frame_idx": frame_submission_id,
             "video_id": video_id,
-            "frame_id": self._to_json_safe(row.get(cols["frame_id"])) if cols["frame_id"] else None,
+            "frame_id": frame_id,
+            "frame_name": frame_name,
             "frame_path": self._to_json_safe(row.get(cols["frame_path"])) if cols["frame_path"] else None,
             "timestamp": self._to_json_safe(row.get(cols["timestamp"])) if cols["timestamp"] else None,
             "namespace": self._to_json_safe(row.get(cols["namespace"])) if cols["namespace"] else None,
@@ -355,6 +364,21 @@ class BEiT3Retriever:
             result["video_metadata"] = video_row
 
         return result
+
+    @staticmethod
+    def _normalize_submission_frame_id(frame_id: Any) -> Any:
+        """Return the per-video frame id expected by submission CSVs.
+
+        FAISS vector ids are corpus-global ids. The benchmark submission format
+        expects the frame id inside each video, which is stored in metadata as
+        values like "003048".
+        """
+        if frame_id is None:
+            return None
+        text = str(frame_id).strip()
+        if not text:
+            return None
+        return int(text) if text.isdigit() else text
 
     def search_visual(self, query: str, top_k: int = 20) -> list[dict]:
         """Encode `query` with BEiT3 and search the exact FAISS index.
@@ -386,6 +410,100 @@ class BEiT3Retriever:
             results.append(self._build_result(rank, float(score), int(vector_id), row))
 
         return results
+
+    def search_by_vector_id(self, vector_id: int, top_k: int = 20) -> list[dict]:
+        """Search similar keyframes using an existing vector_id in FAISS."""
+        if not isinstance(top_k, int) or isinstance(top_k, bool) or top_k <= 0:
+            raise BEiT3RetrieverError(f"top_k must be a positive integer, got {top_k!r}.")
+
+        try:
+            query_vec = self._index.reconstruct(int(vector_id)).reshape(1, -1)
+        except Exception as exc:
+            raise BEiT3RetrieverError(f"Cannot reconstruct vector for vector_id={vector_id}: {exc}") from exc
+
+        scores, ids = self._index.search(query_vec, top_k)
+        scores = scores[0]
+        ids = ids[0]
+
+        results: list[dict] = []
+        rank = 0
+        for score, vid in zip(scores, ids):
+            if vid == -1:
+                continue
+            row = self._id_to_row.get(int(vid))
+            if row is None:
+                continue
+            rank += 1
+            results.append(self._build_result(rank, float(score), int(vid), row))
+
+        return results
+
+    def _build_video_to_rows(self) -> dict[str, list[dict]]:
+        """Index rows by video_id in chronological frame_id order."""
+        video_col = self._columns.get("video_id") or "video_id"
+        frame_col = self._columns.get("frame_id") or "frame_id"
+        lookup: dict[str, list[dict]] = {}
+        for row in self._id_to_row.values():
+            v_id = str(row.get(video_col) or "").strip()
+            if v_id:
+                if v_id not in lookup:
+                    lookup[v_id] = []
+                lookup[v_id].append(row)
+
+        for v_id in lookup:
+            lookup[v_id].sort(
+                key=lambda r: (
+                    str(r.get(frame_col) or "").zfill(12),
+                    int(r.get(self._columns["vector_id"]) or 0),
+                )
+            )
+        return lookup
+
+    def get_video_timeline(
+        self, video_id: str, around_frame_id: str | None = None, limit: int = 60
+    ) -> list[dict]:
+        """Return chronological keyframes for a given video."""
+        rows = self._video_to_rows.get(video_id)
+        if not rows:
+            v_lower = video_id.lower()
+            for k, v in self._video_to_rows.items():
+                if k.lower() == v_lower:
+                    rows = v
+                    break
+        if not rows:
+            return []
+
+        frame_col = self._columns.get("frame_id") or "frame_id"
+        if around_frame_id:
+            target = str(around_frame_id).strip()
+            target_clean = target.lstrip("0")
+            match_idx = -1
+            for i, r in enumerate(rows):
+                fid = str(r.get(frame_col) or "").strip()
+                if fid == target or (target_clean and fid.lstrip("0") == target_clean):
+                    match_idx = i
+                    break
+
+            if match_idx != -1:
+                half = limit // 2
+                start = max(0, match_idx - half)
+                end = min(len(rows), start + limit)
+                start = max(0, end - limit)
+                selected_rows = rows[start:end]
+            else:
+                selected_rows = rows[:limit]
+        else:
+            selected_rows = rows[:limit]
+
+        results: list[dict] = []
+        for rank, row in enumerate(selected_rows, start=1):
+            vid = int(row.get(self._columns["vector_id"]) or 0)
+            res = self._build_result(rank, 1.0, vid, row)
+            results.append(res)
+
+        return results
+
+
 
 
 _retriever: BEiT3Retriever | None = None

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { App as AntApp } from "antd";
 import { CloseOutlined, MessageOutlined } from "@ant-design/icons";
 import { CARD_W, GAP } from "../../shared/constants";
+import { queryTypeFromSearchType } from "../../shared/submissionExport";
 import { runSearch as runSearchQuery, askCopilot, probeBackend as probeSearchBackend } from "../../shared/adapters";
 import { getFramePool } from "../../mocks/searchEngine";
 import useClock from "../../hooks/useClock";
@@ -9,6 +10,7 @@ import useWorkspaceKeyboard from "../../hooks/useWorkspaceKeyboard";
 import Keycap from "../../components/Keycap";
 import StatusBar from "./StatusBar";
 import ExportModal from "./ExportModal";
+import BatchQueryModal from "./BatchQueryModal";
 import ShortcutOverlay from "./ShortcutOverlay";
 import QueryTabs from "../search/QueryTabs";
 import SearchBar from "../search/SearchBar";
@@ -25,7 +27,7 @@ function makeTab() {
     label: `Query ${String(tabSeq).padStart(2, "0")}`,
     searchType: "TEXT",
     query: "",
-    params: { topk: 24, clip: true, clipv2: false, imageFile: null },
+    params: { topk: 100, clip: true, clipv2: false, imageFile: null },
     status: "running",
     latency: 0,
     results: [],
@@ -48,6 +50,7 @@ export default function Workstation({ view, onSwitchView }) {
   const [reviewTabKey, setReviewTabKey] = useState(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportItems, setExportItems] = useState([]);
+  const [batchOpen, setBatchOpen] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [editingKey, setEditingKey] = useState(null);
   const [backend, setBackend] = useState({ backend: "offline", demo: true, note: "LOCAL MOCK", at: "" });
@@ -73,6 +76,7 @@ export default function Workstation({ view, onSwitchView }) {
   const trayRef = useRef(null);
   const composerRef = useRef(null);
   const cardRefs = useRef({});
+  const chatSessionRef = useRef(`workspace-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
   const activeTab = tabs.find((t) => t.key === activeKey) || tabs[0];
   const focusedItem = activeTab?.results.find((r) => r.id === focusedId) || null;
@@ -93,9 +97,10 @@ export default function Workstation({ view, onSwitchView }) {
 
   /* ---------- search actions ---------- */
   const runSearch = async (tab, pivotFrame) => {
+    const effectivePivot = pivotFrame || tab?.pivotItem;
     setTabs((prev) => prev.map((t) => (t.key === tab.key ? { ...t, status: "running" } : t)));
     try {
-      const res = await runSearchQuery(tab, pivotFrame);
+      const res = await runSearchQuery(tab, effectivePivot);
       setTabs((prev) =>
         prev.map((t) => (t.key === tab.key ? { ...t, status: "done", results: res.items, total: res.totalItems, latency: res.latency } : t))
       );
@@ -105,14 +110,14 @@ export default function Workstation({ view, onSwitchView }) {
         note: res.source === "live" ? "FASTAPI" : res.source === "fallback" ? "FASTAPI UNAVAILABLE" : "LOCAL MOCK",
         at: new Date().toLocaleTimeString("en-GB", { hour12: false }),
       });
-      toast.success(`${res.type} · ${res.totalItems} frames · ${res.mode} · ${res.latency}ms`);
+      toast.success(`${res.type} Â· ${res.totalItems} frames Â· ${res.mode} Â· ${res.latency}ms`);
     } catch (error) {
       setTabs((prev) => prev.map((t) => (t.key === tab.key ? { ...t, status: "err" } : t)));
       toast.error(error instanceof Error ? error.message : "Search failed");
     }
   };
 
-  /* debounced auto-run on query/type/param changes (IMAGE is explicit — requires a seed) */
+  /* debounced auto-run on query/type/param changes (IMAGE is explicit â€” requires a seed) */
   useEffect(() => {
     if (!activeTab || editingKey || activeTab.searchType === "IMAGE") return;
     const id = setTimeout(() => {
@@ -123,8 +128,9 @@ export default function Workstation({ view, onSwitchView }) {
 
   const runActive = () => {
     const tab = tabs.find((t) => t.key === activeKey);
-    if (tab) runSearch(tab, null);
+    if (tab) runSearch(tab, tab.pivotItem);
   };
+
 
   /* ---------- tab management ---------- */
   const addTab = () => {
@@ -169,8 +175,17 @@ export default function Workstation({ view, onSwitchView }) {
         n.delete(item.id);
         toast.info("Removed from tray");
       } else {
-        n.set(item.id, item);
-        toast.success("Kept in tray — Space again to release");
+        const tab = tabs.find((t) => t.key === activeKey);
+        const queryIndex = Math.max(1, tabs.findIndex((t) => t.key === activeKey) + 1);
+        n.set(item.id, {
+          ...item,
+          __submission: {
+            key: activeKey,
+            queryIndex,
+            queryType: queryTypeFromSearchType(tab?.searchType),
+          },
+        });
+        toast.success("Kept in tray â€” Space again to release");
       }
       return n;
     });
@@ -307,7 +322,7 @@ export default function Workstation({ view, onSwitchView }) {
   };
 
   /* ---------- copilot actions ---------- */
-  const sendChat = () => {
+  const sendChat = async () => {
     const text = chatInput.trim();
     if (!text || chatStatus === "thinking") return;
     const ctx = chatCtxFrame;
@@ -316,14 +331,34 @@ export default function Workstation({ view, onSwitchView }) {
     setChatInput("");
     setChatCtxFrame(null);
     setChatStatus("thinking");
-    const frames = userMsg.frames;
-    setTimeout(() => {
-      const reply = { id: `c${++chatSeq}`, role: "assistant", text: askCopilot(text, frames), frames, demo: true };
-      setChatMsgs((prev) => [...prev, reply]);
-      setChatStatus("idle");
-    }, 650);
-  };
 
+    const frames = userMsg.frames;
+    try {
+      const result = await askCopilot(text, frames, {
+        sessionId: chatSessionRef.current,
+        topk: activeTab?.params?.topk ?? 100,
+      });
+      const reply = {
+        id: `c${++chatSeq}`,
+        role: "assistant",
+        text: result.text,
+        frames,
+        demo: result.demo,
+        mode: result.mode,
+        data: result.data,
+      };
+      setChatMsgs((prev) => [...prev, reply]);
+    } catch (error) {
+      const errorText = error instanceof Error ? error.message : "Copilot failed";
+      setChatMsgs((prev) => [
+        ...prev,
+        { id: `c${++chatSeq}`, role: "assistant", text: errorText, frames, demo: false, error: true, mode: "ERROR" },
+      ]);
+      toast.error(errorText);
+    } finally {
+      setChatStatus("idle");
+    }
+  };
   const useTranslatedInSearch = (text) => {
     if (!text.trim()) return;
     patchTab({ query: text.trim() });
@@ -396,7 +431,16 @@ export default function Workstation({ view, onSwitchView }) {
 
   const openExportFromReview = (item) => {
     rememberFocusTarget();
-    setExportItems([item]);
+    const tab = tabs.find((t) => t.key === reviewTabKey) || tabs.find((t) => t.key === activeKey);
+    const queryIndex = Math.max(1, tabs.findIndex((t) => t.key === tab?.key) + 1);
+    setExportItems([{
+      ...item,
+      __submission: {
+        key: tab?.key || activeKey,
+        queryIndex,
+        queryType: queryTypeFromSearchType(tab?.searchType),
+      },
+    }]);
     setExportOpen(true);
   };
 
@@ -480,7 +524,7 @@ export default function Workstation({ view, onSwitchView }) {
       at: new Date().toLocaleTimeString("en-GB", { hour12: false }),
     });
     if (result.backend === "online") toast.success("FastAPI is online");
-    else toast.warning(`${result.note} — demo search remains available`);
+    else toast.warning(`${result.note} â€” demo search remains available`);
   }, [toast]);
 
   useEffect(() => {
@@ -582,6 +626,7 @@ export default function Workstation({ view, onSwitchView }) {
         onRemove={removeKept}
         onClear={() => setKept(new Map())}
         onExport={openExport}
+        onOpenBatch={() => setBatchOpen(true)}
         onOpen={openReview}
         trayRef={trayRef}
       />
@@ -612,7 +657,20 @@ export default function Workstation({ view, onSwitchView }) {
         />
       ) : null}
 
-      <ExportModal open={exportOpen} items={exportItems} onClose={closeExport} toast={toast} />
+      <ExportModal
+        open={exportOpen}
+        items={exportItems}
+        activeTabResults={activeTab?.results || []}
+        tabs={tabs}
+        activeKey={activeKey}
+        onClose={closeExport}
+        toast={toast}
+      />
+      <BatchQueryModal
+        open={batchOpen}
+        onClose={() => setBatchOpen(false)}
+        toast={toast}
+      />
       <ShortcutOverlay open={showShortcuts} powerUser={powerUser} onTogglePowerUser={togglePowerUser} onClose={toggleHelp} />
       <ChatFocus messages={chatMsgs} onClose={closeChatFocus} />
 
@@ -620,9 +678,9 @@ export default function Workstation({ view, onSwitchView }) {
         <span className="ws-ribbon-label">Keyboard</span>
         <span className="ws-key"><Keycap>?</Keycap> help</span>
         <span className="ws-key"><Keycap>Tab</Keycap> move</span>
-        <span className="ws-key"><Keycap>↑↓←→</Keycap> grid</span>
-        <span className="ws-key"><Keycap>↵</Keycap> open</span>
-        <span className="ws-key"><Keycap>␣</Keycap> keep</span>
+        <span className="ws-key"><Keycap>â†‘â†“â†â†’</Keycap> grid</span>
+        <span className="ws-key"><Keycap>â†µ</Keycap> open</span>
+        <span className="ws-key"><Keycap>â£</Keycap> keep</span>
         <span className="ws-key"><Keycap>Del</Keycap> remove</span>
         <span className="ws-key"><Keycap>Esc</Keycap> leave / close</span>
         <span className={`ws-key ${powerUser ? "on" : "off"}`}>

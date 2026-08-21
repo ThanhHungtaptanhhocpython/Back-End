@@ -11,30 +11,44 @@ try:
 except Exception:
     GoogleTranslator = None
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 class Translation():
     def __init__(self, from_lang='vi', to_lang='en'):
-        # The class Translation is a wrapper for deep-translator
         self.__to_lang = to_lang
         self.__from_lang = from_lang
+        self.translator = None
+        self._init_translator()
+
+    def _init_translator(self):
         try:
             if GoogleTranslator:
                 self.translator = GoogleTranslator(source=self.__from_lang, target=self.__to_lang)
             else:
                 self.translator = None
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to initialize GoogleTranslator: {e}")
             self.translator = None
 
     def preprocessing(self, text):
-        return text.lower()
+        return text.strip() if text else ""
 
     def __call__(self, text):
-        text = self.preprocessing(text)
+        cleaned = self.preprocessing(text)
+        if not cleaned:
+            return ""
         if self.translator is None:
-            return text
+            self._init_translator()
+        if self.translator is None:
+            return cleaned
         try:
-            return self.translator.translate(text)
-        except Exception:
-            return text
+            res = self.translator.translate(cleaned)
+            return res if res else cleaned
+        except Exception as e:
+            logger.warning(f"Translation call failed: {e}")
+            return cleaned
 
 class QueryPlanner:
     """Parses natural language queries to route them to appropriate modalities."""

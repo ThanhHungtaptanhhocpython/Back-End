@@ -16,7 +16,6 @@ from __future__ import annotations
 import os
 import shutil
 import sys
-import tempfile
 import unittest
 from unittest.mock import MagicMock
 
@@ -38,6 +37,12 @@ if BACKEND_ROOT not in sys.path:
 for _mod in ("open_clip", "elasticsearch", "elasticsearch.helpers"):
     sys.modules.setdefault(_mod, MagicMock())
 
+sys.modules.setdefault("torchscale", MagicMock())
+sys.modules.setdefault("torchscale.architecture", MagicMock())
+sys.modules.setdefault("torchscale.architecture.config", MagicMock(EncoderConfig=MagicMock()))
+sys.modules.setdefault("torchscale.model", MagicMock())
+sys.modules.setdefault("torchscale.model.BEiT3", MagicMock(BEiT3=MagicMock()))
+
 import faiss
 import sentencepiece as spm
 import torch
@@ -57,7 +62,7 @@ from src.services.beit3_retriever import (
 def _bare_retriever(settings: Settings | None = None) -> BEiT3Retriever:
     """Build a BEiT3Retriever instance without running __init__."""
     obj = BEiT3Retriever.__new__(BEiT3Retriever)
-    obj._settings = settings or Settings()
+    obj._settings = settings or Settings(debug=False)
     obj._device = torch.device("cpu")
     return obj
 
@@ -67,7 +72,9 @@ class TokenizerOffsetMappingTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.tmp_dir = tempfile.mkdtemp(prefix="beit3_spm_test_")
+        cls.tmp_dir = os.path.join(BACKEND_ROOT, ".pytest_spm_test")
+        shutil.rmtree(cls.tmp_dir, ignore_errors=True)
+        os.makedirs(cls.tmp_dir, exist_ok=True)
         corpus_path = os.path.join(cls.tmp_dir, "corpus.txt")
         with open(corpus_path, "w", encoding="utf-8") as f:
             f.write("a person riding a motorcycle on a street\n")
@@ -140,7 +147,7 @@ class ColumnDetectionTests(unittest.TestCase):
 
     def test_detect_columns_respects_explicit_override(self):
         df = pd.DataFrame({"my_custom_id": [1], "video_id": ["v"]})
-        settings = Settings(beit3_col_vector_id="my_custom_id")
+        settings = Settings(debug=False, beit3_col_vector_id="my_custom_id")
         r = _bare_retriever(settings=settings)
         cols = r._detect_columns(df)
         self.assertEqual(cols["vector_id"], "my_custom_id")
@@ -176,6 +183,7 @@ class SearchVisualIntegrationTests(unittest.TestCase):
             {
                 "global_id": ids,
                 "video_id": ["L21_V001"] * 5,
+                "frame_id": ["000010", "000020", "003048", "000040", "000050"],
                 "frame_path": [f"frame_{i}.webp" for i in ids],
                 "timestamp": [float(i) for i in ids],
             }
@@ -200,6 +208,9 @@ class SearchVisualIntegrationTests(unittest.TestCase):
         self.assertEqual(top["vector_id"], 30)
         self.assertAlmostEqual(top["score"], 1.0, places=4)  # exact match -> IP == 1.0
         self.assertEqual(top["video_id"], "L21_V001")
+        self.assertEqual(top["frame_id"], "003048")
+        self.assertEqual(top["global_frame_id"], 3048)
+        self.assertEqual(top["frame_idx"], 3048)
         self.assertEqual(top["frame_path"], "frame_30.webp")
         self.assertEqual(top["timestamp"], 30.0)
 

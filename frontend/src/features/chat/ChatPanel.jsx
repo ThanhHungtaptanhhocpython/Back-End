@@ -28,7 +28,7 @@ function QaTab({ messages, status, input, setInput, onSend, ctxFrame, onClearCtx
         <div className="ws-qa-empty">
           <MessageOutlined style={{ fontSize: 26, color: "#94a3b8" }} />
           <div>Ask about a frame or the index.</div>
-          <div className="ws-qa-empty-sub">Use “Ask” inside a frame review, or type here. Answers are DEMO until the backend is connected.</div>
+          <div className="ws-qa-empty-sub">Use Ask inside a frame review, or type here. Answers use the backend agent when connected.</div>
         </div>
       ) : (
         <div className="ws-qa-list" ref={listRef}>
@@ -39,13 +39,13 @@ function QaTab({ messages, status, input, setInput, onSend, ctxFrame, onClearCtx
                   <VideoCameraOutlined /> grounded on {m.frames.map((f) => f.frameName).join(", ")}
                 </div>
               ) : null}
-              {m.role === "assistant" ? <span className="ws-demo-badge">DEMO</span> : null}
+              {m.role === "assistant" ? <span className="ws-demo-badge">{m.error ? "ERROR" : m.demo ? "DEMO" : "AGENT"}</span> : null}
               <div className="ws-msg-text">{m.text}</div>
             </div>
           ))}
           {status === "thinking" ? (
             <div className="ws-msg assistant">
-              <span className="ws-demo-badge">DEMO</span>
+              <span className="ws-demo-badge">AGENT</span>
               <div className="ws-typing"><i /><i /><i /></div>
             </div>
           ) : null}
@@ -68,7 +68,7 @@ function QaTab({ messages, status, input, setInput, onSend, ctxFrame, onClearCtx
           ref={composerRef}
           className="ws-qa-input"
           rows={2}
-          placeholder="Ask about a frame or the video index…"
+          placeholder="Ask about a frame or the video index..."
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -79,7 +79,7 @@ function QaTab({ messages, status, input, setInput, onSend, ctxFrame, onClearCtx
           }}
         />
         <div className="ws-qa-bar">
-          <span className="ws-qa-hint">Enter to send · Shift+Enter for newline</span>
+          <span className="ws-qa-hint">Enter to send - Shift+Enter for newline</span>
           <button className="ws-btn small primary" onClick={onSend} disabled={!input.trim() || status === "thinking"}>
             <SendOutlined /> Send
           </button>
@@ -91,13 +91,38 @@ function QaTab({ messages, status, input, setInput, onSend, ctxFrame, onClearCtx
 
 /* ---------- translation tab ---------- */
 function TranslationPanel({ onUseInSearch, onUseInChat }) {
-  const [dir, setDir] = useState("en-vi");
+  const [dir, setDir] = useState("vi-en");
   const [src, setSrc] = useState("");
+  const [out, setOut] = useState("");
+  const [translating, setTranslating] = useState(false);
   const [override, setOverride] = useState(null);
   const [editing, setEditing] = useState(false);
   const [editBuf, setEditBuf] = useState("");
+  const [copied, setCopied] = useState(false);
 
-  const out = override !== null ? override : translateText(src, dir);
+  useEffect(() => {
+    if (!src.trim()) {
+      setOut("");
+      setTranslating(false);
+      return;
+    }
+
+    setTranslating(true);
+    const timeout = setTimeout(async () => {
+      try {
+        const res = await translateText(src, dir);
+        setOut(res);
+      } catch (err) {
+        console.error("Translation error:", err);
+      } finally {
+        setTranslating(false);
+      }
+    }, 350);
+
+    return () => clearTimeout(timeout);
+  }, [src, dir]);
+
+  const displayedOut = override !== null ? override : out;
   const showOut = src.trim() !== "";
 
   const setDirection = (d) => {
@@ -109,19 +134,21 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
   const copy = async (text) => {
     try {
       await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     } catch {
-      // clipboard unavailable — no-op
+      // clipboard unavailable - no-op
     }
   };
 
   return (
     <div className="ws-tr">
       <div className="ws-tr-dir">
-        <button className={dir === "en-vi" ? "active" : ""} onClick={() => setDirection("en-vi")} title="Translate from English to Vietnamese">
-          English → Tiếng Việt
-        </button>
         <button className={dir === "vi-en" ? "active" : ""} onClick={() => setDirection("vi-en")} title="Translate from Vietnamese to English">
-          Tiếng Việt → English
+          Vietnamese to English
+        </button>
+        <button className={dir === "en-vi" ? "active" : ""} onClick={() => setDirection("en-vi")} title="Translate from English to Vietnamese">
+          English to Vietnamese
         </button>
       </div>
 
@@ -129,7 +156,7 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
       <textarea
         id="ws-tr-src"
         className="ws-tr-src"
-        placeholder={dir === "en-vi" ? "Type English text…" : "Nhập tiếng Việt…"}
+        placeholder={dir === "vi-en" ? "Nhap cau tieng Viet..." : "Type English text..."}
         value={src}
         onChange={(e) => {
           setSrc(e.target.value);
@@ -141,13 +168,17 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
       {showOut ? (
         <div className="ws-tr-out">
           <div className="ws-tr-orig">
-            <div className="ws-tr-head"><span>Original · {dir === "en-vi" ? "English" : "Tiếng Việt"}</span></div>
+            <div className="ws-tr-head"><span>Original - {dir === "vi-en" ? "Vietnamese" : "English"}</span></div>
             <div className="ws-tr-box">{src}</div>
           </div>
           <div className="ws-tr-trans">
             <div className="ws-tr-head">
-              <span>Translated · {dir === "en-vi" ? "Tiếng Việt" : "English"}</span>
-              <span className="ws-demo-badge">DEMO</span>
+              <span>Translated - {dir === "vi-en" ? "English" : "Vietnamese"}</span>
+              {translating ? (
+                <span style={{ color: "#38bdf8", fontSize: "11px", fontWeight: "bold" }}>Translating...</span>
+              ) : (
+                <span className="ws-demo-badge" style={{ background: "#059669", color: "#fff" }}>LIVE</span>
+              )}
             </div>
             {editing ? (
               <textarea
@@ -157,7 +188,7 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
                 onChange={(e) => setEditBuf(e.target.value)}
               />
             ) : (
-              <div className="ws-tr-box">{out}</div>
+              <div className="ws-tr-box">{translating && !displayedOut ? "Translating..." : displayedOut}</div>
             )}
           </div>
 
@@ -167,24 +198,24 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
                 Save edit
               </button>
             ) : (
-              <button className="ws-btn small" onClick={() => { setEditBuf(out); setEditing(true); }} title="Edit the translated text">
+              <button className="ws-btn small" onClick={() => { setEditBuf(displayedOut); setEditing(true); }} title="Edit the translated text">
                 <EditOutlined /> Edit translation
               </button>
             )}
-            <button className="ws-btn small" onClick={() => copy(editing ? editBuf : out)} title="Copy translated text">
-              <CopyOutlined /> Copy
+            <button className="ws-btn small" onClick={() => copy(editing ? editBuf : displayedOut)} title="Copy translated text">
+              <CopyOutlined /> {copied ? "Copied!" : "Copy"}
             </button>
-            <button className="ws-btn small" onClick={() => onUseInSearch(editing ? editBuf : out)} title="Use translated text as search query">
+            <button className="ws-btn small primary" onClick={() => onUseInSearch(editing ? editBuf : displayedOut)} title="Use translated text as search query">
               <SearchOutlined /> Use as query
             </button>
-            <button className="ws-btn small" onClick={() => onUseInChat(editing ? editBuf : out)} title="Send translated text to the copilot">
+            <button className="ws-btn small" onClick={() => onUseInChat(editing ? editBuf : displayedOut)} title="Send translated text to the copilot">
               <MessageOutlined /> Use as prompt
             </button>
           </div>
-          <p className="ws-tr-note">Deterministic DEMO only — swap translateText() with a real provider/backend later. Original text is always preserved.</p>
+          <p className="ws-tr-note">Live translation powered by Backend Translation Service. Click <b>Use as query</b> to run search immediately.</p>
         </div>
       ) : (
-        <div className="ws-tr-empty">Enter text above to see a clearly-labelled DEMO translation. The original text is never silently replaced.</div>
+        <div className="ws-tr-empty">Nhap van ban vao o phia tren de dich tu dong. Nhan <b>Use as query</b> de tim kiem ngay lap tuc.</div>
       )}
     </div>
   );
@@ -232,7 +263,7 @@ export default function ChatPanel({
       ) : (
         <TranslationPanel onUseInSearch={onUseInSearch} onUseInChat={onUseInChat} />
       )}
-      <div className="ws-chat-foot">DEMO copilot · mock answers, no backend</div>
+      <div className="ws-chat-foot">Agent copilot - backend when connected</div>
     </div>
   );
 }
@@ -261,7 +292,7 @@ export function ChatFocus({ messages, onClose }) {
                   <VideoCameraOutlined /> grounded on {m.frames.map((f) => f.frameName).join(", ")}
                 </div>
               ) : null}
-              {m.role === "assistant" ? <span className="ws-demo-badge">DEMO</span> : null}
+              {m.role === "assistant" ? <span className="ws-demo-badge">{m.error ? "ERROR" : m.demo ? "DEMO" : "AGENT"}</span> : null}
               <div className="ws-msg-text">{m.text}</div>
             </div>
           ))}
@@ -270,3 +301,4 @@ export function ChatFocus({ messages, onClose }) {
     </div>
   );
 }
+

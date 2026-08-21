@@ -76,9 +76,9 @@ export default function SearchBar({ tab, onPatch, onRun, searchRef, toast }) {
             className="ws-num"
             type="number"
             min={1}
-            max={80}
+            max={200}
             value={tab.params.topk}
-            onChange={(e) => onPatch({ params: { ...tab.params, topk: Number(e.target.value) } })}
+            onChange={(e) => onPatch({ params: { ...tab.params, topk: Math.max(1, Math.min(200, Number(e.target.value) || 100)) } })}
           />
         </div>
         <div className="ws-param">

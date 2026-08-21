@@ -1,6 +1,6 @@
-import { CloseOutlined, ExportOutlined } from "@ant-design/icons";
+import { CloseOutlined, ExportOutlined, ThunderboltOutlined } from "@ant-design/icons";
 
-export default function SelectionTray({ keptItems, onRemove, onClear, onExport, onOpen, trayRef }) {
+export default function SelectionTray({ keptItems, onRemove, onClear, onExport, onOpenBatch, onOpen, trayRef }) {
   return (
     <aside className="ws-tray" ref={trayRef}>
       <div className="ws-tray-head">
@@ -14,6 +14,9 @@ export default function SelectionTray({ keptItems, onRemove, onClear, onExport, 
         <div className="ws-tray-btns">
           <button className="ws-btn small" onClick={onClear} disabled={keptItems.length === 0}>
             Clear
+          </button>
+          <button className="ws-btn small" style={{ color: "#58a6ff", borderColor: "#388bfd66" }} onClick={onOpenBatch} title="Paste all queries & export 1 ZIP">
+            <ThunderboltOutlined /> Batch Submit
           </button>
           <button className="ws-btn small export" onClick={onExport} disabled={keptItems.length === 0}>
             <ExportOutlined /> Export Submission

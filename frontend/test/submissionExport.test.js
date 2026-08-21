@@ -41,6 +41,13 @@ test("QA export quotes answer cells", () => {
 
   assert.equal(csv, 'L21_V001,660,"a ""quoted"", answer"');
 });
+test("QA export uses fallback answer when result answer is empty", () => {
+  const csv = buildSubmissionCsv([
+    { videoKey: "L26_V006", submissionFrameId: "000599", answer: "" },
+  ], "qa", "5");
+
+  assert.equal(csv, "L26_V006,599,5");
+});
 
 test("sanitizeQueryFileName keeps csv extension and strips unsafe path characters", () => {
   assert.equal(sanitizeQueryFileName('query-p1-17-kis?.csv', 'kis'), 'query-p1-17-kis_.csv');

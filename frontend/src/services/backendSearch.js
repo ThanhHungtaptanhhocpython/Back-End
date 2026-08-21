@@ -79,8 +79,33 @@ function healthUrl(baseUrl) {
   return `${baseUrl.replace(/\/users$/i, "").replace(/\/+$/, "")}/health`;
 }
 
+function rootUrl(baseUrl) {
+  return baseUrl.replace(/\/users$/i, "").replace(/\/+$/, "");
+}
+
 function chatUrl(baseUrl) {
-  return `${baseUrl.replace(/\/users$/i, "").replace(/\/+$/, "")}/chat/conversational_kis`;
+  return `${rootUrl(baseUrl)}/chat/conversational_kis`;
+}
+
+function looksLikeImagePath(value) {
+  return typeof value === "string" && /\.(jpe?g|png|webp)$/i.test(value.trim());
+}
+
+function keyframeUrl(baseUrl, framePath) {
+  const cleaned = String(framePath || "").replace(/^\/+/, "");
+  if (!cleaned) return "";
+  const prefix = baseUrl ? rootUrl(baseUrl) : "";
+  return `${prefix}/keyframes/${cleaned}`;
+}
+
+function inferFramePath(raw, videoKey, frameName) {
+  const path = firstDefined(raw.frame_path, raw.framePath, raw.keyframe_path, raw.image_path);
+  if (path) return path;
+  if (!looksLikeImagePath(frameName)) return "";
+  const split = firstDefined(raw.split, raw.folder_key, raw.folderKey, raw.namespace);
+  if (split && videoKey && videoKey !== "unknown-video") return `${split}/${videoKey}/${frameName}`;
+  if (videoKey && videoKey !== "unknown-video") return `${videoKey}/${frameName}`;
+  return frameName;
 }
 
 function requestFor(tab, pivot) {
@@ -149,14 +174,13 @@ export function normalizeBackendItem(item, rank, total, baseUrl = "") {
   const scoreValue = firstDefined(raw.final_score, raw.normalized_score, raw.score, raw._score);
   const frameName = String(firstDefined(raw.frame_name, raw.frameName, `${videoKey}_${frameKey}`));
 
-  const framePath = firstDefined(raw.frame_path, raw.framePath);
+  const framePath = inferFramePath(raw, videoKey, frameName);
   let resolvedImage = firstDefined(raw.image, raw.thumbnail, raw.image_url);
+  if (resolvedImage && looksLikeImagePath(resolvedImage) && !/^(data:|blob:|https?:\/\/|\/)/i.test(resolvedImage)) {
+    resolvedImage = keyframeUrl(baseUrl, resolvedImage.includes("/") ? resolvedImage : framePath || resolvedImage);
+  }
   if (!resolvedImage && framePath) {
-    if (baseUrl) {
-      resolvedImage = `${baseUrl.replace(/\/+$/, "")}/keyframes/${framePath.replace(/^\/+/, "")}`;
-    } else {
-      resolvedImage = `/keyframes/${framePath.replace(/^\/+/, "")}`;
-    }
+    resolvedImage = keyframeUrl(baseUrl, framePath);
   }
 
   // Keyframe ID must be uniquely tied to the actual video keyframe across all searches (NOT position-dependent rank)

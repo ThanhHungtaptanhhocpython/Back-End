@@ -110,14 +110,14 @@ export default function Workstation({ view, onSwitchView }) {
         note: res.source === "live" ? "FASTAPI" : res.source === "fallback" ? "FASTAPI UNAVAILABLE" : "LOCAL MOCK",
         at: new Date().toLocaleTimeString("en-GB", { hour12: false }),
       });
-      toast.success(`${res.type} Â· ${res.totalItems} frames Â· ${res.mode} Â· ${res.latency}ms`);
+      toast.success(`${res.type} Ãƒâ€šÃ‚Â· ${res.totalItems} frames Ãƒâ€šÃ‚Â· ${res.mode} Ãƒâ€šÃ‚Â· ${res.latency}ms`);
     } catch (error) {
       setTabs((prev) => prev.map((t) => (t.key === tab.key ? { ...t, status: "err" } : t)));
       toast.error(error instanceof Error ? error.message : "Search failed");
     }
   };
 
-  /* debounced auto-run on query/type/param changes (IMAGE is explicit â€” requires a seed) */
+  /* debounced auto-run on query/type/param changes (IMAGE is explicit ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â requires a seed) */
   useEffect(() => {
     if (!activeTab || editingKey || activeTab.searchType === "IMAGE") return;
     const id = setTimeout(() => {
@@ -185,7 +185,7 @@ export default function Workstation({ view, onSwitchView }) {
             queryType: queryTypeFromSearchType(tab?.searchType),
           },
         });
-        toast.success("Kept in tray â€” Space again to release");
+        toast.success("Kept in tray ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Space again to release");
       }
       return n;
     });
@@ -524,7 +524,7 @@ export default function Workstation({ view, onSwitchView }) {
       at: new Date().toLocaleTimeString("en-GB", { hour12: false }),
     });
     if (result.backend === "online") toast.success("FastAPI is online");
-    else toast.warning(`${result.note} â€” demo search remains available`);
+    else toast.warning(`${result.note} ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â demo search remains available`);
   }, [toast]);
 
   useEffect(() => {
@@ -661,6 +661,7 @@ export default function Workstation({ view, onSwitchView }) {
         open={exportOpen}
         items={exportItems}
         activeTabResults={activeTab?.results || []}
+        activeSearchType={activeTab?.searchType}
         tabs={tabs}
         activeKey={activeKey}
         onClose={closeExport}
@@ -672,15 +673,15 @@ export default function Workstation({ view, onSwitchView }) {
         toast={toast}
       />
       <ShortcutOverlay open={showShortcuts} powerUser={powerUser} onTogglePowerUser={togglePowerUser} onClose={toggleHelp} />
-      <ChatFocus messages={chatMsgs} onClose={closeChatFocus} />
+      {chatFocus ? <ChatFocus messages={chatMsgs} onClose={closeChatFocus} /> : null}
 
       <div className="ws-ribbon">
         <span className="ws-ribbon-label">Keyboard</span>
         <span className="ws-key"><Keycap>?</Keycap> help</span>
         <span className="ws-key"><Keycap>Tab</Keycap> move</span>
-        <span className="ws-key"><Keycap>â†‘â†“â†â†’</Keycap> grid</span>
-        <span className="ws-key"><Keycap>â†µ</Keycap> open</span>
-        <span className="ws-key"><Keycap>â£</Keycap> keep</span>
+        <span className="ws-key"><Keycap>Arrows</Keycap> grid</span>
+        <span className="ws-key"><Keycap>Enter</Keycap> open</span>
+        <span className="ws-key"><Keycap>Space</Keycap> keep</span>
         <span className="ws-key"><Keycap>Del</Keycap> remove</span>
         <span className="ws-key"><Keycap>Esc</Keycap> leave / close</span>
         <span className={`ws-key ${powerUser ? "on" : "off"}`}>

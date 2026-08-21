@@ -86,15 +86,15 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
         <div className="ws-review-title">
           Frame Review
           <span className="ws-review-ctx">
-            {item.videoKey} Ã‚Â· {item.camera}
+            {item.videoKey} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· {item.camera}
           </span>
         </div>
-        <span className="ws-review-pos">{curIdx >= 0 ? `${curIdx + 1} / ${seq.length}` : "Ã¢â‚¬â€"}</span>
+        <span className="ws-review-pos">{curIdx >= 0 ? `${curIdx + 1} / ${seq.length}` : "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â"}</span>
         <div className="ws-review-head-actions">
-          <button className="ws-btn small" onClick={() => handleStep(-1)} title="Previous (Ã¢â€ Â)" disabled={atStart}>
+          <button className="ws-btn small" onClick={() => handleStep(-1)} title="Previous (ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Ãƒâ€šÃ‚Â)" disabled={atStart}>
             <ArrowLeftOutlined /> Prev
           </button>
-          <button className="ws-btn small" onClick={() => handleStep(1)} title="Next (Ã¢â€ â€™)" disabled={atEnd}>
+          <button className="ws-btn small" onClick={() => handleStep(1)} title="Next (ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢)" disabled={atEnd}>
             <ArrowRightOutlined /> Next
           </button>
           <button className={`ws-btn small ${isKept ? "" : "primary"}`} onClick={() => onToggleKeep(item)} title="Keep / unkeep (Space)">
@@ -118,21 +118,21 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
             {compareItem ? (
               <div className="ws-review-cmp">
                 <div className="ws-review-cmp-item">
-                  <span className="ws-review-cmp-label">CURRENT Ã‚Â· {item.frameName}</span>
+                  <span className="ws-review-cmp-label">CURRENT ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· {item.frameName}</span>
                   <img src={item.image} alt={item.frameName} />
                 </div>
                 <div className="ws-review-cmp-item">
-                  <span className="ws-review-cmp-label">COMPARE Ã‚Â· {compareItem.frameName}</span>
+                  <span className="ws-review-cmp-label">COMPARE ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· {compareItem.frameName}</span>
                   <img src={compareItem.image} alt={compareItem.frameName} />
                 </div>
               </div>
             ) : (
               <img className="ws-review-img" src={item.image} alt={item.frameName} />
             )}
-            <button className="ws-review-nav prev" onClick={() => handleStep(-1)} title="Previous frame (Ã¢â€ Â)" disabled={atStart}>
+            <button className="ws-review-nav prev" onClick={() => handleStep(-1)} title="Previous frame (ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Ãƒâ€šÃ‚Â)" disabled={atStart}>
               <ArrowLeftOutlined />
             </button>
-            <button className="ws-review-nav next" onClick={() => handleStep(1)} title="Next frame (Ã¢â€ â€™)" disabled={atEnd}>
+            <button className="ws-review-nav next" onClick={() => handleStep(1)} title="Next frame (ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢)" disabled={atEnd}>
               <ArrowRightOutlined />
             </button>
           </div>
@@ -142,7 +142,7 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
               <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                 <span className="ws-filmstrip-tag">
                   {stripMode === "timeline"
-                    ? `Video timeline Ã‚Â· ${item.videoKey} (${timeline.length} keyframes)`
+                    ? `Video timeline ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${item.videoKey} (${timeline.length} keyframes)`
                     : `Search query results (${results?.length || 0} frames)`}
                 </span>
                 {timeline.length > 0 ? (
@@ -189,9 +189,9 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
             <div className="ws-review-row"><dt className="k">Video</dt><dd className="v cyan">{item.videoKey}</dd></div>
             <div className="ws-review-row"><dt className="k">Frame ID</dt><dd className="v">{item.id}</dd></div>
             <div className="ws-review-row"><dt className="k">Global ID</dt><dd className="v">#{item.globalFrameId}</dd></div>
-            <div className="ws-review-row"><dt className="k">Timestamp</dt><dd className="v amber">{item.timecode} Ã‚Â· {fmtDur(item.timestamp)}</dd></div>
-            <div className="ws-review-row"><dt className="k">Rank</dt><dd className="v">{item.rank != null ? item.rank : "Ã¢â‚¬â€"}</dd></div>
-            <div className="ws-review-row"><dt className="k">Score</dt><dd className="v">{item.score != null ? `${Math.round(item.score * 100)}%` : "Ã¢â‚¬â€"}</dd></div>
+            <div className="ws-review-row"><dt className="k">Timestamp</dt><dd className="v amber">{item.timecode} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· {fmtDur(item.timestamp)}</dd></div>
+            <div className="ws-review-row"><dt className="k">Rank</dt><dd className="v">{item.rank != null ? item.rank : "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â"}</dd></div>
+            <div className="ws-review-row"><dt className="k">Score</dt><dd className="v">{item.score != null ? `${Math.round(item.score * 100)}%` : "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â"}</dd></div>
             <div className="ws-review-row"><dt className="k">Camera</dt><dd className="v">{item.camera}</dd></div>
             <div className="ws-review-row"><dt className="k">Source</dt><dd className="v">{item.real ? "broadcast feed" : `${item.folderKey} / ${item.videoKey}`}</dd></div>
           </dl>
@@ -200,10 +200,10 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
           <div className="ws-review-cmp-field">
             <label className="ws-param-label">Compare with another result</label>
             <select value={compareId || ""} onChange={(e) => setCompareId(e.target.value || null)}>
-              <option value="">Ã¢â‚¬â€ select a frame Ã¢â‚¬â€</option>
+              <option value="">ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â select a frame ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â</option>
               {(results || []).filter((r) => r.id !== item.id).map((r) => (
                 <option key={r.id} value={r.id}>
-                  #{String(r.rank ?? "Ã¢â‚¬â€")} Ã‚Â· {r.frameName} Ã‚Â· {r.timecode}
+                  #{String(r.rank ?? "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â")} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· {r.frameName} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· {r.timecode}
                 </option>
               ))}
             </select>

@@ -1,12 +1,16 @@
 import logging
 import os
+from pathlib import Path
 from typing import Any, Dict
 
+from dotenv import load_dotenv
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from src.agent.memory_manager import memory_manager
 from src.agent.tools import agent_tools
+
+load_dotenv(dotenv_path=Path(__file__).resolve().parents[2] / ".env", override=True)
 
 logger = logging.getLogger(__name__)
 _agent_executor = None
@@ -30,6 +34,16 @@ Reasoning workflow:
 """
 
 
+
+
+def _safe_error_message(exc: Exception) -> str:
+    message = str(exc)
+    if "integrate.api.nvidia.com" in message or "Nvcf-Reqid" in message:
+        return (
+            "NVIDIA provider returned 404. Backend is still using NVIDIA; "
+            "set LLM_PROVIDER=anthropic in Back-End/.env and restart uvicorn."
+        )
+    return message
 def _provider_name() -> str:
     return os.getenv("LLM_PROVIDER", "auto").strip().lower()
 
@@ -44,6 +58,8 @@ def get_llm():
 
     if provider not in {"auto", "openai", "anthropic", "claude", "nvidia", "nim", "nv", "google", "gemini"}:
         raise ValueError("LLM_PROVIDER must be one of: auto, openai, anthropic, claude, nvidia, nim, nv, google, gemini.")
+
+    logger.info("Initializing LLM provider: %s", provider)
 
     if provider in {"auto", "openai"} and openai_key:
         from langchain_openai import ChatOpenAI
@@ -98,6 +114,7 @@ def get_llm():
         "or LLM_PROVIDER=google with GOOGLE_API_KEY."
     )
 
+
 def get_agent_executor():
     """Create the tool-calling agent lazily so FastAPI can start before keys are configured."""
     global _agent_executor
@@ -135,9 +152,10 @@ def execute_chat_turn(session_id: str, user_message: str) -> Dict[str, Any]:
             "data": None,
         }
     except Exception as exc:
-        logger.error("Error in LLM Planner execution: %s", str(exc))
+        safe_message = _safe_error_message(exc)
+        logger.error("Error in LLM Planner execution: %s", safe_message)
         memory_manager.add_user_message(session_id, user_message)
-        error_msg = f"Loi tac nhan: {str(exc)}. (Vui long kiem tra API key/provider trong bien moi truong)"
+        error_msg = f"Loi tac nhan: {safe_message}. (Vui long kiem tra API key/provider trong bien moi truong)"
         memory_manager.add_ai_message(session_id, error_msg)
         return {
             "success": False,

@@ -118,53 +118,23 @@ def getImageDataSingleTextSearch(query, k):
 
 
 def getImageDataQAndASearch(query, k):
-    text_query = query.strip()
-    _, _, infos_query, image_paths = get_cosine_faiss().text_search(text_query, k)
-    list_paths = []
-    list_full_paths = []
-    for info, image_path in zip(infos_query, image_paths):
-        if not info:
-            continue
-        # Extract metadata
-        frame_name = info['global_frame_id']
-        video_id = info['video_id']
-        # timestamp = info['pts']
-        folder_key = info['split'].split('-')[1].upper()
-        full_image_path = os.path.join(SRC_DIR, 'data', 'Keyframes', image_path)
-        try:
-            with open(full_image_path, "rb") as image_file:
-                encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
-        except Exception as e:
-            logging.error(f"Failed to load image {full_image_path}: {e}")
-            continue
-        list_full_paths.append(full_image_path)
-        id = 0
-        list_paths.append({
-            'id': id,
-            'folder_key': folder_key,
-            'video_key': video_id,
-            'frame_key': frame_name,
-            # 'timestamp': timestamp,
-            'image': encoded_string
-        })
-        id += 1
-    answers = get_vlm_processor().batch_answer(list_full_paths, text_query, batch_size=4)
-   
-    
-    result = []
-    for path, ans in zip(list_paths, answers):   
-        result.append({
-            'id': path['id'],
-            'folder_key': path['folder_key'],
-            'video_key': path['video_key'],
-            'frame_key': path['frame_key'],
-            'image': path['image'],
-            'answer': ans,
-            # thêm 'link': với link là đường dẫn đầy đủ tới video youtube
-        })
-        id += 1
+    """Retrieve candidate frames for Q&A prompts with the production BEiT3 index.
 
-    return result
+    The old Q&A path queried a legacy OpenCLIP FAISS index and then tried to
+    load images from `src/data/Keyframes`. The current corpus is served through
+    BEiT3 metadata/keyframe paths, so that legacy path could return zero frames
+    even when the visual text search finds good candidates.
+    """
+    from src.services.beit3_retriever import get_beit3_retriever
+
+    text_query = query.strip()
+    if not text_query:
+        return []
+
+    results = get_beit3_retriever().search_visual(text_query, top_k=k)
+    for item in results:
+        item.setdefault('answer', '')
+    return results
 
 def getImageSearchById(image_id, k):
     """Search similar keyframes using BEiT-3 vector ID."""

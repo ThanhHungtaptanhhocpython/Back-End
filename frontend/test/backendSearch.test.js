@@ -126,3 +126,26 @@ test("routes copilot turns to FastAPI's conversational agent endpoint", async ()
   assert.deepEqual(JSON.parse(call.init.body), { session_id: "s1", message: "find the red bus", topk: 12 });
   assert.deepEqual(result, { sessionId: "s1", response: "ok", data: null, mode: "AGENT LIVE", source: "live" });
 });
+test("normalizes OCR results into keyframe image URLs", () => {
+  const payload = {
+    success: true,
+    data: {
+      total_items: 1,
+      items: [
+        {
+          faiss_id: 181,
+          video_id: "L25_V041",
+          frame_name: "181.jpg",
+          split: "L25",
+          global_frame_id: 181,
+          timestamp: 682.18,
+          ocr_text: "remember",
+        },
+      ],
+    },
+  };
+
+  const result = normalizeBackendResponse(payload, { type: "OCR+OD", latency: 66 }, "http://localhost:3000/users");
+  assert.equal(result.items[0].image, "http://localhost:3000/keyframes/L25/L25_V041/181.jpg");
+  assert.equal(result.items[0].ocrText, "remember");
+});

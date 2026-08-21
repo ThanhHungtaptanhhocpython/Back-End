@@ -69,7 +69,7 @@ export function buildSubmissionCsv(items, queryType, answer = "") {
       .map((item) => [
         videoNameForItem(item),
         normalizeFrameId(item),
-        csvCell(String(item.answer ?? answer).slice(0, 100)),
+        csvCell(String(firstDefined(item?.answer, item?.backend?.answer, answer)).slice(0, 100)),
       ].join(","))
       .join("\n");
   }

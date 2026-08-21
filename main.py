@@ -101,8 +101,7 @@ from typing import Any
 _map_keyframes_cache: dict[str, Any] = {}
 
 
-def _lookup_keyframe_number(video_id: str, frame_idx: int) -> int | None:
-    """Look up keyframe index 'n' (e.g. 185 -> 185.jpg) from map-keyframes CSV."""
+def _load_keyframe_map(video_id: str):
     import pandas as pd
     from pathlib import Path
 
@@ -115,18 +114,59 @@ def _lookup_keyframe_number(video_id: str, frame_idx: int) -> int | None:
                 _map_keyframes_cache[video_id] = None
         else:
             _map_keyframes_cache[video_id] = None
+    return _map_keyframes_cache.get(video_id)
 
-    df = _map_keyframes_cache.get(video_id)
-    if df is not None and not df.empty and "frame_idx" in df.columns and "n" in df.columns:
-        diff = (df["frame_idx"] - frame_idx).abs()
-        closest_row = df.loc[diff.idxmin()]
-        return int(closest_row["n"])
-    return None
+
+def _lookup_frame_idx_from_keyframe_number(video_id: str, keyframe_number: int) -> int | None:
+    df = _load_keyframe_map(video_id)
+    if df is None or df.empty or "n" not in df.columns or "frame_idx" not in df.columns:
+        return None
+    exact = df[df["n"].astype(int) == int(keyframe_number)]
+    if not exact.empty:
+        return int(exact.iloc[0]["frame_idx"])
+    diff = (df["n"].astype(int) - int(keyframe_number)).abs()
+    return int(df.loc[diff.idxmin()]["frame_idx"])
+
+
+def _candidate_video_dirs(root_path, parts, video_id: str):
+    split = parts[0] if len(parts) > 1 else ""
+    candidates = []
+    if split:
+        candidates.extend([
+            root_path / split / video_id,
+            root_path / "keyframes" / split / video_id,
+        ])
+        if "_" not in split and split.startswith("L"):
+            candidates.extend(sorted(root_path.glob(f"{split}_*/{video_id}")))
+            candidates.extend(sorted((root_path / "keyframes").glob(f"{split}_*/{video_id}")) if (root_path / "keyframes").is_dir() else [])
+    candidates.extend([
+        root_path / video_id,
+        root_path / "keyframes" / video_id,
+    ])
+    candidates.extend(sorted(root_path.glob(f"*/{video_id}")))
+    return [path for path in candidates if path and path.is_dir()]
+
+
+def _closest_numeric_frame_file(vdir, target_number: int):
+    best = None
+    best_diff = None
+    for file_path in vdir.iterdir():
+        if not file_path.is_file() or file_path.suffix.lower() not in {".webp", ".jpg", ".jpeg", ".png"}:
+            continue
+        try:
+            number = int(file_path.stem)
+        except ValueError:
+            continue
+        diff = abs(number - target_number)
+        if best is None or diff < best_diff:
+            best = file_path
+            best_diff = diff
+    return best
 
 
 @app.get("/keyframes/{image_path:path}")
 async def serve_keyframe(image_path: str):
-    """Serve keyframe image file with multi-directory fallback or dynamic SVG badge."""
+    """Serve keyframe image file with tolerant video-folder and frame-id fallback."""
     from pathlib import Path
     from fastapi.responses import FileResponse, Response
 
@@ -136,7 +176,8 @@ async def serve_keyframe(image_path: str):
 
     video_id = "UNKNOWN_VIDEO"
     for part in parts:
-        if "_V" in part.upper() or part.upper().startswith("V0"):
+        upper = part.upper()
+        if "_V" in upper or upper.startswith("V0"):
             video_id = part
             break
     if video_id == "UNKNOWN_VIDEO":
@@ -149,56 +190,54 @@ async def serve_keyframe(image_path: str):
     if raw_root:
         root_path = Path(raw_root)
         if root_path.exists():
-            # 1. Exact relative match
-            target = root_path / image_path
-            if target.is_file():
-                return FileResponse(str(target))
+            exact_candidates = [
+                root_path / image_path,
+                root_path / "keyframes" / image_path,
+            ]
+            for target in exact_candidates:
+                if target.is_file():
+                    return FileResponse(str(target))
 
-            # 2. Check in 'keyframes' subfolder
-            target_nested = root_path / "keyframes" / image_path
-            if target_nested.is_file():
-                return FileResponse(str(target_nested))
+            try:
+                requested_number = int(stem)
+            except ValueError:
+                requested_number = None
 
-            # 3. Match video directory
-                candidate_dirs = [
-                    root_path / "keyframes" / parts[0] / video_id if len(parts) > 1 else None,
-                    root_path / parts[0] / video_id if len(parts) > 1 else None,
-                    root_path / "keyframes" / video_id,
-                    root_path / video_id,
-                ]
-                for vdir in candidate_dirs:
-                    if vdir and vdir.is_dir():
-                        # Try map-keyframes CSV lookup
-                        try:
-                            num = int(stem)
-                            n_keyframe = _lookup_keyframe_number(video_id, num)
-                            if n_keyframe is not None:
-                                for candidate_name in [f"{n_keyframe:03d}.jpg", f"{n_keyframe}.jpg", f"{n_keyframe:04d}.jpg"]:
-                                    test_file = vdir / candidate_name
-                                    if test_file.is_file():
-                                        return FileResponse(str(test_file))
-                        except ValueError:
-                            pass
+            for vdir in _candidate_video_dirs(root_path, parts, video_id):
+                if requested_number is not None:
+                    mapped_frame_idx = _lookup_frame_idx_from_keyframe_number(video_id, requested_number)
+                    numeric_candidates = []
+                    if mapped_frame_idx is not None:
+                        numeric_candidates.extend([mapped_frame_idx, requested_number])
+                    else:
+                        numeric_candidates.append(requested_number)
 
-                        for ext in [".jpg", ".webp", ".png", ".jpeg"]:
-                            test_file = vdir / f"{stem}{ext}"
+                    for number in numeric_candidates:
+                        for candidate_name in [
+                            f"{number:06d}.webp", f"{number:06d}.jpg",
+                            f"{number:05d}.webp", f"{number:05d}.jpg",
+                            f"{number:04d}.webp", f"{number:04d}.jpg",
+                            f"{number:03d}.webp", f"{number:03d}.jpg",
+                            f"{number}.webp", f"{number}.jpg",
+                        ]:
+                            test_file = vdir / candidate_name
                             if test_file.is_file():
                                 return FileResponse(str(test_file))
 
-                        try:
-                            num = int(stem)
-                            for candidate_name in [f"{num:03d}.jpg", f"{num+1:03d}.jpg", f"{num:04d}.jpg", f"{num:06d}.jpg"]:
-                                test_file = vdir / candidate_name
-                                if test_file.is_file():
-                                    return FileResponse(str(test_file))
-                        except ValueError:
-                            pass
+                    closest_target = mapped_frame_idx if mapped_frame_idx is not None else requested_number
+                    closest = _closest_numeric_frame_file(vdir, closest_target)
+                    if closest is not None:
+                        return FileResponse(str(closest))
 
-                        all_frames = sorted([f for f in vdir.iterdir() if f.is_file()])
-                        if all_frames:
-                            return FileResponse(str(all_frames[0]))
+                for ext in [".webp", ".jpg", ".png", ".jpeg"]:
+                    test_file = vdir / f"{stem}{ext}"
+                    if test_file.is_file():
+                        return FileResponse(str(test_file))
 
-    # Fallback to sleek SVG badge when keyframe image file is not on local disk
+                all_frames = sorted([f for f in vdir.iterdir() if f.is_file()])
+                if all_frames:
+                    return FileResponse(str(all_frames[0]))
+
     svg_content = _make_svg_placeholder(video_id, f"Frame {stem}")
     return Response(content=svg_content, media_type="image/svg+xml")
 

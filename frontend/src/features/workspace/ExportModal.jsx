@@ -1,9 +1,9 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CloseOutlined, ExportOutlined } from "@ant-design/icons";
 import useDialogFocus from "../../hooks/useDialogFocus";
 import { buildSubmissionCsv, makeSubmissionZip, sanitizeQueryFileName, queryTypeFromSearchType } from "../../shared/submissionExport";
 
-export default function ExportModal({ open, items, activeTabResults = [], tabs = [], onClose, toast }) {
+export default function ExportModal({ open, items, activeTabResults = [], activeSearchType = "TEXT", tabs = [], onClose, toast }) {
   const [queryType, setQueryType] = useState("kis");
   const [source, setSource] = useState("search"); // 'search' | 'tray' | 'allTabs'
   const [csvName, setCsvName] = useState("query-1-kis.csv");
@@ -11,6 +11,27 @@ export default function ExportModal({ open, items, activeTabResults = [], tabs =
   const [answer, setAnswer] = useState("");
   const closeRef = useRef(null);
   const dialogRef = useDialogFocus(closeRef, open);
+
+  const setTypeAndFilename = (type) => {
+    setQueryType(type);
+    setCsvName((current) => {
+      const base = current || `query-1-${type}.csv`;
+      return base.replace(/-(kis|qa|trake)(\.csv)?$/i, `-${type}.csv`);
+    });
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    if (source === "search") {
+      setTypeAndFilename(queryTypeFromSearchType(activeSearchType));
+      return;
+    }
+    if (source === "tray") {
+      const trayType = items.find((item) => item?.__submission?.queryType)?.__submission?.queryType;
+      if (trayType) setTypeAndFilename(trayType);
+    }
+  }, [open, source, activeSearchType, items]);
+
   if (!open) return null;
 
   const maxFramesPerCsv = 100;
@@ -84,13 +105,17 @@ export default function ExportModal({ open, items, activeTabResults = [], tabs =
   });
   const preview = previewRows.join("\n");
   const needsQaAnswer = files.some((file) => file.queryType === "qa");
+  const hasItemAnswer = (item) => String(item?.answer || item?.backend?.answer || "").trim().length > 0;
+  const hasQaWithoutAnswer = needsQaAnswer && !answer.trim() && orderedItems.some((item) => {
+    const type = item.__submission?.queryType || queryType;
+    return type === "qa" && !hasItemAnswer(item);
+  });
 
   const download = () => {
     if (exportSourceItems.length === 0) {
       toast.warning("No frames to export. Run a search or keep items in tray.");
       return;
     }
-    const hasQaWithoutAnswer = needsQaAnswer && !exportSourceItems.some((item) => item.answer) && !answer.trim();
     if (hasQaWithoutAnswer) {
       toast.warning("QA submission needs an answer");
       return;
@@ -113,7 +138,6 @@ export default function ExportModal({ open, items, activeTabResults = [], tabs =
       toast.warning("No frames to export. Run a search or keep items in tray.");
       return;
     }
-    const hasQaWithoutAnswer = needsQaAnswer && !exportSourceItems.some((item) => item.answer) && !answer.trim();
     if (hasQaWithoutAnswer) {
       toast.warning("QA submission needs an answer");
       return;
@@ -135,11 +159,7 @@ export default function ExportModal({ open, items, activeTabResults = [], tabs =
   };
 
   const selectQueryType = (type) => {
-    setQueryType(type);
-    setCsvName((current) => {
-      const base = current || `query-1-${type}.csv`;
-      return base.replace(/-(kis|qa|trake)(\.csv)?$/i, `-${type}.csv`);
-    });
+    setTypeAndFilename(type);
   };
 
   return (

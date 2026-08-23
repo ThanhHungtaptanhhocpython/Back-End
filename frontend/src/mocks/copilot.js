@@ -1,5 +1,5 @@
 /** Deterministic demo implementations for the copilot (chat + translation).
- * These are placeholder implementations, not real AI — see shared/adapters.js. */
+ * These are placeholder implementations, not real AI - see shared/adapters.js. */
 
 const DEMO_DICT_VI_EN = {
   "khung hình": "frame",
@@ -38,9 +38,9 @@ export function demoTranslate(text, dir) {
 export function mockChatReply(text, frames) {
   const q = String(text || "").trim();
   const f = frames && frames.length ? frames[0] : null;
-  const od = f && f.odClasses && f.odClasses.length ? f.odClasses.join(", ") : "—";
+  const od = f && f.odClasses && f.odClasses.length ? f.odClasses.join(", ") : "-";
   const ctx = f
-    ? `Grounded on ${f.videoKey} at ${f.timecode} (rank ${f.rank ?? "—"}). Detected objects: ${od}.`
-    : "No frame was attached to this question, so I’m answering in general terms.";
-  return `${ctx} DEMO · your question “${q}” was routed to the QA head. Once the real backend is connected, a multimodal answer referencing OCR/object tags will appear here.`;
+    ? `Grounded on ${f.videoKey} at ${f.timecode} (rank ${f.rank ?? "-"}). Detected objects: ${od}.`
+    : "No frame was attached to this question, so I'm answering in general terms.";
+  return `${ctx} DEMO - your question "${q}" was routed to the QA head. Once the real backend is connected, a multimodal answer referencing OCR/object tags will appear here.`;
 }

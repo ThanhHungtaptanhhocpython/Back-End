@@ -2,7 +2,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 class TextSearchRequest(BaseModel):
-    query: str = Field(..., min_length=1)
+    query: str = Field(default="")
     topk: int = Field(..., gt=0)
     clip: Optional[bool] = None
     clipv2: Optional[bool] = None

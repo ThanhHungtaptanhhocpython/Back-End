@@ -26,7 +26,7 @@ export default function ResultGrid({ tab, keptMap, focusedId, onFocusItem, onOpe
   }
   const activeId = tab.results.some((r) => r.id === focusedId) ? focusedId : tab.results[0]?.id ?? null;
   return (
-    <div className="ws-grid" role="grid" aria-label={`Results grid · ${tab.results.length} frames`}>
+    <div className="ws-grid" role="grid" aria-label={`Results grid - ${tab.results.length} frames`}>
       {tab.results.map((item) => (
         <ResultCard
           key={item.id}

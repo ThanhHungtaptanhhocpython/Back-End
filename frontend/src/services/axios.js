@@ -1,9 +1,7 @@
 import axios from 'axios';
 
-const baseURL = (import.meta.env.VITE_SEARCH_API_BASE_URL || 'http://127.0.0.1:3000') + '/users';
-
 const instance = axios.create({
-  baseURL: baseURL,
+  baseURL: 'https://84e893faad66.ngrok-free.app/users',
 });
 
 instance.interceptors.response.use(function (response) {

@@ -7,8 +7,7 @@
  * @typedef {Object} FrameItem
  * @property {string} id            - Stable frame id, e.g. "FR-CAM01-001"
  * @property {number} gid           - Synthetic global ordinal
- * @property {number} globalFrameId - Display/legacy frame id
- * @property {number} submissionFrameId - Per-video frame id used in submissions
+ * @property {number} globalFrameId - Global frame id used in submissions
  * @property {string} folderKey     - Archive folder, e.g. "ARC_DOCK"
  * @property {string} videoKey      - Video/camera feed key, e.g. "cam01_boarding"
  * @property {string} camera        - Camera label, e.g. "CAM 01"

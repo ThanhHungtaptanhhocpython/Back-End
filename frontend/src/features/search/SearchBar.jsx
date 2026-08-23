@@ -28,7 +28,7 @@ export default function SearchBar({ tab, onPatch, onRun, searchRef, toast }) {
         <input
           ref={searchRef}
           className="ws-query"
-          placeholder={isImage ? "Select a reference frame to seed the search" : "e.g. 'cam 04', 'overpass', 'forklift'…"}
+          placeholder={isImage ? "Select a reference frame to seed the search" : "e.g. 'cam 04', 'overpass', 'forklift'..."}
           value={tab.query}
           onChange={(e) => onPatch({ query: e.target.value })}
           onKeyDown={(e) => {
@@ -40,7 +40,7 @@ export default function SearchBar({ tab, onPatch, onRun, searchRef, toast }) {
         </button>
       </div>
       <div className="ws-query-hint">
-        <span>{tab.status === "running" ? <span className="ws-cyan">Searching…</span> : tab.status === "done" ? <span className="ws-green">{tab.total} frames · {tab.latency}ms</span> : <span className="ws-faint">Ready</span>}</span>
+        <span>{tab.status === "running" ? <span className="ws-cyan">Searching...</span> : tab.status === "done" ? <span className="ws-green">{tab.total} frames - {tab.latency}ms</span> : <span className="ws-faint">Ready</span>}</span>
         <span className="ws-hint-keys">
           <Keycap>Esc</Keycap> leave input
         </span>
@@ -76,9 +76,9 @@ export default function SearchBar({ tab, onPatch, onRun, searchRef, toast }) {
             className="ws-num"
             type="number"
             min={1}
-            max={200}
+            max={80}
             value={tab.params.topk}
-            onChange={(e) => onPatch({ params: { ...tab.params, topk: Math.max(1, Math.min(200, Number(e.target.value) || 100)) } })}
+            onChange={(e) => onPatch({ params: { ...tab.params, topk: Number(e.target.value) } })}
           />
         </div>
         <div className="ws-param">
@@ -93,7 +93,7 @@ export default function SearchBar({ tab, onPatch, onRun, searchRef, toast }) {
 
       <div className="ws-runbar">
         <button className="ws-btn primary" onClick={onRun} disabled={tab.status === "running"}>
-          {tab.status === "running" ? "Searching…" : "Search"}
+          {tab.status === "running" ? "Searching..." : "Search"}
         </button>
       </div>
     </div>

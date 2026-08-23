@@ -39,7 +39,7 @@ def _error_response(message: str, status: int = 400) -> Response:
     payload = {
         "success": False,
         "data": None,
-        "error": message,
+        "message": message,
     }
     return Response(
         response=json.dumps(payload, indent=2),
@@ -63,7 +63,7 @@ def _success_response(items: list) -> Response:
             "items": items,
             "total_items": len(items),
         },
-        "error": None,
+        "message": None,
     }
     return Response(
         response=json.dumps(payload, indent=2),
@@ -245,4 +245,4 @@ def handle_ocr_and_od_search() -> Response:
     Returns:
         A 501 Not Implemented response.
     """
-    return _error_response("OCR/OD search is not implemented yet.", status=501)
+    return _error_response("OCR/OD search is not implemented yet.", status=501)

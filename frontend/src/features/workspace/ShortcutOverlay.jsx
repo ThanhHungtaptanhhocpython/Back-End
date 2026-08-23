@@ -5,12 +5,12 @@ import useDialogFocus from "../../hooks/useDialogFocus";
 
 const ALWAYS_ROWS = [
   ["Open help / keyboard map", [["?"]]],
-  ["Move focus in grid", [["↑"], ["↓"], ["←"], ["→"]]],
+  ["Move focus in grid", [["Up"], ["Down"], ["Left"], ["Right"]]],
   ["Go to first / last frame", [["Home"], ["End"]]],
   ["Open frame review", [["↵"]]],
   ["Keep / unkeep frame", [["␣"]]],
   ["Remove frame (with undo)", [["Del"]]],
-  ["Reviewer: previous / next frame", [["←"], ["→"]]],
+  ["Reviewer: previous / next frame", [["Left"], ["Right"]]],
   ["Reviewer: keep / remove", [["␣"], ["Del"]]],
   ["Leave field, then close overlay (layered)", [["Esc"]]],
 ];
@@ -59,7 +59,7 @@ export default function ShortcutOverlay({ open, powerUser, onTogglePowerUser, on
         <div className="ws-modal-body">
           <div className="ws-kbd-switch">
             <span className="ws-kbd-switch-label">Power-user shortcuts</span>
-            <span className="ws-kbd-switch-sub">Optional accelerators — off by default</span>
+            <span className="ws-kbd-switch-sub">Optional accelerators - off by default</span>
             <button
               className={`ws-switch ${powerUser ? "on" : ""}`}
               onClick={onTogglePowerUser}
@@ -80,7 +80,7 @@ export default function ShortcutOverlay({ open, powerUser, onTogglePowerUser, on
           </div>
 
           <p className="ws-shortcuts-note">
-            Browser-reserved shortcuts (Ctrl/Cmd+W, T, L, R, N, ⌘↵) are intentionally avoided — the workstation relies
+            Browser-reserved shortcuts (Ctrl/Cmd+W, T, L, R, N, ⌘↵) are intentionally avoided - the workstation relies
             on plain, context-scoped keys. Keys are ignored while typing or during IME composition, modifiers are never
             intercepted, and removal uses <b>Delete</b> (never Backspace) with an Undo chip.
           </p>

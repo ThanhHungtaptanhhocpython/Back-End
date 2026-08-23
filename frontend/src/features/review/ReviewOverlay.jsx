@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeftOutlined,
   ArrowRightOutlined,
@@ -13,12 +13,15 @@ import {
 import { fmtDur } from "../../shared/format";
 import { getFramePool } from "../../mocks/searchEngine";
 import { fetchVideoTimeline } from "../../shared/adapters";
+import { buildVideoPlayback } from "../../services/videoPlayback";
 import useDialogFocus from "../../hooks/useDialogFocus";
 
 export default function ReviewOverlay({ item, results, isKept, onClose, onNavigate, onSelect, onToggleKeep, onRemove, onPivot, onAsk, onExportThis }) {
   const [compareId, setCompareId] = useState(null);
   const [stripMode, setStripMode] = useState("timeline"); // "timeline" | "results"
   const [timeline, setTimeline] = useState([]);
+  const [loadingTimeline, setLoadingTimeline] = useState(false);
+  const [showVideo, setShowVideo] = useState(false);
   const backRef = useRef(null);
   const dialogRef = useDialogFocus(backRef);
 
@@ -36,13 +39,16 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
       return;
     }
 
+    setLoadingTimeline(true);
     fetchVideoTimeline(item.videoKey, item.frameKey || item.id, 60)
       .then((frames) => {
         if (active) {
           setTimeline(frames || []);
+          setLoadingTimeline(false);
         }
       })
       .catch(() => {
+        if (active) setLoadingTimeline(false);
       });
 
     return () => {
@@ -52,6 +58,7 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
 
   useEffect(() => {
     setCompareId(null);
+    setShowVideo(false);
   }, [item?.id]);
 
   if (!item) return null;
@@ -62,6 +69,7 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
   const compareItem = compareId ? (results || []).find((r) => r.id === compareId) : null;
   const atStart = curIdx <= 0;
   const atEnd = curIdx === -1 || curIdx >= seq.length - 1;
+  const videoPlayback = useMemo(() => buildVideoPlayback(item), [item]);
 
   const handleStep = (dir) => {
     if (curIdx === -1) {
@@ -86,15 +94,15 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
         <div className="ws-review-title">
           Frame Review
           <span className="ws-review-ctx">
-            {item.videoKey} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· {item.camera}
+            {item.videoKey} - {item.camera}
           </span>
         </div>
-        <span className="ws-review-pos">{curIdx >= 0 ? `${curIdx + 1} / ${seq.length}` : "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â"}</span>
+        <span className="ws-review-pos">{curIdx >= 0 ? `${curIdx + 1} / ${seq.length}` : "-"}</span>
         <div className="ws-review-head-actions">
-          <button className="ws-btn small" onClick={() => handleStep(-1)} title="Previous (ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Ãƒâ€šÃ‚Â)" disabled={atStart}>
+          <button className="ws-btn small" onClick={() => handleStep(-1)} title="Previous (Left)" disabled={atStart}>
             <ArrowLeftOutlined /> Prev
           </button>
-          <button className="ws-btn small" onClick={() => handleStep(1)} title="Next (ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢)" disabled={atEnd}>
+          <button className="ws-btn small" onClick={() => handleStep(1)} title="Next (Right)" disabled={atEnd}>
             <ArrowRightOutlined /> Next
           </button>
           <button className={`ws-btn small ${isKept ? "" : "primary"}`} onClick={() => onToggleKeep(item)} title="Keep / unkeep (Space)">
@@ -106,6 +114,11 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
           <button className="ws-btn small" onClick={() => onAsk(item)} title="Ask the copilot about this frame">
             <MessageOutlined /> Ask
           </button>
+          {videoPlayback ? (
+            <button className="ws-btn small" onClick={() => setShowVideo((value) => !value)} title="Toggle YouTube/video stream">
+              <VideoCameraOutlined /> {showVideo ? "Show frame" : "Play video"}
+            </button>
+          ) : null}
           <button className="ws-btn small" onClick={() => onRemove(item)} title="Remove from results (Delete)">
             <DeleteOutlined /> Remove
           </button>
@@ -118,21 +131,47 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
             {compareItem ? (
               <div className="ws-review-cmp">
                 <div className="ws-review-cmp-item">
-                  <span className="ws-review-cmp-label">CURRENT ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· {item.frameName}</span>
+                  <span className="ws-review-cmp-label">CURRENT - {item.frameName}</span>
                   <img src={item.image} alt={item.frameName} />
                 </div>
                 <div className="ws-review-cmp-item">
-                  <span className="ws-review-cmp-label">COMPARE ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· {compareItem.frameName}</span>
+                  <span className="ws-review-cmp-label">COMPARE - {compareItem.frameName}</span>
                   <img src={compareItem.image} alt={compareItem.frameName} />
                 </div>
               </div>
+            ) : showVideo && videoPlayback ? (
+              <div className="ws-review-player">
+                {videoPlayback.type === "youtube" ? (
+                  <iframe
+                    src={videoPlayback.embedUrl}
+                    title={`${item.videoKey} YouTube stream`}
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowFullScreen
+                  />
+                ) : (
+                  <video src={videoPlayback.url} controls autoPlay />
+                )}
+              </div>
             ) : (
-              <img className="ws-review-img" src={item.image} alt={item.frameName} />
+              <button
+                className={`ws-review-media-button ${videoPlayback ? "playable" : ""}`}
+                type="button"
+                onClick={() => videoPlayback && setShowVideo(true)}
+                title={videoPlayback ? "Play video from this timestamp" : item.frameName}
+              >
+                <img className="ws-review-img" src={item.image} alt={item.frameName} />
+                {videoPlayback ? (
+                  <span className="ws-review-media-play">
+                    <VideoCameraOutlined />
+                    Play from {item.timecode}
+                  </span>
+                ) : null}
+              </button>
             )}
-            <button className="ws-review-nav prev" onClick={() => handleStep(-1)} title="Previous frame (ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Ãƒâ€šÃ‚Â)" disabled={atStart}>
+            <button className="ws-review-nav prev" onClick={() => handleStep(-1)} title="Previous frame (Left)" disabled={atStart}>
               <ArrowLeftOutlined />
             </button>
-            <button className="ws-review-nav next" onClick={() => handleStep(1)} title="Next frame (ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢)" disabled={atEnd}>
+            <button className="ws-review-nav next" onClick={() => handleStep(1)} title="Next frame (Right)" disabled={atEnd}>
               <ArrowRightOutlined />
             </button>
           </div>
@@ -142,7 +181,7 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
               <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                 <span className="ws-filmstrip-tag">
                   {stripMode === "timeline"
-                    ? `Video timeline ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${item.videoKey} (${timeline.length} keyframes)`
+                    ? `Video timeline - ${item.videoKey} (${timeline.length} keyframes)`
                     : `Search query results (${results?.length || 0} frames)`}
                 </span>
                 {timeline.length > 0 ? (
@@ -189,9 +228,19 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
             <div className="ws-review-row"><dt className="k">Video</dt><dd className="v cyan">{item.videoKey}</dd></div>
             <div className="ws-review-row"><dt className="k">Frame ID</dt><dd className="v">{item.id}</dd></div>
             <div className="ws-review-row"><dt className="k">Global ID</dt><dd className="v">#{item.globalFrameId}</dd></div>
-            <div className="ws-review-row"><dt className="k">Timestamp</dt><dd className="v amber">{item.timecode} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· {fmtDur(item.timestamp)}</dd></div>
-            <div className="ws-review-row"><dt className="k">Rank</dt><dd className="v">{item.rank != null ? item.rank : "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â"}</dd></div>
-            <div className="ws-review-row"><dt className="k">Score</dt><dd className="v">{item.score != null ? `${Math.round(item.score * 100)}%` : "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â"}</dd></div>
+            <div className="ws-review-row"><dt className="k">Timestamp</dt><dd className="v amber">{item.timecode} - {fmtDur(item.timestamp)}</dd></div>
+            {videoPlayback ? (
+              <div className="ws-review-row">
+                <dt className="k">Video stream</dt>
+                <dd className="v cyan">
+                  <a href={videoPlayback.url} target="_blank" rel="noreferrer">
+                    open source
+                  </a>
+                </dd>
+              </div>
+            ) : null}
+            <div className="ws-review-row"><dt className="k">Rank</dt><dd className="v">{item.rank != null ? item.rank : "-"}</dd></div>
+            <div className="ws-review-row"><dt className="k">Score</dt><dd className="v">{item.score != null ? `${Math.round(item.score * 100)}%` : "-"}</dd></div>
             <div className="ws-review-row"><dt className="k">Camera</dt><dd className="v">{item.camera}</dd></div>
             <div className="ws-review-row"><dt className="k">Source</dt><dd className="v">{item.real ? "broadcast feed" : `${item.folderKey} / ${item.videoKey}`}</dd></div>
           </dl>
@@ -200,10 +249,10 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
           <div className="ws-review-cmp-field">
             <label className="ws-param-label">Compare with another result</label>
             <select value={compareId || ""} onChange={(e) => setCompareId(e.target.value || null)}>
-              <option value="">ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â select a frame ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â</option>
+              <option value="">- select a frame -</option>
               {(results || []).filter((r) => r.id !== item.id).map((r) => (
                 <option key={r.id} value={r.id}>
-                  #{String(r.rank ?? "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â")} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· {r.frameName} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· {r.timecode}
+                  #{String(r.rank ?? "-")} - {r.frameName} - {r.timecode}
                 </option>
               ))}
             </select>

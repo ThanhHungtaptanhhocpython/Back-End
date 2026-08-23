@@ -134,11 +134,11 @@ export function makeSubmissionZip(files) {
   const { dosDate, dosTime } = dosDateTime();
   const local = [];
   const central = [];
-  const zipFiles = normalizeZipFiles(files);
+  const zipFiles = [{ name: "submission/", content: "" }, ...normalizeZipFiles(files)];
 
   zipFiles.forEach((file) => {
-    // Write directly to root of zip (NO 'submission/' prefix)
-    const path = file.name;
+    // Match official sample archives: place CSV files inside submission/.
+    const path = file.name.startsWith("submission/") ? file.name : `submission/${file.name}`;
     const nameBytes = encoder.encode(path);
     const contentBytes = encoder.encode(file.content);
     const checksum = crc32(file.content);

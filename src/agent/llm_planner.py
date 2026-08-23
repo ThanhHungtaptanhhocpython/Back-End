@@ -34,6 +34,13 @@ Reasoning workflow:
 """
 
 
+def _provider_name() -> str:
+    return os.getenv("LLM_PROVIDER", "auto").strip().lower()
+
+
+def _is_prompt_limit_error(message: str) -> bool:
+    lowered = str(message).lower()
+    return "prompt tokens limit exceeded" in lowered or "maximum context length" in lowered
 
 
 def _safe_error_message(exc: Exception) -> str:
@@ -41,30 +48,69 @@ def _safe_error_message(exc: Exception) -> str:
     if "integrate.api.nvidia.com" in message or "Nvcf-Reqid" in message:
         return (
             "NVIDIA provider returned 404. Backend is still using NVIDIA; "
-            "set LLM_PROVIDER=anthropic in Back-End/.env and restart uvicorn."
+            "switch provider in Back-End/.env and restart uvicorn."
         )
+    if "openrouter" in message.lower() and ("401" in message or "authentication" in message.lower()):
+        return "OpenRouter authentication failed. Check OPENROUTER_API_KEY and model, then restart uvicorn."
+    if _is_prompt_limit_error(message):
+        return (
+            "Prompt vuot gioi han token cua provider hien tai. "
+            "Da xoa bot history chat; hay gui lai cau hoi ngan hon hoac bat dau mot phien chat moi."
+        )
+    message = " ".join(message.split())
+    if len(message) > 400:
+        return f"{message[:400]}..."
     return message
-def _provider_name() -> str:
-    return os.getenv("LLM_PROVIDER", "auto").strip().lower()
 
 
 def get_llm():
     """Initialize an LLM from explicit provider env vars."""
     provider = _provider_name()
     openai_key = os.getenv("OPENAI_API_KEY")
+    openrouter_key = os.getenv("OPENROUTER_API_KEY")
     anthropic_key = os.getenv("ANTHROPIC_API_KEY")
     nvidia_key = os.getenv("NVIDIA_API_KEY")
     google_key = os.getenv("GOOGLE_API_KEY")
 
-    if provider not in {"auto", "openai", "anthropic", "claude", "nvidia", "nim", "nv", "google", "gemini"}:
-        raise ValueError("LLM_PROVIDER must be one of: auto, openai, anthropic, claude, nvidia, nim, nv, google, gemini.")
+    if provider not in {"auto", "openai", "openrouter", "anthropic", "claude", "nvidia", "nim", "nv", "google", "gemini"}:
+        raise ValueError("LLM_PROVIDER must be one of: auto, openai, openrouter, anthropic, claude, nvidia, nim, nv, google, gemini.")
 
     logger.info("Initializing LLM provider: %s", provider)
+
+    if provider in {"openrouter"} and openrouter_key:
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(
+            model=os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
+            temperature=0,
+            api_key=openrouter_key,
+            max_tokens=int(os.getenv("OPENROUTER_MAX_TOKENS", "512")),
+            base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+            default_headers={
+                "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "http://localhost:3000"),
+                "X-Title": os.getenv("OPENROUTER_APP_NAME", "AIC Backend"),
+            },
+        )
 
     if provider in {"auto", "openai"} and openai_key:
         from langchain_openai import ChatOpenAI
 
         return ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), temperature=0)
+
+    if provider in {"auto"} and openrouter_key:
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(
+            model=os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
+            temperature=0,
+            api_key=openrouter_key,
+            max_tokens=int(os.getenv("OPENROUTER_MAX_TOKENS", "512")),
+            base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+            default_headers={
+                "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "http://localhost:3000"),
+                "X-Title": os.getenv("OPENROUTER_APP_NAME", "AIC Backend"),
+            },
+        )
 
     if provider in {"auto", "anthropic", "claude"} and anthropic_key:
         try:
@@ -110,6 +156,7 @@ def get_llm():
 
     raise ValueError(
         "Missing API key for LLM planner. Set LLM_PROVIDER=openai with OPENAI_API_KEY, "
+        "LLM_PROVIDER=openrouter with OPENROUTER_API_KEY, "
         "LLM_PROVIDER=anthropic with ANTHROPIC_API_KEY, LLM_PROVIDER=nvidia with NVIDIA_API_KEY, "
         "or LLM_PROVIDER=google with GOOGLE_API_KEY."
     )
@@ -135,7 +182,7 @@ def get_agent_executor():
 def execute_chat_turn(session_id: str, user_message: str) -> Dict[str, Any]:
     """Run one conversational turn through the LLM planner agent."""
     try:
-        history = memory_manager.get_messages(session_id)
+        history = memory_manager.get_recent_messages(session_id)
         response = get_agent_executor().invoke({
             "input": user_message,
             "chat_history": history,
@@ -154,11 +201,11 @@ def execute_chat_turn(session_id: str, user_message: str) -> Dict[str, Any]:
     except Exception as exc:
         safe_message = _safe_error_message(exc)
         logger.error("Error in LLM Planner execution: %s", safe_message)
-        memory_manager.add_user_message(session_id, user_message)
-        error_msg = f"Loi tac nhan: {safe_message}. (Vui long kiem tra API key/provider trong bien moi truong)"
-        memory_manager.add_ai_message(session_id, error_msg)
+        if _is_prompt_limit_error(str(exc)):
+            memory_manager.clear_session(session_id)
         return {
             "success": False,
-            "response": error_msg,
+            "response": f"Loi tac nhan: {safe_message}",
             "data": None,
         }
+

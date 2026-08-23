@@ -8,23 +8,23 @@ export default function SelectionTray({ keptItems, onRemove, onClear, onExport, 
           <ExportOutlined /> Selection Tray
         </div>
         <div className="ws-tray-count">
-          <b>{keptItems.length}</b> / kept · export-ready
+          <b>{keptItems.length}</b> / kept - export-ready
         </div>
         <div className="ws-tray-spacer" />
         <div className="ws-tray-btns">
           <button className="ws-btn small" onClick={onClear} disabled={keptItems.length === 0}>
             Clear
           </button>
-          <button className="ws-btn small" style={{ color: "#58a6ff", borderColor: "#388bfd66" }} onClick={onOpenBatch} title="Paste all queries & export 1 ZIP">
+          <button className="ws-btn small" style={{ color: "#2563eb", borderColor: "#8fb2ff" }} onClick={onOpenBatch} title="Paste all queries and export one ZIP">
             <ThunderboltOutlined /> Batch Submit
           </button>
-          <button className="ws-btn small export" onClick={onExport} disabled={keptItems.length === 0}>
+          <button className="ws-btn small export" onClick={onExport}>
             <ExportOutlined /> Export Submission
           </button>
         </div>
       </div>
       {keptItems.length === 0 ? (
-        <div className="ws-tray-empty">Tray empty — press Space on a focused frame to keep it.</div>
+        <div className="ws-tray-empty">Tray empty - press Space on a focused frame to keep it.</div>
       ) : (
         <div className="ws-tray-strip">
           {keptItems.map((item) => (
@@ -41,3 +41,4 @@ export default function SelectionTray({ keptItems, onRemove, onClear, onExport, 
     </aside>
   );
 }
+

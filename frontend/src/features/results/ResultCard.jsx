@@ -8,7 +8,7 @@ export default function ResultCard({ item, focused, isKept, onOpen, onToggleKeep
       tabIndex={focused ? 0 : -1}
       data-wscard="1"
       role="gridcell"
-      aria-label={`Frame ${item.frameName} — ${Math.round(item.score * 100)}% match`}
+      aria-label={`Frame ${item.frameName} - ${Math.round(item.score * 100)}% match`}
       ref={(el) => registerRef(item.id, el)}
       onFocus={() => onFocusItem(item.id)}
       onClick={(event) => {
@@ -34,7 +34,7 @@ export default function ResultCard({ item, focused, isKept, onOpen, onToggleKeep
         </div>
         <div className="ws-meta-row">
           <span className="k">Time</span>
-          <span className="v">{fmtDur(item.timestamp)} · {item.folderKey}</span>
+          <span className="v">{fmtDur(item.timestamp)} - {item.folderKey}</span>
         </div>
       </div>
       <div className="ws-card-actions">

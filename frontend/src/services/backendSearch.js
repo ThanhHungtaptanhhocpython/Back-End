@@ -79,35 +79,6 @@ function healthUrl(baseUrl) {
   return `${baseUrl.replace(/\/users$/i, "").replace(/\/+$/, "")}/health`;
 }
 
-function rootUrl(baseUrl) {
-  return baseUrl.replace(/\/users$/i, "").replace(/\/+$/, "");
-}
-
-function chatUrl(baseUrl) {
-  return `${rootUrl(baseUrl)}/chat/conversational_kis`;
-}
-
-function looksLikeImagePath(value) {
-  return typeof value === "string" && /\.(jpe?g|png|webp)$/i.test(value.trim());
-}
-
-function keyframeUrl(baseUrl, framePath) {
-  const cleaned = String(framePath || "").replace(/^\/+/, "");
-  if (!cleaned) return "";
-  const prefix = baseUrl ? rootUrl(baseUrl) : "";
-  return `${prefix}/keyframes/${cleaned}`;
-}
-
-function inferFramePath(raw, videoKey, frameName) {
-  const path = firstDefined(raw.frame_path, raw.framePath, raw.keyframe_path, raw.image_path);
-  if (path) return path;
-  if (!looksLikeImagePath(frameName)) return "";
-  const split = firstDefined(raw.split, raw.folder_key, raw.folderKey, raw.namespace);
-  if (split && videoKey && videoKey !== "unknown-video") return `${split}/${videoKey}/${frameName}`;
-  if (videoKey && videoKey !== "unknown-video") return `${videoKey}/${frameName}`;
-  return frameName;
-}
-
 function requestFor(tab, pivot) {
   const type = tab?.searchType || "TEXT";
   const params = tab?.params || {};
@@ -115,6 +86,9 @@ function requestFor(tab, pivot) {
   const query = String(tab?.query || "").trim();
   const endpoint = endpointFor(type);
 
+  if (type !== "IMAGE" && !query) {
+    throw new BackendSearchError("Search query is empty.", { kind: "request" });
+  }
   if (type === "IMAGE") {
     const body = new FormData();
     const image = params.imageFile;
@@ -122,13 +96,11 @@ function requestFor(tab, pivot) {
     const faissIndex = firstDefined(
       effectivePivot?.faissIndex,
       effectivePivot?.vector_id,
-      effectivePivot?.backend?.vector_id,
+      effectivePivot?.globalFrameId,
+      effectivePivot?.gid,
       effectivePivot?.faiss_id_clip,
       effectivePivot?.faiss_id,
-      effectivePivot?.faiss_idx,
-      effectivePivot?.backend?.faiss_id,
-      effectivePivot?.backend?.faiss_idx,
-      effectivePivot?.gid
+      effectivePivot?.faiss_idx
     );
     if (image instanceof Blob) body.append("image", image, image.name || "reference-image");
     if (faissIndex !== undefined && faissIndex !== null) body.append("faiss_index", String(faissIndex));
@@ -165,8 +137,7 @@ export function getSearchConfig(env = viteEnv()) {
 export function normalizeBackendItem(item, rank, total, baseUrl = "") {
   const raw = item && typeof item === "object" ? item : {};
   const faissIndex = firstDefined(raw.faiss_index, raw.faiss_id_clip, raw.faiss_id, raw.faiss_idx, raw.nearest_faiss_id, raw.vector_id);
-  const submissionFrameId = firstDefined(raw.submission_frame_id, raw.frame_idx, raw.frame_key, raw.frame_id, raw.global_frame_id);
-  const frameKey = firstDefined(submissionFrameId, raw.id, faissIndex, rank);
+  const frameKey = firstDefined(raw.frame_key, raw.global_frame_id, raw.frame_id, raw.id, faissIndex, rank);
   const videoKey = String(firstDefined(raw.video_key, raw.video_id, raw.videoKey, "unknown-video"));
   const folderKey = String(firstDefined(raw.folder_key, raw.folderKey, raw.namespace, raw.split, "UNKNOWN"));
   const timestamp = finiteNumber(raw.timestamp);
@@ -174,22 +145,23 @@ export function normalizeBackendItem(item, rank, total, baseUrl = "") {
   const scoreValue = firstDefined(raw.final_score, raw.normalized_score, raw.score, raw._score);
   const frameName = String(firstDefined(raw.frame_name, raw.frameName, `${videoKey}_${frameKey}`));
 
-  const framePath = inferFramePath(raw, videoKey, frameName);
+  const framePath = firstDefined(raw.frame_path, raw.framePath);
   let resolvedImage = firstDefined(raw.image, raw.thumbnail, raw.image_url);
-  if (resolvedImage && looksLikeImagePath(resolvedImage) && !/^(data:|blob:|https?:\/\/|\/)/i.test(resolvedImage)) {
-    resolvedImage = keyframeUrl(baseUrl, resolvedImage.includes("/") ? resolvedImage : framePath || resolvedImage);
-  }
   if (!resolvedImage && framePath) {
-    resolvedImage = keyframeUrl(baseUrl, framePath);
+    if (baseUrl) {
+      resolvedImage = `${baseUrl.replace(/\/+$/, "")}/keyframes/${framePath.replace(/^\/+/, "")}`;
+    } else {
+      resolvedImage = `/keyframes/${framePath.replace(/^\/+/, "")}`;
+    }
   }
 
   // Keyframe ID must be uniquely tied to the actual video keyframe across all searches (NOT position-dependent rank)
   const uniqueId = String(
     firstDefined(
-      videoKey !== "unknown-video" && submissionFrameId !== undefined ? `${videoKey}_${submissionFrameId}` : undefined,
+      raw.global_frame_id,
       raw.frame_name,
       framePath,
-      raw.global_frame_id,
+      videoKey !== "unknown-video" && frameKey !== undefined ? `${videoKey}_${frameKey}` : undefined,
       raw.vector_id !== undefined ? `vec-${raw.vector_id}` : undefined,
       faissIndex !== undefined ? `faiss-${faissIndex}` : undefined,
       raw.id,
@@ -199,9 +171,8 @@ export function normalizeBackendItem(item, rank, total, baseUrl = "") {
 
   return {
     id: uniqueId,
-    gid: finiteNumber(firstDefined(faissIndex, raw.id, rank), rank),
-    globalFrameId: finiteNumber(firstDefined(submissionFrameId, raw.id, rank), rank),
-    submissionFrameId: finiteNumber(firstDefined(submissionFrameId, raw.id, rank), rank),
+    gid: finiteNumber(firstDefined(raw.global_frame_id, raw.id, rank), rank),
+    globalFrameId: finiteNumber(firstDefined(raw.global_frame_id, raw.frame_key, raw.id, rank), rank),
     folderKey,
     videoKey,
     camera: String(firstDefined(raw.camera, raw.camera_id, "BACKEND")),
@@ -213,7 +184,7 @@ export function normalizeBackendItem(item, rank, total, baseUrl = "") {
     width: finiteNumber(raw.width),
     height: finiteNumber(raw.height),
     image: imageSource(resolvedImage),
-    link: String(firstDefined(raw.link, raw.video_url, "")),
+    link: String(firstDefined(raw.link, raw.youtube_url, raw.youtubeUrl, raw.video_url, raw.videoUrl, raw.url, "")),
     real: true,
     faissIndex: faissIndex === undefined ? undefined : finiteNumber(faissIndex),
     score: normaliseScore(scoreValue, rank, total),
@@ -307,59 +278,6 @@ export async function runBackendSearch(tab, pivot, { config = getSearchConfig(),
   );
 }
 
-/** Execute one conversational KIS turn through the FastAPI agent router. */
-export async function runAgentChat(
-  { sessionId, message, topk = 100 },
-  { config = getSearchConfig(), fetchImpl = globalThis.fetch } = {}
-) {
-  if (!config.baseUrl) {
-    throw new BackendSearchError("VITE_SEARCH_API_BASE_URL is required for live agent chat.", { kind: "config" });
-  }
-  if (typeof fetchImpl !== "function") {
-    throw new BackendSearchError("Fetch is unavailable in this environment.", { kind: "transport" });
-  }
-
-  let response;
-  try {
-    response = await fetchImpl(chatUrl(config.baseUrl), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        session_id: sessionId,
-        message,
-        topk: positiveInteger(topk, 100),
-      }),
-    });
-  } catch (cause) {
-    throw new BackendSearchError("FastAPI agent service is unavailable.", { kind: "transport", cause });
-  }
-
-  let payload;
-  try {
-    payload = await response.json();
-  } catch (cause) {
-    throw new BackendSearchError(`Agent returned an unreadable HTTP ${response.status} response.`, {
-      kind: "response",
-      status: response.status,
-      cause,
-    });
-  }
-
-  if (!response.ok || payload?.success !== true) {
-    throw new BackendSearchError(payload?.response || payload?.message || `Agent failed with HTTP ${response.status}.`, {
-      kind: "response",
-      status: response.status,
-    });
-  }
-
-  return {
-    sessionId: payload.session_id || sessionId,
-    response: String(payload.response || ""),
-    data: payload.data ?? null,
-    mode: "AGENT LIVE",
-    source: "live",
-  };
-}
 /** Probe FastAPI without sending a search request, keeping demo mode explicit. */
 export async function probeBackend({ config = getSearchConfig(), fetchImpl = globalThis.fetch } = {}) {
   if (config.mode === "demo") {

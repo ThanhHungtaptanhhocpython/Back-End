@@ -15,7 +15,9 @@ incompatible with this 1024-d FAISS index).
 from __future__ import annotations
 
 import json
+import csv
 import logging
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -46,7 +48,7 @@ _VECTOR_ID_CANDIDATES = ["global_id", "global_frame_id", "vector_id", "faiss_id"
 _VIDEO_ID_CANDIDATES = ["video_id", "video"]
 _FRAME_ID_CANDIDATES = ["frame_id", "frame_index", "keyframe_id", "frame_name"]
 _FRAME_PATH_CANDIDATES = ["frame_path", "image_path", "keyframe_path", "path"]
-_TIMESTAMP_CANDIDATES = ["timestamp", "pts", "time_sec", "time"]
+_TIMESTAMP_CANDIDATES = ["timestamp", "timestamp_s", "pts", "pts_time", "time_sec", "time"]
 _NAMESPACE_CANDIDATES = ["namespace", "source_namespace", "parent_namespace", "split", "scope"]
 
 
@@ -81,6 +83,8 @@ class BEiT3Retriever:
         self._video_metadata = self._load_optional_parquet(
             self._settings.beit3_video_metadata_path, label="video_metadata.parquet"
         )
+        self._media_info_by_id = self._load_media_info_dir(self._settings.src_dir / "dict" / "media-info")
+        self._keyframe_time_by_video = self._load_keyframe_time_maps(self._settings.src_dir / "dict" / "map-keyframes")
         self._index_meta = self._load_optional_json(
             self._settings.beit3_index_meta_path, label="index_meta.json"
         )
@@ -187,6 +191,88 @@ class BEiT3Retriever:
             except json.JSONDecodeError as exc:
                 raise BEiT3RetrieverError(f"Failed to parse {label} at {resolved}: {exc}") from exc
 
+    def _load_media_info_dir(self, path: Path) -> dict[str, dict]:
+        """Load per-video JSON metadata, including YouTube watch URLs."""
+        if not path.exists():
+            logger.warning("media-info directory not found; video URL enrichment skipped: %s", path)
+            return {}
+
+        lookup: dict[str, dict] = {}
+        for json_path in path.glob("*.json"):
+            video_id = json_path.stem
+            try:
+                with json_path.open("r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (OSError, json.JSONDecodeError) as exc:
+                logger.warning("Skipping unreadable media-info file %s: %s", json_path, exc)
+                continue
+            if isinstance(data, dict):
+                lookup[video_id] = data
+        logger.info("Loaded media-info metadata for %d videos from %s", len(lookup), path)
+        return lookup
+
+
+    def _load_keyframe_time_maps(self, path: Path) -> dict[str, dict[str, dict[int, dict[str, Any]]]]:
+        """Load keyframe ordinal/frame-index to timestamp mappings from CSV files."""
+        if not path.exists():
+            logger.warning("map-keyframes directory not found; timeline timestamps skipped: %s", path)
+            return {}
+
+        lookup: dict[str, dict[str, dict[int, dict[str, Any]]]] = {}
+        for csv_path in path.glob("*.csv"):
+            by_n: dict[int, dict[str, Any]] = {}
+            by_frame_idx: dict[int, dict[str, Any]] = {}
+            try:
+                with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
+                    for row in csv.DictReader(f):
+                        try:
+                            n = int(str(row.get("n") or "").strip())
+                            pts_time = float(str(row.get("pts_time") or "0").strip())
+                            fps = float(str(row.get("fps") or "25").strip())
+                            frame_idx = int(str(row.get("frame_idx") or "0").strip())
+                        except (TypeError, ValueError):
+                            continue
+                        item = {"timestamp": pts_time, "fps": fps, "source_frame_idx": frame_idx, "keyframe_number": n}
+                        by_n[n] = item
+                        by_frame_idx[frame_idx] = item
+            except OSError as exc:
+                logger.warning("Skipping unreadable map-keyframes file %s: %s", csv_path, exc)
+                continue
+            lookup[csv_path.stem] = {"n": by_n, "frame_idx": by_frame_idx}
+        logger.info("Loaded keyframe timestamp maps for %d videos from %s", len(lookup), path)
+        return lookup
+
+    @staticmethod
+    def _candidate_frame_numbers(*values: Any) -> list[int]:
+        candidates: list[int] = []
+        for value in values:
+            if value is None:
+                continue
+            text = str(value).strip().replace("\\", "/")
+            if not text:
+                continue
+            stem = Path(text).stem
+            for part in (text, stem):
+                groups = re.findall(r"\d+", part)
+                digit_candidates = []
+                if groups:
+                    digit_candidates.append(groups[-1])
+                    digit_candidates.append("".join(groups))
+                for digits in digit_candidates:
+                    if digits:
+                        number = int(digits)
+                        if number not in candidates:
+                            candidates.append(number)
+        return candidates
+
+    def _keyframe_time_for(self, video_id: Any, *frame_values: Any) -> dict[str, Any] | None:
+        mapping = self._keyframe_time_by_video.get(str(video_id))
+        if not mapping:
+            return None
+        for number in self._candidate_frame_numbers(*frame_values):
+            if number in mapping["frame_idx"]:
+                return mapping["frame_idx"][number]
+        return None
     def _validate_consistency(self) -> None:
         ntotal = self._index.ntotal
         n_rows = len(self._global_ids)
@@ -342,6 +428,16 @@ class BEiT3Retriever:
         frame_submission_id = self._normalize_submission_frame_id(frame_id)
         frame_name = f"{video_id}_{frame_id}" if (video_id and frame_id) else None
 
+        frame_path = self._to_json_safe(row.get(cols["frame_path"])) if cols["frame_path"] else None
+        timestamp = self._to_json_safe(row.get(cols["timestamp"])) if cols["timestamp"] else None
+        time_info = self._keyframe_time_for(video_id, frame_id, frame_submission_id, frame_name, frame_path)
+        if time_info:
+            timestamp = time_info["timestamp"]
+        elif timestamp is None:
+            fallback_frame_numbers = self._candidate_frame_numbers(frame_id, frame_submission_id, frame_path)
+            if fallback_frame_numbers:
+                timestamp = fallback_frame_numbers[0] / 25.0
+
         result = {
             "rank": rank,
             "score": score,
@@ -352,17 +448,33 @@ class BEiT3Retriever:
             "video_id": video_id,
             "frame_id": frame_id,
             "frame_name": frame_name,
-            "frame_path": self._to_json_safe(row.get(cols["frame_path"])) if cols["frame_path"] else None,
-            "timestamp": self._to_json_safe(row.get(cols["timestamp"])) if cols["timestamp"] else None,
+            "frame_path": frame_path,
+            "timestamp": timestamp,
             "namespace": self._to_json_safe(row.get(cols["namespace"])) if cols["namespace"] else None,
         }
-
+        if time_info:
+            result["fps"] = time_info["fps"]
+            result["source_frame_idx"] = time_info["source_frame_idx"]
+            result["keyframe_number"] = time_info["keyframe_number"]
         if self._video_meta_by_id is not None and video_id in self._video_meta_by_id:
             video_row = {
                 k: self._to_json_safe(v) for k, v in self._video_meta_by_id[video_id].items()
             }
             result["video_metadata"] = video_row
 
+        media_info = self._media_info_by_id.get(str(video_id))
+        if media_info:
+            safe_media_info = {k: self._to_json_safe(v) for k, v in media_info.items()}
+            watch_url = safe_media_info.get("watch_url")
+            thumbnail_url = safe_media_info.get("thumbnail_url")
+            result["media_info"] = safe_media_info
+            if watch_url:
+                result["watch_url"] = watch_url
+                result["youtube_url"] = watch_url
+                result["video_url"] = watch_url
+                result["link"] = watch_url
+            if thumbnail_url:
+                result["video_thumbnail_url"] = thumbnail_url
         return result
 
     @staticmethod
@@ -477,13 +589,19 @@ class BEiT3Retriever:
         if around_frame_id:
             target = str(around_frame_id).strip()
             target_clean = target.lstrip("0")
+            target_numbers = set(self._candidate_frame_numbers(target))
             match_idx = -1
             for i, r in enumerate(rows):
                 fid = str(r.get(frame_col) or "").strip()
-                if fid == target or (target_clean and fid.lstrip("0") == target_clean):
+                row_path = r.get(self._columns["frame_path"]) if self._columns.get("frame_path") else None
+                row_numbers = set(self._candidate_frame_numbers(fid, row_path))
+                if (
+                    fid == target
+                    or (target_clean and fid.lstrip("0") == target_clean)
+                    or bool(target_numbers.intersection(row_numbers))
+                ):
                     match_idx = i
                     break
-
             if match_idx != -1:
                 half = limit // 2
                 start = max(0, match_idx - half)

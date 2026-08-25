@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, Form, UploadFile, File, Response, status
 from src.schemas.search import TextSearchRequest, TranslateRequest, TranslateResponse
 from src.schemas.temporal import TemporalSearchRequest
-from src.schemas.results import BaseResponse, DataResponse
+from src.schemas.results import AgentSearchResponse, BaseResponse, DataResponse
 
 router = APIRouter()
 
@@ -134,6 +134,27 @@ def handle_ocr_and_od_search(request: TextSearchRequest):
     return BaseResponse(
         success=True,
         data=DataResponse(items=res, total_items=len(res))
+    )
+
+@router.post("/agentsearch", response_model=AgentSearchResponse)
+def handle_agent_search(request: TextSearchRequest):
+    if not request.query.strip():
+        return AgentSearchResponse(
+            success=True,
+            message="Empty query ignored.",
+            response="Prompt rong, khong the chay Agent Search.",
+            data=DataResponse(items=[], total_items=0),
+            plan={},
+        )
+    from src.services.agent_query_coordinator import run_agent_query_search
+
+    result = run_agent_query_search(request.query, request.topk)
+    frames = result.get("frames", [])
+    return AgentSearchResponse(
+        success=True,
+        response=result.get("answer", "Agent Search completed."),
+        data=DataResponse(items=frames, total_items=len(frames)),
+        plan=result.get("plan", {}),
     )
 
 @router.post("/multimodalsearch", response_model=BaseResponse)

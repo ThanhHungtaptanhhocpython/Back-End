@@ -149,3 +149,46 @@ test("normalizes OCR results into keyframe image URLs", () => {
   assert.equal(result.items[0].image, "http://localhost:3000/keyframes/L25/L25_V041/181.jpg");
   assert.equal(result.items[0].ocrText, "remember");
 });
+test("deduplicates repeated backend keyframes before rendering", () => {
+  const payload = {
+    success: true,
+    data: {
+      total_items: 3,
+      items: [
+        { video_id: "L23_V024", frame_id: "007845", frame_name: "L23_V024_007845", final_score: 0.9 },
+        { video_id: "L23_V024", frame_id: "007845", frame_name: "L23_V024_007845", final_score: 0.88 },
+        { video_id: "L22_V001", frame_id: "021336", frame_name: "L22_V001_021336", final_score: 0.8 },
+      ],
+    },
+  };
+
+  const result = normalizeBackendResponse(payload, { type: "TEXT", latency: 12 });
+  assert.equal(result.totalItems, 2);
+  assert.deepEqual(result.items.map((item) => item.frameName), ["L23_V024_007845", "L22_V001_021336"]);
+  assert.deepEqual(result.items.map((item) => item.rank), [1, 2]);
+});
+
+test("normalizes agent verification score and metadata", () => {
+  const payload = {
+    success: true,
+    data: {
+      total_items: 1,
+      items: [
+        {
+          video_id: "V1",
+          frame_id: "0010",
+          frame_name: "V1_0010",
+          score: 0.42,
+          verification_score: 0.87,
+          reason: "matched 3 checklist items",
+          agent_verification: { method: "light_no_vlm", sources: ["direct"] },
+        },
+      ],
+    },
+  };
+
+  const result = normalizeBackendResponse(payload, { type: "AGENT", latency: 22 });
+  assert.equal(result.items[0].score, 0.87);
+  assert.equal(result.items[0].reason, "matched 3 checklist items");
+  assert.deepEqual(result.items[0].agentVerification, { method: "light_no_vlm", sources: ["direct"] });
+});

@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 def _normalise_intent_text(value: str) -> str:
     text = unicodedata.normalize("NFD", str(value or "").lower())
     text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
-    return text.replace("đ", "d")
+    return text.replace("\u0111", "d")
 
 
 def _looks_like_deep_search_request(message: str) -> bool:
@@ -47,6 +47,32 @@ def _extract_user_question(message: str) -> str:
     return text
 
 
+
+def _looks_like_agent_search_request(message: str) -> bool:
+    text = _normalise_intent_text(_extract_user_question(message))
+    search_terms = (
+        "tim", "find", "search", "canh", "khung hinh", "frame", "clip", "video",
+        "vach dich", "xe dap", "nguoi", "xe", "bien", "duong",
+    )
+    question_terms = ("la gi", "tai sao", "vi sao", "nhu the nao", "explain", "what", "why", "how")
+    return any(term in text for term in search_terms) and not any(term in text for term in question_terms)
+
+
+def _agent_search_response(session_id: str, result: dict) -> ChatResponse:
+    plan = result.get("plan", {}) or {}
+    return ChatResponse(
+        success=True,
+        session_id=session_id,
+        response=result.get("answer", "Agent Search completed."),
+        data={
+            "mode": "agent_search",
+            "plan": plan,
+            "queries_used": plan.get("expanded_queries", []),
+            "routing": plan.get("routing", {}),
+            "frames": result.get("frames", []),
+            "total_candidates": result.get("total_candidates", 0),
+        },
+    )
 def _deep_search_response(session_id: str, result: dict) -> ChatResponse:
     return ChatResponse(
         success=True,
@@ -81,6 +107,13 @@ async def conversational_kis(request: ChatRequest):
             result = await asyncio.to_thread(deep_keyframe_search, search_message, 24, 36)
             return _deep_search_response(session_id, result)
 
+        if _looks_like_agent_search_request(user_message):
+            from src.services.agent_query_coordinator import run_agent_query_search
+
+            search_message = _extract_user_question(user_message)
+            topk = max(1, min(int(request.topk or 100), 100))
+            result = await asyncio.to_thread(run_agent_query_search, search_message, topk)
+            return _agent_search_response(session_id, result)
         from src.agent.llm_planner import execute_chat_turn
 
         agent_result = await asyncio.to_thread(execute_chat_turn, session_id, user_message)
@@ -118,6 +151,35 @@ async def deep_keyframe_search_endpoint(request: DeepKeyframeSearchRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/agent_search", response_model=ChatResponse)
+async def agent_search_endpoint(request: DeepKeyframeSearchRequest):
+    """Run the shared AI Query Coordinator pipeline for chat-triggered search."""
+    try:
+        import asyncio
+        from src.services.agent_query_coordinator import run_agent_query_search
+
+        session_id = request.session_id or "agent-search"
+        topk = max(1, min(int(request.topk or 100), 100))
+        result = await asyncio.to_thread(run_agent_query_search, request.message, topk)
+
+        return ChatResponse(
+            success=True,
+            session_id=session_id,
+            response=result.get("answer", "Agent Search completed."),
+            data={
+                "mode": "agent_search",
+                "plan": result.get("plan", {}),
+                "queries_used": (result.get("plan", {}) or {}).get("expanded_queries", []),
+                "routing": (result.get("plan", {}) or {}).get("routing", {}),
+                "frames": result.get("frames", []),
+                "total_candidates": result.get("total_candidates", 0),
+            },
+        )
+    except Exception as e:
+        logger.error(f"Error in agent search: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/feedback")
 async def submit_feedback(request: FeedbackRequest):
     """
@@ -132,3 +194,6 @@ async def submit_feedback(request: FeedbackRequest):
     except Exception as e:
         logger.error(f"Error processing feedback: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+

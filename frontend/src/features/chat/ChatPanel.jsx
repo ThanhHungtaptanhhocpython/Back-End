@@ -22,11 +22,11 @@ async function copyText(text) {
   }
 }
 
-function QueryList({ queries }) {
+function QueryList({ queries, title = "Queries used" }) {
   if (!Array.isArray(queries) || !queries.length) return null;
   return (
     <div className="ws-query-list">
-      <div className="ws-query-list-title">Queries used</div>
+      <div className="ws-query-list-title">{title}</div>
       {queries.map((item, index) => {
         const query = String(item?.query || "").trim();
         const queryEn = String(item?.queryEn || item?.query_en || query).trim();
@@ -78,6 +78,38 @@ function inlineMessageParts(text, timestamp, lineKey) {
   });
 }
 
+function RoutingSummary({ routing }) {
+  if (!routing || typeof routing !== "object") return null;
+  const parts = ["visual", "ocr", "asr"].map((key) => ({ key, value: Number(routing[key] || 0) }));
+  if (!parts.some((part) => part.value > 0)) return null;
+  return (
+    <div className="ws-routing">
+      {parts.map((part) => (
+        <div className="ws-routing-row" key={part.key}>
+          <span>{part.key.toUpperCase()}</span>
+          <div className="ws-routing-track"><i style={{ width: `${Math.round(part.value * 100)}%` }} /></div>
+          <strong>{part.value.toFixed(1)}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+
+function SearchChecklist({ checks, title = "Must-have checks" }) {
+  if (!Array.isArray(checks) || !checks.length) return null;
+  return (
+    <div className="ws-checklist">
+      <div className="ws-query-list-title">{title}</div>
+      {checks.map((check, index) => (
+        <div className="ws-check-row" key={`${check?.id || check?.label || index}-${index}`}>
+          <span className="ws-check-index">{String(index + 1).padStart(2, "0")}</span>
+          <span className="ws-check-label">{String(check?.label || check?.query_en || check || "")}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
 function InteractiveMessage({ text }) {
   let latestTimestamp = null;
   return (
@@ -123,7 +155,9 @@ function QaTab({ messages, status, input, setInput, onSend, ctxFrame, onClearCtx
               ) : null}
               {m.role === "assistant" ? <span className="ws-demo-badge">{m.demo ? "DEMO" : "LIVE"}</span> : null}
               <InteractiveMessage text={m.text} />
-              <QueryList queries={m.queriesUsed} />
+              <RoutingSummary routing={m.routing} />
+              <SearchChecklist checks={m.mustHaveChecks} />
+              <QueryList queries={m.queriesUsed} title={m.queryTitle || "Queries used"} />
             </div>
           ))}
           {status === "thinking" ? (
@@ -165,6 +199,73 @@ function QaTab({ messages, status, input, setInput, onSend, ctxFrame, onClearCtx
           <span className="ws-qa-hint">Enter to send - Shift+Enter for newline</span>
           <button className="ws-btn small primary" onClick={onSend} disabled={!input.trim() || status === "thinking"}>
             <SendOutlined /> Send
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Agent Search tab ---------- */
+function AgentSearchTab({ messages, status, input, setInput, onSend, composerRef }) {
+  const listRef = useRef(null);
+  useEffect(() => {
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages.length, status]);
+
+  return (
+    <div className="ws-qa ws-agent-search">
+      {messages.length === 0 ? (
+        <div className="ws-qa-empty">
+          <SearchOutlined style={{ fontSize: 26, color: "#94a3b8" }} />
+          <div>Describe what you need to find.</div>
+          <div className="ws-qa-empty-sub">The coordinator expands the query, routes visual/OCR/ASR, and adds keyframes to the main grid.</div>
+        </div>
+      ) : (
+        <div className="ws-qa-list" ref={listRef}>
+          {messages.map((m) => (
+            <div key={m.id} className={`ws-msg ${m.role}`}>
+              {m.role === "assistant" ? <span className="ws-demo-badge">{m.demo ? "DEMO" : "AGENT"}</span> : null}
+              <InteractiveMessage text={m.text} />
+              <RoutingSummary routing={m.routing} />
+              <SearchChecklist checks={m.mustHaveChecks} />
+              <QueryList queries={m.queriesUsed} title={m.queryTitle || "Expanded queries"} />
+            </div>
+          ))}
+          {status === "thinking" ? (
+            <div className="ws-msg assistant">
+              <span className="ws-demo-badge">AGENT...</span>
+              <div className="ws-typing"><i /><i /><i /></div>
+            </div>
+          ) : null}
+          {status === "err" ? (
+            <div className="ws-qa-error">
+              Agent Search failed. <button className="ws-btn small" onClick={onSend}>Retry</button>
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      <div className="ws-qa-composer">
+        <textarea
+          ref={composerRef}
+          className="ws-qa-input"
+          rows={3}
+          placeholder="Find frames where..."
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+              e.preventDefault();
+              onSend();
+            }
+          }}
+        />
+        <div className="ws-qa-bar">
+          <span className="ws-qa-hint">Enter to run - Shift+Enter for newline</span>
+          <button className="ws-btn small primary" onClick={onSend} disabled={!input.trim() || status === "thinking"}>
+            <SearchOutlined /> Agent Search
           </button>
         </div>
       </div>
@@ -317,7 +418,7 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
 export default function ChatPanel({
   open, width, chatTab, setChatTab, messages, status, input, setInput,
   onSend, ctxFrame, onClearCtx, composerRef, onToggleOpen, onExpand, onStartResize,
-  onUseInSearch, onUseInChat,
+  onUseInSearch, onUseInChat, agentMessages = [], agentStatus = "idle", agentInput = "", setAgentInput = () => {}, onAgentSearch = () => {}, agentComposerRef,
 }) {
   if (!open) return null;
   return (
@@ -327,6 +428,9 @@ export default function ChatPanel({
         <div className="ws-chat-tabs">
           <button className={chatTab === "qa" ? "active" : ""} onClick={() => setChatTab("qa")}>
             <MessageOutlined /> Q&A
+          </button>
+          <button className={chatTab === "agent" ? "active" : ""} onClick={() => setChatTab("agent")}>
+            <SearchOutlined /> Agent Search
           </button>
           <button className={chatTab === "tr" ? "active" : ""} onClick={() => setChatTab("tr")}>
             <TranslationOutlined /> Translate
@@ -353,6 +457,16 @@ export default function ChatPanel({
           ctxFrame={ctxFrame}
           onClearCtx={onClearCtx}
           composerRef={composerRef}
+        />
+      </div>
+      <div className="ws-chat-pane" hidden={chatTab !== "agent"}>
+        <AgentSearchTab
+          messages={agentMessages}
+          status={agentStatus}
+          input={agentInput}
+          setInput={setAgentInput}
+          onSend={onAgentSearch}
+          composerRef={agentComposerRef}
         />
       </div>
       <div className="ws-chat-pane" hidden={chatTab !== "tr"}>
@@ -389,7 +503,9 @@ export function ChatFocus({ open, messages, onClose }) {
               ) : null}
               {m.role === "assistant" ? <span className="ws-demo-badge">{m.demo ? "DEMO" : "LIVE"}</span> : null}
               <InteractiveMessage text={m.text} />
-              <QueryList queries={m.queriesUsed} />
+              <RoutingSummary routing={m.routing} />
+              <SearchChecklist checks={m.mustHaveChecks} />
+              <QueryList queries={m.queriesUsed} title={m.queryTitle || "Queries used"} />
             </div>
           ))}
         </div>
@@ -397,3 +513,4 @@ export function ChatFocus({ open, messages, onClose }) {
     </div>
   );
 }
+

@@ -19,7 +19,7 @@ export default function ResultCard({ item, focused, isKept, onOpen, onToggleKeep
       <div className="ws-thumb">
         <img src={item.image} alt={item.frameName} loading="lazy" />
         <span className="ws-rank">{String(item.rank).padStart(2, "0")}</span>
-        <span className="ws-score">{Math.round(item.score * 100)}%</span>
+        <span className="ws-score" title={item.reason || item.agentVerification?.note || "Match score"}>{Math.round(item.score * 100)}%</span>
         {item.real ? <span className="ws-live">LIVE FEED</span> : null}
         <span className="ws-tc">{item.timecode}</span>
       </div>

@@ -24,7 +24,16 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
   const [showVideo, setShowVideo] = useState(false);
   const backRef = useRef(null);
   const dialogRef = useDialogFocus(backRef);
-  const videoPlayback = useMemo(() => buildVideoPlayback(item), [item]);
+  const hydratedItem = useMemo(() => {
+    if (!item || !timeline.length) return item;
+    const match = timeline.find((candidate) =>
+      candidate.id === item.id
+      || (candidate.frameKey && item.frameKey && candidate.frameKey === item.frameKey)
+      || (candidate.frameName && item.frameName && candidate.frameName === item.frameName)
+    );
+    return match ? { ...item, ...match, rank: item.rank, score: item.score } : item;
+  }, [item, timeline]);
+  const videoPlayback = useMemo(() => buildVideoPlayback(hydratedItem), [hydratedItem]);
 
   useEffect(() => {
     let active = true;
@@ -55,7 +64,7 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
     return () => {
       active = false;
     };
-  }, [item?.videoKey, item?.real]);
+  }, [item?.videoKey, item?.frameKey, item?.id, item?.real]);
 
   useEffect(() => {
     setCompareId(null);
@@ -148,7 +157,7 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
                 {videoPlayback.type === "youtube" ? (
                   <iframe
                     src={videoPlayback.embedUrl}
-                    title={`${item.videoKey} YouTube stream`}
+                    title={`${hydratedItem.videoKey} YouTube stream`}
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                     allowFullScreen
                   />
@@ -161,13 +170,13 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
                 className={`ws-review-media-button ${videoPlayback ? "playable" : ""}`}
                 type="button"
                 onClick={() => videoPlayback && setShowVideo(true)}
-                title={videoPlayback ? "Play video from this timestamp" : item.frameName}
+                title={videoPlayback ? "Play video from this timestamp" : hydratedItem.frameName}
               >
-                <img className="ws-review-img" src={item.image} alt={item.frameName} />
+                <img className="ws-review-img" src={hydratedItem.image} alt={hydratedItem.frameName} />
                 {videoPlayback ? (
                   <span className="ws-review-media-play">
                     <VideoCameraOutlined />
-                    Play from {item.timecode}
+                    Play from {hydratedItem.timecode}
                   </span>
                 ) : null}
               </button>
@@ -227,10 +236,10 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
         <aside className="ws-review-side">
           <div className="ws-review-side-title">Frame details</div>
           <dl className="ws-review-meta">
-            <div className="ws-review-row"><dt className="k">Video</dt><dd className="v cyan">{item.videoKey}</dd></div>
-            <div className="ws-review-row"><dt className="k">Frame ID</dt><dd className="v">{item.id}</dd></div>
-            <div className="ws-review-row"><dt className="k">Global ID</dt><dd className="v">#{item.globalFrameId}</dd></div>
-            <div className="ws-review-row"><dt className="k">Timestamp</dt><dd className="v amber">{item.timecode} - {fmtDur(item.timestamp)}</dd></div>
+            <div className="ws-review-row"><dt className="k">Video</dt><dd className="v cyan">{hydratedItem.videoKey}</dd></div>
+            <div className="ws-review-row"><dt className="k">Frame ID</dt><dd className="v">{hydratedItem.frameKey || item.id}</dd></div>
+            <div className="ws-review-row"><dt className="k">Global ID</dt><dd className="v">#{hydratedItem.globalFrameId}</dd></div>
+            <div className="ws-review-row"><dt className="k">Timestamp</dt><dd className="v amber">{hydratedItem.timecode} - {fmtDur(hydratedItem.timestamp)}</dd></div>
             {videoPlayback ? (
               <div className="ws-review-row">
                 <dt className="k">Video stream</dt>
@@ -243,8 +252,8 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
             ) : null}
             <div className="ws-review-row"><dt className="k">Rank</dt><dd className="v">{item.rank != null ? item.rank : "-"}</dd></div>
             <div className="ws-review-row"><dt className="k">Score</dt><dd className="v">{item.score != null ? `${Math.round(item.score * 100)}%` : "-"}</dd></div>
-            <div className="ws-review-row"><dt className="k">Camera</dt><dd className="v">{item.camera}</dd></div>
-            <div className="ws-review-row"><dt className="k">Source</dt><dd className="v">{item.real ? "broadcast feed" : `${item.folderKey} / ${item.videoKey}`}</dd></div>
+            <div className="ws-review-row"><dt className="k">Camera</dt><dd className="v">{hydratedItem.camera}</dd></div>
+            <div className="ws-review-row"><dt className="k">Source</dt><dd className="v">{hydratedItem.real ? "broadcast feed" : `${hydratedItem.folderKey} / ${hydratedItem.videoKey}`}</dd></div>
           </dl>
           <p className="ws-review-note">Score &amp; provenance are placeholders until the backend stabilizes.</p>
 

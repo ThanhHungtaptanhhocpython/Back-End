@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { App as AntApp } from "antd";
 import { CloseOutlined, MessageOutlined } from "@ant-design/icons";
 import { CARD_W, GAP } from "../../shared/constants";
-import { runSearch as runSearchQuery, askCopilot, probeBackend as probeSearchBackend } from "../../shared/adapters";
+import { runSearch as runSearchQuery, runAgentSearch as runAgentSearchQuery, askCopilot, probeBackend as probeSearchBackend } from "../../shared/adapters";
 import { getFramePool } from "../../mocks/searchEngine";
 import useClock from "../../hooks/useClock";
 import useWorkspaceKeyboard from "../../hooks/useWorkspaceKeyboard";
@@ -62,6 +62,9 @@ export default function Workstation({ view, onSwitchView }) {
   const [chatCtxFrame, setChatCtxFrame] = useState(null);
   const [chatFocus, setChatFocus] = useState(false);
   const [chatTab, setChatTab] = useState("qa");
+  const [agentSearchMsgs, setAgentSearchMsgs] = useState([]);
+  const [agentSearchInput, setAgentSearchInput] = useState("");
+  const [agentSearchStatus, setAgentSearchStatus] = useState("idle");
 
   /* keyboard preferences + transient helpers */
   const [powerUser, setPowerUser] = useState(false);
@@ -76,6 +79,7 @@ export default function Workstation({ view, onSwitchView }) {
   const gridRef = useRef(null);
   const trayRef = useRef(null);
   const composerRef = useRef(null);
+  const agentComposerRef = useRef(null);
   const cardRefs = useRef({});
   const searchSeqRef = useRef(new Map());
 
@@ -111,7 +115,8 @@ export default function Workstation({ view, onSwitchView }) {
     const isLatestSearch = () => searchSeqRef.current.get(tabKey) === requestId;
     const effectivePivot = pivotFrame || tab?.pivotItem;
 
-    setTabs((prev) => prev.map((t) => (t.key === tabKey ? { ...t, status: "running" } : t)));
+    if (tabKey === activeKey) setFocusedId(null);
+    setTabs((prev) => prev.map((t) => (t.key === tabKey ? { ...t, status: "running", results: [], total: 0, latency: 0 } : t)));
     try {
       const res = await runSearchQuery(tab, effectivePivot);
       if (!isLatestSearch()) return;
@@ -119,6 +124,7 @@ export default function Workstation({ view, onSwitchView }) {
       setTabs((prev) =>
         prev.map((t) => (t.key === tabKey ? { ...t, status: "done", results: res.items, total: res.totalItems, latency: res.latency } : t))
       );
+      if (tabKey === activeKey) setFocusedId(res.items?.[0]?.id || null);
       setBackend({
         backend: res.source === "live" ? "online" : "offline",
         demo: res.source !== "live",
@@ -135,7 +141,7 @@ export default function Workstation({ view, onSwitchView }) {
 
   /* debounced auto-run on query/type/param changes (IMAGE is explicit - requires a seed) */
   useEffect(() => {
-    if (!activeTab || editingKey || activeTab.searchType === "IMAGE") return;
+    if (!activeTab || editingKey || activeTab.searchType === "IMAGE" || activeTab.searchType === "AGENT") return;
     if (!String(activeTab.query || "").trim()) return;
     const id = setTimeout(() => {
       runSearch(activeTab, null);
@@ -145,7 +151,9 @@ export default function Workstation({ view, onSwitchView }) {
 
   const runActive = () => {
     const tab = tabs.find((t) => t.key === activeKey);
-    if (tab) runSearch(tab, tab.pivotItem);
+    if (!tab) return;
+    if (tab.searchType === "AGENT") runAgentSearchFromTab(tab);
+    else runSearch(tab, tab.pivotItem);
   };
 
 
@@ -350,6 +358,87 @@ export default function Workstation({ view, onSwitchView }) {
     });
     toast.success(`Deep search returned ${items.length} frames`);
   };
+  const formatAgentSearchMessage = (result, addedLabel) => {
+    const queries = Array.isArray(result?.queriesUsed) ? result.queriesUsed : [];
+    const routing = result?.routing || result?.plan?.routing || {};
+    const queryLines = queries.slice(0, 4).map((query, index) => `${index + 1}. ${query.queryEn || query.query || ""}`);
+    const routeLine = ["visual", "ocr", "asr"]
+      .map((key) => `${key.toUpperCase()} ${Number(routing[key] || 0).toFixed(1)}`)
+      .join(" | ");
+    return [
+      "Expanded queries:",
+      ...(queryLines.length ? queryLines : ["1. " + (result?.plan?.original_query || "")]),
+      "",
+      "Routing:",
+      routeLine,
+      "",
+      `Results added to ${addedLabel}: ${result?.totalItems || 0} keyframes.`,
+    ].join("\n");
+  };
+
+  const applyAgentSearchResults = (query, result) => {
+    const items = Array.isArray(result?.items) ? result.items : [];
+    const fresh = makeTab();
+    fresh.searchType = "AGENT";
+    fresh.query = query;
+    fresh.status = "done";
+    fresh.results = items;
+    fresh.total = result?.totalItems || items.length;
+    fresh.latency = result?.latency || 0;
+    setTabs((prev) => [...prev, fresh]);
+    setActiveKey(fresh.key);
+    setFocusedId(items[0]?.id || null);
+    setBackend({
+      backend: result?.source === "live" ? "online" : "offline",
+      demo: result?.source !== "live",
+      note: result?.source === "live" ? "FASTAPI AGENT" : "LOCAL MOCK",
+      at: new Date().toLocaleTimeString("en-GB", { hour12: false }),
+    });
+    toast.success(`Agent Search added ${fresh.total} frames to ${fresh.label}`);
+    return fresh.label;
+  };
+
+  const runAgentSearchFromTab = async (tab) => {
+    const query = String(tab?.query || "").trim();
+    if (!query) return;
+    try {
+      const result = await runAgentSearchQuery(tab);
+      applyAgentSearchResults(query, result);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Agent Search failed");
+    }
+  };
+
+  const sendAgentSearch = async () => {
+    const text = agentSearchInput.trim();
+    if (!text || agentSearchStatus === "thinking") return;
+    const params = activeTab?.params || { topk: 100, clip: true, clipv2: false };
+    const userMsg = { id: `a${++chatSeq}`, role: "user", text, demo: false };
+    setAgentSearchMsgs((prev) => [...prev, userMsg]);
+    setAgentSearchInput("");
+    setAgentSearchStatus("thinking");
+
+    try {
+      const result = await runAgentSearchQuery({ searchType: "AGENT", query: text, params });
+      const addedLabel = applyAgentSearchResults(text, result);
+      const reply = {
+        id: `a${++chatSeq}`,
+        role: "assistant",
+        text: formatAgentSearchMessage(result, addedLabel),
+        demo: result?.source !== "live",
+        queriesUsed: result?.queriesUsed || [],
+        queryTitle: "Expanded queries",
+        routing: result?.routing || result?.plan?.routing || {},
+        mustHaveChecks: result?.plan?.must_have_checks || result?.plan?.search_plan?.must_have_checks || [],
+      };
+      setAgentSearchMsgs((prev) => [...prev, reply]);
+      setAgentSearchStatus("idle");
+    } catch (error) {
+      setAgentSearchStatus("err");
+      toast.error(error instanceof Error ? error.message : "Agent Search failed");
+    }
+  };
+
   /* ---------- copilot actions ---------- */
   const sendChat = async () => {
     const text = chatInput.trim();
@@ -365,7 +454,8 @@ export default function Workstation({ view, onSwitchView }) {
     try {
       const result = await askCopilot(text, frames);
       if (Array.isArray(result?.frames) && result.frames.length) {
-        applyDeepSearchResults(result?.searchQuery || text, result.frames);
+        if (result?.mode === "agent_search") applyAgentSearchResults(result?.searchQuery || text, { items: result.frames, totalItems: result.frames.length, latency: 0, source: "live" });
+        else applyDeepSearchResults(result?.searchQuery || text, result.frames);
       }
       const reply = {
         id: `c${++chatSeq}`,
@@ -374,6 +464,9 @@ export default function Workstation({ view, onSwitchView }) {
         frames: Array.isArray(result?.frames) && result.frames.length ? result.frames : frames,
         demo: Boolean(result?.demo),
         queriesUsed: result?.queriesUsed || [],
+        queryTitle: result?.mode === "agent_search" ? "Expanded queries" : "Queries used",
+        routing: result?.routing || {},
+        mustHaveChecks: result?.searchPlan?.must_have_checks || result?.searchPlan?.search_plan?.must_have_checks || [],
       };
       setChatMsgs((prev) => [...prev, reply]);
       setChatStatus("idle");
@@ -586,6 +679,7 @@ export default function Workstation({ view, onSwitchView }) {
             tab={activeTab}
             onPatch={patchTab}
             onRun={runActive}
+            onAgentRun={() => activeTab && runAgentSearchFromTab(activeTab)}
             searchRef={searchRef}
             toast={toast}
           />
@@ -639,6 +733,12 @@ export default function Workstation({ view, onSwitchView }) {
             onStartResize={startChatResize}
             onUseInSearch={useTranslatedInSearch}
             onUseInChat={useTranslatedInChat}
+            agentMessages={agentSearchMsgs}
+            agentStatus={agentSearchStatus}
+            agentInput={agentSearchInput}
+            setAgentInput={setAgentSearchInput}
+            onAgentSearch={sendAgentSearch}
+            agentComposerRef={agentComposerRef}
           />
         </div>
       </div>

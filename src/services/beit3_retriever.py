@@ -14,6 +14,7 @@ incompatible with this 1024-d FAISS index).
 
 from __future__ import annotations
 
+import bisect
 import json
 import csv
 import logging
@@ -218,7 +219,7 @@ class BEiT3Retriever:
             logger.warning("map-keyframes directory not found; timeline timestamps skipped: %s", path)
             return {}
 
-        lookup: dict[str, dict[str, dict[int, dict[str, Any]]]] = {}
+        lookup: dict[str, dict[str, Any]] = {}
         for csv_path in path.glob("*.csv"):
             by_n: dict[int, dict[str, Any]] = {}
             by_frame_idx: dict[int, dict[str, Any]] = {}
@@ -238,7 +239,7 @@ class BEiT3Retriever:
             except OSError as exc:
                 logger.warning("Skipping unreadable map-keyframes file %s: %s", csv_path, exc)
                 continue
-            lookup[csv_path.stem] = {"n": by_n, "frame_idx": by_frame_idx}
+            lookup[csv_path.stem] = {"n": by_n, "frame_idx": by_frame_idx, "frame_idx_values": sorted(by_frame_idx)}
         logger.info("Loaded keyframe timestamp maps for %d videos from %s", len(lookup), path)
         return lookup
 
@@ -269,9 +270,44 @@ class BEiT3Retriever:
         mapping = self._keyframe_time_by_video.get(str(video_id))
         if not mapping:
             return None
-        for number in self._candidate_frame_numbers(*frame_values):
+        numbers = self._candidate_frame_numbers(*frame_values)
+        for number in numbers:
             if number in mapping["frame_idx"]:
-                return mapping["frame_idx"][number]
+                return {**mapping["frame_idx"][number], "timestamp_source": "map_frame_idx_exact"}
+        for number in numbers:
+            if number in mapping["n"]:
+                return {**mapping["n"][number], "timestamp_source": "map_keyframe_number_exact"}
+
+        frame_idx_values = mapping.get("frame_idx_values") or []
+        if not frame_idx_values:
+            return None
+        for number in numbers:
+            # Treat large numeric frame ids as source frame indexes. Some corpus
+            # metadata lands between sampled keyframes, so an exact CSV hit is
+            # not guaranteed. A small nearest-neighbor tolerance prevents the
+            # frontend from falling back to frame_id / 25 and seeking the wrong
+            # point in public video streams.
+            if number < 1000:
+                continue
+            pos = bisect.bisect_left(frame_idx_values, number)
+            candidates = []
+            if pos < len(frame_idx_values):
+                candidates.append(frame_idx_values[pos])
+            if pos > 0:
+                candidates.append(frame_idx_values[pos - 1])
+            if not candidates:
+                continue
+            nearest = min(candidates, key=lambda value: abs(value - number))
+            info = mapping["frame_idx"][nearest]
+            fps = float(info.get("fps") or 25.0)
+            tolerance = max(12, int(round(fps * 1.25)))
+            if abs(nearest - number) <= tolerance:
+                return {
+                    **info,
+                    "timestamp_source": "map_frame_idx_nearest",
+                    "timestamp_matched_frame_idx": nearest,
+                    "timestamp_frame_idx_delta": nearest - number,
+                }
         return None
     def _validate_consistency(self) -> None:
         ntotal = self._index.ntotal
@@ -456,6 +492,11 @@ class BEiT3Retriever:
             result["fps"] = time_info["fps"]
             result["source_frame_idx"] = time_info["source_frame_idx"]
             result["keyframe_number"] = time_info["keyframe_number"]
+            result["timestamp_source"] = time_info.get("timestamp_source")
+            if time_info.get("timestamp_matched_frame_idx") is not None:
+                result["timestamp_matched_frame_idx"] = time_info.get("timestamp_matched_frame_idx")
+            if time_info.get("timestamp_frame_idx_delta") is not None:
+                result["timestamp_frame_idx_delta"] = time_info.get("timestamp_frame_idx_delta")
         if self._video_meta_by_id is not None and video_id in self._video_meta_by_id:
             video_row = {
                 k: self._to_json_safe(v) for k, v in self._video_meta_by_id[video_id].items()

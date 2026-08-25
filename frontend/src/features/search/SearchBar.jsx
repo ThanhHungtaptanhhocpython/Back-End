@@ -3,7 +3,7 @@ import { SearchOutlined, UploadOutlined, VideoCameraOutlined } from "@ant-design
 import { SEARCH_TYPES } from "../../shared/constants";
 import Keycap from "../../components/Keycap";
 
-export default function SearchBar({ tab, onPatch, onRun, searchRef, toast }) {
+export default function SearchBar({ tab, onPatch, onRun, onAgentRun, searchRef, toast }) {
   const fileRef = useRef(null);
   const isImage = tab.searchType === "IMAGE";
   return (
@@ -94,6 +94,9 @@ export default function SearchBar({ tab, onPatch, onRun, searchRef, toast }) {
       <div className="ws-runbar">
         <button className="ws-btn primary" onClick={onRun} disabled={tab.status === "running"}>
           {tab.status === "running" ? "Searching..." : "Search"}
+        </button>
+        <button className="ws-btn" onClick={onAgentRun} disabled={tab.status === "running" || !String(tab.query || "").trim()} title="Run AI Query Coordinator">
+          <SearchOutlined /> Agent Search
         </button>
       </div>
     </div>

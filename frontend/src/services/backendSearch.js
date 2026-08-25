@@ -9,6 +9,7 @@ const SEARCH_ENDPOINTS = Object.freeze({
   ASR: "asrsearch",
   "OCR+OD": "ocrandodsearch",
   MULTIMODAL: "multimodalsearch",
+  AGENT: "agentsearch",
 });
 
 const SEARCH_MODES = new Set(["demo", "auto", "live"]);
@@ -44,6 +45,18 @@ function normaliseScore(value, rank, total) {
   const score = Number(value);
   if (Number.isFinite(score)) return Math.max(0, Math.min(1, score));
   return total > 0 ? Math.max(0, 1 - (rank - 1) / total) : 0;
+}
+function dedupeItemsById(items) {
+  const seen = new Set();
+  const deduped = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const id = String(item?.id || "");
+    const key = id || `${item?.videoKey || ""}:${item?.frameName || item?.frameKey || ""}:${item?.image || ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(item);
+  }
+  return deduped;
 }
 
 function imageSource(value) {
@@ -137,19 +150,29 @@ export function getSearchConfig(env = viteEnv()) {
 export function normalizeBackendItem(item, rank, total, baseUrl = "") {
   const raw = item && typeof item === "object" ? item : {};
   const faissIndex = firstDefined(raw.faiss_index, raw.faiss_id_clip, raw.faiss_id, raw.faiss_idx, raw.nearest_faiss_id, raw.vector_id);
-  const frameKey = firstDefined(raw.frame_key, raw.global_frame_id, raw.frame_id, raw.id, faissIndex, rank);
+  const frameKey = firstDefined(raw.frame_key, raw.frame_id, raw.n, raw.global_frame_id, raw.id, faissIndex, rank);
   const videoKey = String(firstDefined(raw.video_key, raw.video_id, raw.videoKey, "unknown-video"));
   const folderKey = String(firstDefined(raw.folder_key, raw.folderKey, raw.namespace, raw.split, "UNKNOWN"));
   const timestamp = finiteNumber(raw.timestamp);
   const fps = positiveInteger(raw.fps, 25);
-  const scoreValue = firstDefined(raw.final_score, raw.normalized_score, raw.score, raw._score);
+  const scoreValue = firstDefined(raw.verification_score, raw.final_score, raw.normalized_score, raw.score, raw._score);
   const frameName = String(firstDefined(raw.frame_name, raw.frameName, `${videoKey}_${frameKey}`));
+  const submissionFrameId = finiteNumber(firstDefined(raw.submission_frame_id, raw.submissionFrameId, raw.frame_id, raw.frame_key, raw.n, frameKey), rank);
 
-  const framePath = firstDefined(raw.frame_path, raw.framePath);
+  let framePath = firstDefined(raw.frame_path, raw.framePath);
   let resolvedImage = firstDefined(raw.image, raw.thumbnail, raw.image_url);
+  if (!resolvedImage && !framePath && videoKey && videoKey !== "unknown-video") {
+    const split = String(firstDefined(raw.split, raw.folder_key, raw.folderKey, raw.namespace, videoKey.split("_")[0], "UNKNOWN"));
+    let frameFile = String(firstDefined(raw.frame_id, raw.frame_idx, raw.keyframe_number, raw.frame_name, frameKey)).trim();
+    const prefix = `${videoKey}_`;
+    if (frameFile.startsWith(prefix)) frameFile = frameFile.slice(prefix.length);
+    if (!/\.(webp|jpe?g|png)$/i.test(frameFile)) frameFile = `${frameFile}.webp`;
+    framePath = `${split}/${videoKey}/${frameFile}`;
+  }
   if (!resolvedImage && framePath) {
     if (baseUrl) {
-      resolvedImage = `${baseUrl.replace(/\/+$/, "")}/keyframes/${framePath.replace(/^\/+/, "")}`;
+      const imageBaseUrl = baseUrl.replace(/\/users$/i, "").replace(/\/+$/, "");
+      resolvedImage = `${imageBaseUrl}/keyframes/${framePath.replace(/^\/+/, "")}`;
     } else {
       resolvedImage = `/keyframes/${framePath.replace(/^\/+/, "")}`;
     }
@@ -172,13 +195,19 @@ export function normalizeBackendItem(item, rank, total, baseUrl = "") {
   return {
     id: uniqueId,
     gid: finiteNumber(firstDefined(raw.global_frame_id, raw.id, rank), rank),
-    globalFrameId: finiteNumber(firstDefined(raw.global_frame_id, raw.frame_key, raw.id, rank), rank),
+    globalFrameId: submissionFrameId,
+    submissionFrameId,
     folderKey,
     videoKey,
     camera: String(firstDefined(raw.camera, raw.camera_id, "BACKEND")),
     frameKey: String(frameKey),
     frameName,
     timestamp,
+    timestampSource: raw.timestamp_source,
+    timestampMatchedFrameIdx: raw.timestamp_matched_frame_idx,
+    timestampFrameIdxDelta: raw.timestamp_frame_idx_delta,
+    sourceFrameIdx: raw.source_frame_idx,
+    keyframeNumber: raw.keyframe_number,
     timecode: String(firstDefined(raw.timecode, toTimecode(timestamp, fps))),
     fps,
     width: finiteNumber(raw.width),
@@ -190,6 +219,11 @@ export function normalizeBackendItem(item, rank, total, baseUrl = "") {
     score: normaliseScore(scoreValue, rank, total),
     rank,
     answer: raw.answer,
+    reason: firstDefined(raw.reason, raw.agent_reason),
+    verificationScore: raw.verification_score,
+    agentVerification: raw.agent_verification,
+    agentMatchedChecks: raw.agent_matched_checks,
+    agentMissingChecks: raw.agent_missing_checks,
     ocrText: firstDefined(raw.ocr_text, raw.ocrText),
     backend: raw,
     ranking: {
@@ -214,10 +248,13 @@ export function normalizeBackendResponse(payload, { type, latency }, baseUrl = "
     throw new BackendSearchError("Backend response did not include a result list.");
   }
 
-  const totalItems = positiveInteger(payload.data.total_items, payload.data.items.length);
+  const rawTotalItems = positiveInteger(payload.data.total_items, payload.data.items.length);
+  const items = dedupeItemsById(
+    payload.data.items.map((item, index) => normalizeBackendItem(item, index + 1, rawTotalItems, baseUrl))
+  ).map((item, index) => ({ ...item, rank: index + 1 }));
   return {
-    items: payload.data.items.map((item, index) => normalizeBackendItem(item, index + 1, totalItems, baseUrl)),
-    totalItems,
+    items,
+    totalItems: items.length,
     latency,
     type,
     mode: "FASTAPI LIVE",
@@ -225,8 +262,100 @@ export function normalizeBackendResponse(payload, { type, latency }, baseUrl = "
   };
 }
 
+function cleanChatBaseUrl(baseUrl) {
+  return String(baseUrl || "").trim().replace(/\/users$/i, "").replace(/\/+$/, "");
+}
+
+function normalizePlanQueries(queries = []) {
+  return Array.isArray(queries) ? queries.map((query) => ({
+    kind: String(query?.kind || "query"),
+    query: String(query?.query || "").trim(),
+    queryEn: String(query?.query_en || query?.queryEn || query?.query || "").trim(),
+  })).filter((query) => query.query || query.queryEn) : [];
+}
+
+export function normalizeAgentSearchResponse(payload, { latency, type = "AGENT" }, baseUrl = "") {
+  const base = normalizeBackendResponse(payload, { type, latency }, baseUrl);
+  const plan = payload?.plan || payload?.data?.plan || {};
+  return {
+    ...base,
+    plan,
+    response: String(payload?.response || payload?.message || "").trim(),
+    queriesUsed: normalizePlanQueries(plan.expanded_queries || payload?.data?.queries_used || []),
+    routing: plan.routing || payload?.data?.routing || {},
+    mode: "FASTAPI AGENT",
+  };
+}
+
 export function isTransportError(error) {
   return error instanceof BackendSearchError && error.kind === "transport";
+}
+
+export async function runBackendAgentSearch(tab, { config = getSearchConfig(), fetchImpl = globalThis.fetch } = {}) {
+  if (!config.baseUrl) {
+    throw new BackendSearchError("VITE_SEARCH_API_BASE_URL is required for Agent Search.", { kind: "config" });
+  }
+  if (typeof fetchImpl !== "function") {
+    throw new BackendSearchError("Fetch is unavailable in this environment.", { kind: "transport" });
+  }
+
+  const params = tab?.params || {};
+  const query = String(tab?.query || "").trim();
+  if (!query) {
+    throw new BackendSearchError("Agent Search query is empty.", { kind: "request" });
+  }
+
+  const startedAt = Date.now();
+  let response;
+  try {
+    response = await fetchImpl(apiUrl(config.baseUrl, "agentsearch"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, topk: positiveInteger(params.topk, 100), clip: Boolean(params.clip), clipv2: Boolean(params.clipv2) }),
+    });
+  } catch (cause) {
+    throw new BackendSearchError("FastAPI Agent Search service is unavailable.", { kind: "transport", cause });
+  }
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new BackendSearchError(payload?.message || payload?.detail || `Backend Agent Search failed with HTTP ${response.status}.`, {
+      kind: "response",
+      status: response.status,
+    });
+  }
+
+  return normalizeAgentSearchResponse(payload, { latency: Date.now() - startedAt }, config.baseUrl);
+}
+
+export async function runAgentChat({ sessionId, message, topk = 100, endpoint = "conversational_kis" }, { config = getSearchConfig(), fetchImpl = globalThis.fetch } = {}) {
+  if (!config.baseUrl) {
+    throw new BackendSearchError("VITE_SEARCH_API_BASE_URL is required for agent chat.", { kind: "config" });
+  }
+  if (typeof fetchImpl !== "function") {
+    throw new BackendSearchError("Fetch is unavailable in this environment.", { kind: "transport" });
+  }
+
+  const baseUrl = cleanChatBaseUrl(config.baseUrl);
+  const response = await fetchImpl(`${baseUrl}/chat/${endpoint}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, message, topk }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new BackendSearchError(payload?.message || payload?.detail || `Backend agent chat failed with HTTP ${response.status}.`, {
+      kind: "response",
+      status: response.status,
+    });
+  }
+  return {
+    sessionId: payload?.session_id || sessionId,
+    response: String(payload?.response || ""),
+    data: payload?.data || null,
+    mode: endpoint === "agent_search" ? "AGENT SEARCH LIVE" : "AGENT LIVE",
+    source: "live",
+  };
 }
 
 /** Execute one FastAPI search request. Callers decide whether a transport error may fall back. */
@@ -321,4 +450,3 @@ export async function fetchVideoTimeline(videoId, aroundFrameId = null, limit = 
 }
 
 export { SEARCH_ENDPOINTS };
-

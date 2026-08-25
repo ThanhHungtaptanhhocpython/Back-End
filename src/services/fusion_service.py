@@ -113,8 +113,13 @@ def merge_and_rank(
             merged[fid] = {
                 "faiss_id": fid,
                 "video_id": base_doc.get("video_id", ""),
+                "frame_id": base_doc.get("frame_id"),
+                "frame_idx": base_doc.get("frame_idx"),
                 "frame_name": base_doc.get("frame_name", ""),
+                "frame_path": base_doc.get("frame_path"),
                 "timestamp": base_doc.get("timestamp", 0.0),
+                "namespace": base_doc.get("namespace"),
+                "folder_key": base_doc.get("folder_key") or base_doc.get("namespace"),
                 "score_breakdown": {
                     "visual": 0.0,
                     "ocr": 0.0,
@@ -134,8 +139,9 @@ def merge_and_rank(
         # Capture base64 image if Faiss returned it
         if "image" in item:
             doc["image"] = item["image"]
-        if "folder_key" in item:
-            doc["folder_key"] = item["folder_key"]
+        for key in ("frame_id", "frame_idx", "frame_path", "namespace", "folder_key", "fps", "source_frame_idx", "keyframe_number"):
+            if item.get(key) not in (None, ""):
+                doc[key] = item[key]
 
     # Process OCR
     for item in ocr_items:
@@ -283,3 +289,5 @@ def multimodal_search(
         return rerank_pool + bottom_pool
 
     return initial_results
+
+

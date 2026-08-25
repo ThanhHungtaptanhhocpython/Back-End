@@ -65,6 +65,14 @@ function wantsDeepSearch(text) {
   ].some((marker) => prompt.includes(marker));
 }
 
+
+function wantsAgentSearch(text, frames = []) {
+  if (Array.isArray(frames) && frames.length) return false;
+  const prompt = normaliseIntentText(text);
+  const searchTerms = ["tim", "find", "search", "canh", "khung hinh", "frame", "clip", "video", "vach dich", "xe dap", "nguoi", "xe", "bien", "duong"];
+  const questionTerms = ["la gi", "tai sao", "vi sao", "nhu the nao", "explain", "what", "why", "how"];
+  return searchTerms.some((term) => prompt.includes(term)) && !questionTerms.some((term) => prompt.includes(term));
+}
 function stripLeadingSearchIntent(text) {
   return String(text || "")
     .replace(/^\s*(t\u00f4i|toi)?\s*(ch\u01b0a|chua|kh\u00f4ng|khong)?\s*(t\u00ecm|tim)\s*(\u0111\u01b0\u1ee3c|duoc)?\s*/i, "")
@@ -128,16 +136,18 @@ export async function askCopilot(text, frames = [], { fetchImpl = globalThis.fet
   }
 
   const deep = wantsDeepSearch(prompt);
+  const agentSearch = !deep && wantsAgentSearch(prompt, frames);
   const deepPrompt = deep ? cleanDeepSearchPrompt(prompt) : prompt;
 
   try {
-    const endpoint = `${baseUrl}/chat/${deep ? "deep_keyframe_search" : "conversational_kis"}`;
+    const endpointName = deep ? "deep_keyframe_search" : agentSearch ? "agent_search" : "conversational_kis";
+    const endpoint = `${baseUrl}/chat/${endpointName}`;
     const response = await fetchImpl(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         session_id: getSessionId(),
-        message: deep ? deepPrompt : buildChatMessage(prompt, frames),
+        message: deep || agentSearch ? deepPrompt : buildChatMessage(prompt, frames),
         topk: deep ? 24 : 100,
         per_query: 36,
       }),
@@ -155,11 +165,12 @@ export async function askCopilot(text, frames = [], { fetchImpl = globalThis.fet
     }
 
     const deepFrames = deep ? normalizeDeepFrames(payload, baseUrl) : [];
-    const chatFrames = deep ? [] : normalizeChatFrames(payload, baseUrl);
-    const resultFrames = deep ? deepFrames : chatFrames;
+    const agentFrames = agentSearch ? normalizeChatFrames(payload, baseUrl) : [];
+    const chatFrames = deep || agentSearch ? [] : normalizeChatFrames(payload, baseUrl);
+    const resultFrames = deep ? deepFrames : agentSearch ? agentFrames : chatFrames;
     const queriesUsed = formatQueries(payload?.data?.queries_used || []);
     const totalCandidates = Number(payload?.data?.total_candidates || 0);
-    const frameSummary = deepFrames.length ? `\n\nAdded ${deepFrames.length} keyframes to a Deep Search results tab.` : "";
+    const frameSummary = deepFrames.length ? `\n\nAdded ${deepFrames.length} keyframes to a Deep Search results tab.` : agentFrames.length ? `\n\nAdded ${agentFrames.length} keyframes to an Agent Search results tab.` : "";
     const candidateSummary = totalCandidates ? ` Candidates before dedup: ${totalCandidates}.` : "";
 
     if (responseText || resultFrames.length) {
@@ -168,8 +179,10 @@ export async function askCopilot(text, frames = [], { fetchImpl = globalThis.fet
         demo: false,
         frames: resultFrames,
         queriesUsed,
-        searchQuery: deep ? deepPrompt : undefined,
+        searchQuery: deep || agentSearch ? deepPrompt : undefined,
         mode: payload?.data?.mode,
+        routing: payload?.data?.routing || payload?.data?.plan?.routing || {},
+        searchPlan: payload?.data?.plan || {},
         error: payload?.success === true ? undefined : responseText,
       };
     }
@@ -180,3 +193,5 @@ export async function askCopilot(text, frames = [], { fetchImpl = globalThis.fet
     return { text: mockChatReply(prompt, frames), demo: true, error: error instanceof Error ? error.message : String(error) };
   }
 }
+
+

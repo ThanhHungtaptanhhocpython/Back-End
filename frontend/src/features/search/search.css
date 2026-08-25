@@ -318,3 +318,14 @@
   border-color: var(--ws-green);
   color: var(--ws-green);
 }
+
+.ws-runbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ws-runbar .ws-btn {
+  flex: 1;
+  justify-content: center;
+}

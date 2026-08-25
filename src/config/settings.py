@@ -106,6 +106,16 @@ class Settings(BaseSettings):
     openrouter_app_name: str = "AIC Backend"
     openrouter_translate_model: str | None = None
     openrouter_translate_max_tokens: int = 384
+    agent_llm_enabled: bool = False
+    agent_llm_model: str | None = None
+    agent_llm_max_tokens: int = 900
+    agent_vlm_enabled: bool = False
+    agent_vlm_model: str = "google/gemini-2.5-flash"
+    agent_vlm_max_candidates: int = 12
+    agent_vlm_batch_size: int = 4
+    agent_vlm_max_tokens: int = 900
+    agent_vlm_timeout_seconds: float = 45.0
+    agent_vlm_image_max_side: int = 768
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-3-5-sonnet-20240620"
     anthropic_max_tokens: int = 2048
@@ -126,6 +136,12 @@ class Settings(BaseSettings):
     }
 
 
+    @field_validator("debug", mode="before")
+    @classmethod
+    def _coerce_debug_bool(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip().lower() in {"release", "production", "prod"}:
+            return False
+        return value
     @field_validator(
         "faiss_index_path",
         "metadata_path",
@@ -152,6 +168,7 @@ class Settings(BaseSettings):
         "nvidia_api_key",
         "google_api_key",
         "openrouter_translate_model",
+        "agent_llm_model",
         mode="before",
     )
     @classmethod

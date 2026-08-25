@@ -54,8 +54,8 @@ function imageSource(value) {
 
 function temporalEvents(query) {
   const events = String(query || "")
-    .split(/\n+/)
-    .map((event) => event.trim())
+    .split(/\n+|\s*->\s*|\s*(?:ti\u1ebfp theo|tiep theo)(?:\s+l\u00e0\s+c\u1ea3nh|\s+la\s+canh|\s+l\u00e0|\s+la)?\s*|\s*(?:sau \u0111\u00f3|sau do)(?:\s+\u0111\u01b0\u1ee3c|\s+duoc|\s+l\u00e0|\s+la)?\s*|\s*(?:r\u1ed3i|roi)\s*/i)
+    .map((event) => event.replace(/^\s*(c\u1ea3nh|canh|khung h\u00ecnh|khung hinh|frame|clip|video)\s*(n\u00e0y|nay)?\s*:?\s*/i, "").trim())
     .filter(Boolean)
     .map((event) => ({ query: event }));
   return events.length ? events : [{ query: "" }];

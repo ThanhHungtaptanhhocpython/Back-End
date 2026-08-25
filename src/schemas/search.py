@@ -17,4 +17,5 @@ class TranslateResponse(BaseModel):
     translated_text: str
     from_lang: str
     to_lang: str
-
+    translated: Optional[bool] = None
+    provider: Optional[str] = None

@@ -11,9 +11,91 @@ import {
   TranslationOutlined,
   VideoCameraOutlined,
 } from "@ant-design/icons";
-import { translateText } from "../../shared/adapters";
+import { translateTextDetailed } from "../../services/translateService";
 import useDialogFocus from "../../hooks/useDialogFocus";
 
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // clipboard unavailable - no-op
+  }
+}
+
+function QueryList({ queries }) {
+  if (!Array.isArray(queries) || !queries.length) return null;
+  return (
+    <div className="ws-query-list">
+      <div className="ws-query-list-title">Queries used</div>
+      {queries.map((item, index) => {
+        const query = String(item?.query || "").trim();
+        const queryEn = String(item?.queryEn || item?.query_en || query).trim();
+        const kind = String(item?.kind || "query").toUpperCase();
+        return (
+          <div className="ws-query-item" key={`${kind}-${query}-${index}`}>
+            <div className="ws-query-kind">{kind}</div>
+            <div className="ws-query-lines">
+              {query ? (
+                <div className="ws-query-line">
+                  <span className="ws-query-lang">VI</span>
+                  <span className="ws-query-text">{query}</span>
+                  <button className="ws-query-copy" onClick={() => copyText(query)} title="Copy Vietnamese query">
+                    <CopyOutlined />
+                  </button>
+                </div>
+              ) : null}
+              {queryEn ? (
+                <div className="ws-query-line en">
+                  <span className="ws-query-lang">EN</span>
+                  <span className="ws-query-text">{queryEn}</span>
+                  <button className="ws-query-copy" onClick={() => copyText(queryEn)} title="Copy English query">
+                    <CopyOutlined />
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+function inlineMessageParts(text, timestamp, lineKey) {
+  const tokens = String(text || "").split(/(\[[^\]]+\]\(https?:\/\/[^)\s]+\)|\*\*[^*]+\*\*)/g);
+  return tokens.filter(Boolean).map((token, index) => {
+    const link = token.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/);
+    if (link) {
+      let href = link[2];
+      if (Number.isFinite(timestamp) && /(?:youtube\.com\/watch|youtu\.be\/)/i.test(href)) {
+        const separator = href.includes("?") ? "&" : "?";
+        href = /[?&]t=/.test(href) ? href : href + separator + "t=" + Math.floor(timestamp) + "s";
+      }
+      return <a key={lineKey + "-link-" + index} href={href} target="_blank" rel="noreferrer">{link[1]}</a>;
+    }
+    const strong = token.match(/^\*\*([^*]+)\*\*$/);
+    if (strong) return <strong key={lineKey + "-strong-" + index}>{strong[1]}</strong>;
+    return <span key={lineKey + "-text-" + index}>{token}</span>;
+  });
+}
+
+function InteractiveMessage({ text }) {
+  let latestTimestamp = null;
+  return (
+    <div className="ws-msg-text">
+      {String(text || "").split(/\r?\n/).map((rawLine, index) => {
+        const secondsMatch = rawLine.match(/\(([0-9]+(?:\.[0-9]+)?)\s*gi(?:â|a)y\)/i);
+        if (secondsMatch) latestTimestamp = Number(secondsMatch[1]);
+        const heading = rawLine.match(/^#{1,6}\s+(.+)$/);
+        const line = heading ? heading[1] : rawLine;
+        return (
+          <div key={"message-line-" + index} className={heading ? "ws-msg-heading" : "ws-msg-line"}>
+            {line ? inlineMessageParts(line, latestTimestamp, index) : <br />}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 /* ---------- Q&A tab ---------- */
 function QaTab({ messages, status, input, setInput, onSend, ctxFrame, onClearCtx, composerRef }) {
   const listRef = useRef(null);
@@ -40,7 +122,8 @@ function QaTab({ messages, status, input, setInput, onSend, ctxFrame, onClearCtx
                 </div>
               ) : null}
               {m.role === "assistant" ? <span className="ws-demo-badge">{m.demo ? "DEMO" : "LIVE"}</span> : null}
-              <div className="ws-msg-text">{m.text}</div>
+              <InteractiveMessage text={m.text} />
+              <QueryList queries={m.queriesUsed} />
             </div>
           ))}
           {status === "thinking" ? (
@@ -96,16 +179,19 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
   const [override, setOverride] = useState(null);
   const [translated, setTranslated] = useState("");
   const [translating, setTranslating] = useState(false);
+  const [translationLive, setTranslationLive] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editBuf, setEditBuf] = useState("");
 
   const out = override !== null ? override : translated;
   const showOut = src.trim() !== "";
+  const canUseAsQuery = Boolean(out.trim()) && (translationLive || override !== null);
 
   useEffect(() => {
     const text = src.trim();
     if (!text || override !== null) {
       setTranslated("");
+      setTranslationLive(false);
       setTranslating(false);
       return;
     }
@@ -114,8 +200,11 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
     setTranslating(true);
     const timer = window.setTimeout(async () => {
       try {
-        const result = await translateText(text, dir);
-        if (!cancelled) setTranslated(result || "");
+        const result = await translateTextDetailed(text, dir);
+        if (!cancelled) {
+          setTranslated(result?.text || "");
+          setTranslationLive(Boolean(result?.live));
+        }
       } catch {
         if (!cancelled) setTranslated("");
       } finally {
@@ -176,7 +265,7 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
           <div className="ws-tr-trans">
             <div className="ws-tr-head">
               <span>Translated - {dir === "en-vi" ? "Vietnamese" : "English"}</span>
-              <span className="ws-demo-badge">{translating ? "LIVE..." : "LIVE"}</span>
+              <span className="ws-demo-badge">{translating ? "LIVE..." : translationLive ? "LIVE" : override !== null ? "EDITED" : "UNAVAILABLE"}</span>
             </div>
             {editing ? (
               <textarea
@@ -203,14 +292,19 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
             <button className="ws-btn small" onClick={() => copy(editing ? editBuf : out)} title="Copy translated text">
               <CopyOutlined /> Copy
             </button>
-            <button className="ws-btn small" onClick={() => onUseInSearch(editing ? editBuf : out)} title="Use translated text as search query">
+            <button
+              className="ws-btn small"
+              onClick={() => onUseInSearch(editing ? editBuf : out)}
+              disabled={!canUseAsQuery}
+              title={canUseAsQuery ? "Use translated text as search query" : "Translation is unavailable. Edit it into the target language before searching."}
+            >
               <SearchOutlined /> Use as query
             </button>
             <button className="ws-btn small" onClick={() => onUseInChat(editing ? editBuf : out)} title="Send translated text to the copilot">
               <MessageOutlined /> Use as prompt
             </button>
           </div>
-          <p className="ws-tr-note">Live translation via backend. Original text is always preserved.</p>
+          <p className="ws-tr-note">{translationLive || override !== null ? "Original text is always preserved." : "Translation is unavailable. The original text was kept and cannot be used as a translated search query."}</p>
         </div>
       ) : (
         <div className="ws-tr-empty">Enter text above to see a clearly-labelled live translation preview. The original text is never silently replaced.</div>
@@ -247,7 +341,9 @@ export default function ChatPanel({
           </button>
         </div>
       </div>
-      {chatTab === "qa" ? (
+      {/* Keep both panels mounted: switching tabs must not discard a translation
+          that is being edited or a request that is still in flight. */}
+      <div className="ws-chat-pane" hidden={chatTab !== "qa"}>
         <QaTab
           messages={messages}
           status={status}
@@ -258,9 +354,10 @@ export default function ChatPanel({
           onClearCtx={onClearCtx}
           composerRef={composerRef}
         />
-      ) : (
+      </div>
+      <div className="ws-chat-pane" hidden={chatTab !== "tr"}>
         <TranslationPanel onUseInSearch={onUseInSearch} onUseInChat={onUseInChat} />
-      )}
+      </div>
       <div className="ws-chat-foot">Copilot uses the backend when available and falls back to mock replies only on transport failure.</div>
     </div>
   );
@@ -291,7 +388,8 @@ export function ChatFocus({ open, messages, onClose }) {
                 </div>
               ) : null}
               {m.role === "assistant" ? <span className="ws-demo-badge">{m.demo ? "DEMO" : "LIVE"}</span> : null}
-              <div className="ws-msg-text">{m.text}</div>
+              <InteractiveMessage text={m.text} />
+              <QueryList queries={m.queriesUsed} />
             </div>
           ))}
         </div>

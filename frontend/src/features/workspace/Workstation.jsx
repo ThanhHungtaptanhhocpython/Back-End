@@ -55,7 +55,7 @@ export default function Workstation({ view, onSwitchView }) {
   const [editingKey, setEditingKey] = useState(null);
   const [backend, setBackend] = useState({ backend: "offline", demo: true, note: "LOCAL MOCK", at: "" });
   const [chatOpen, setChatOpen] = useState(true);
-  const [chatWidth, setChatWidth] = useState(400);
+  const [chatWidth, setChatWidth] = useState(500);
   const [chatMsgs, setChatMsgs] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatStatus, setChatStatus] = useState("idle");
@@ -68,6 +68,7 @@ export default function Workstation({ view, onSwitchView }) {
   const [undoState, setUndoState] = useState(null);
   const undoTimer = useRef(null);
   const invokeFocusStackRef = useRef([]);
+  const revealFocusedCardRef = useRef(false);
 
   const clock = useClock();
 
@@ -76,6 +77,7 @@ export default function Workstation({ view, onSwitchView }) {
   const trayRef = useRef(null);
   const composerRef = useRef(null);
   const cardRefs = useRef({});
+  const searchSeqRef = useRef(new Map());
 
   const activeTab = tabs.find((t) => t.key === activeKey) || tabs[0];
   const focusedItem = activeTab?.results.find((r) => r.id === focusedId) || null;
@@ -98,15 +100,24 @@ export default function Workstation({ view, onSwitchView }) {
   const runSearch = async (tab, pivotFrame) => {
     const query = String(tab?.query || "").trim();
     if (tab?.searchType !== "IMAGE" && !query) {
+      searchSeqRef.current.set(tab.key, (searchSeqRef.current.get(tab.key) || 0) + 1);
       setTabs((prev) => prev.map((t) => (t.key === tab.key ? { ...t, status: "idle", results: [], total: 0, latency: 0 } : t)));
       return;
     }
+
+    const tabKey = tab.key;
+    const requestId = (searchSeqRef.current.get(tabKey) || 0) + 1;
+    searchSeqRef.current.set(tabKey, requestId);
+    const isLatestSearch = () => searchSeqRef.current.get(tabKey) === requestId;
     const effectivePivot = pivotFrame || tab?.pivotItem;
-    setTabs((prev) => prev.map((t) => (t.key === tab.key ? { ...t, status: "running" } : t)));
+
+    setTabs((prev) => prev.map((t) => (t.key === tabKey ? { ...t, status: "running" } : t)));
     try {
       const res = await runSearchQuery(tab, effectivePivot);
+      if (!isLatestSearch()) return;
+
       setTabs((prev) =>
-        prev.map((t) => (t.key === tab.key ? { ...t, status: "done", results: res.items, total: res.totalItems, latency: res.latency } : t))
+        prev.map((t) => (t.key === tabKey ? { ...t, status: "done", results: res.items, total: res.totalItems, latency: res.latency } : t))
       );
       setBackend({
         backend: res.source === "live" ? "online" : "offline",
@@ -116,7 +127,8 @@ export default function Workstation({ view, onSwitchView }) {
       });
       toast.success(`${res.type} - ${res.totalItems} frames - ${res.mode} - ${res.latency}ms`);
     } catch (error) {
-      setTabs((prev) => prev.map((t) => (t.key === tab.key ? { ...t, status: "err" } : t)));
+      if (!isLatestSearch()) return;
+      setTabs((prev) => prev.map((t) => (t.key === tabKey ? { ...t, status: "err" } : t)));
       toast.error(error instanceof Error ? error.message : "Search failed");
     }
   };
@@ -317,6 +329,27 @@ export default function Workstation({ view, onSwitchView }) {
     setTimeout(() => composerRef.current?.focus(), 50);
   };
 
+  const applyDeepSearchResults = (query, items) => {
+    if (!Array.isArray(items) || !items.length) return;
+    const fresh = makeTab();
+    fresh.label = `Deep Search ${String(tabSeq).padStart(2, "0")}`;
+    fresh.searchType = "TEXT";
+    fresh.query = query;
+    fresh.status = "done";
+    fresh.results = items;
+    fresh.total = items.length;
+    fresh.latency = 0;
+    setTabs((prev) => [...prev, fresh]);
+    setActiveKey(fresh.key);
+    setFocusedId(items[0]?.id || null);
+    setBackend({
+      backend: "online",
+      demo: false,
+      note: "FASTAPI DEEP SEARCH",
+      at: new Date().toLocaleTimeString("en-GB", { hour12: false }),
+    });
+    toast.success(`Deep search returned ${items.length} frames`);
+  };
   /* ---------- copilot actions ---------- */
   const sendChat = async () => {
     const text = chatInput.trim();
@@ -331,12 +364,16 @@ export default function Workstation({ view, onSwitchView }) {
 
     try {
       const result = await askCopilot(text, frames);
+      if (Array.isArray(result?.frames) && result.frames.length) {
+        applyDeepSearchResults(result?.searchQuery || text, result.frames);
+      }
       const reply = {
         id: `c${++chatSeq}`,
         role: "assistant",
         text: result?.text || "No response returned.",
-        frames,
+        frames: Array.isArray(result?.frames) && result.frames.length ? result.frames : frames,
         demo: Boolean(result?.demo),
+        queriesUsed: result?.queriesUsed || [],
       };
       setChatMsgs((prev) => [...prev, reply]);
       setChatStatus("idle");
@@ -368,7 +405,7 @@ export default function Workstation({ view, onSwitchView }) {
     const startX = e.clientX;
     const startW = chatWidth;
     const move = (ev) => {
-      const w = Math.min(560, Math.max(320, startW + (startX - ev.clientX)));
+      const w = Math.min(720, Math.max(380, startW + (startX - ev.clientX)));
       setChatWidth(w);
     };
     const up = () => {
@@ -473,6 +510,7 @@ export default function Workstation({ view, onSwitchView }) {
       else if (code === "ArrowUp") idx -= cols;
       idx = Math.max(0, Math.min(ids.length - 1, idx));
     }
+    revealFocusedCardRef.current = true;
     setFocusedId(ids[idx]);
   };
 
@@ -489,9 +527,12 @@ export default function Workstation({ view, onSwitchView }) {
   useEffect(() => {
     const el = cardRefs.current[focusedId];
     if (el) {
-      el.focus();
-      el.scrollIntoView({ block: "nearest", inline: "nearest" });
+      el.focus({ preventScroll: true });
+      if (revealFocusedCardRef.current) {
+        el.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
     }
+    revealFocusedCardRef.current = false;
   }, [focusedId]);
 
   const registerRef = (id, el) => {
@@ -684,4 +725,3 @@ export default function Workstation({ view, onSwitchView }) {
     </div>
   );
 }
-

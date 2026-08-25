@@ -27,12 +27,10 @@ if BACKEND_ROOT not in sys.path:
     sys.path.insert(0, BACKEND_ROOT)
 
 # ---------------------------------------------------------------------------
-# src/__init__.py eagerly imports the deprecated Flask app, which in turn
-# imports the legacy OpenCLIP/Elasticsearch stack (src/utils/faiss_processing.py,
-# src/utils/elastic_processing.py). Those packages aren't needed to test the
-# BEiT3 retriever and aren't installed in every dev environment, so stub them
-# out before importing anything under `src`, matching the existing convention
-# in tests/test_task1_imagesearch.py.
+# Stub optional/heavy packages that aren't needed to test the BEiT3 retriever
+# and aren't installed in every dev environment (open_clip belongs to the
+# legacy OpenCLIP path; torchscale is only required when loading the real
+# checkpoint). setdefault keeps already-imported real modules intact.
 # ---------------------------------------------------------------------------
 for _mod in ("open_clip", "elasticsearch", "elasticsearch.helpers"):
     sys.modules.setdefault(_mod, MagicMock())
@@ -194,6 +192,10 @@ class SearchVisualIntegrationTests(unittest.TestCase):
         r._global_ids = self.df
         r._video_metadata = None
         r._video_meta_by_id = None
+        # Optional enrichment sources loaded by __init__ in production; empty
+        # here so _build_result skips them (timestamp falls back to frame_id).
+        r._keyframe_time_by_video = {}
+        r._media_info_by_id = {}
         r._columns = r._detect_columns(self.df)
         r._id_to_row = r._build_id_lookup(self.df, r._columns["vector_id"])
         r.encode_text = lambda query: self.query_vec  # bypass real BEiT3 forward

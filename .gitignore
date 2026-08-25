@@ -42,3 +42,4 @@ src/dict/objects/
 *.parquet
 *.spm
 src/dict/nw/*.bin
+src/dict/faiss_index.bin

@@ -15,9 +15,11 @@ from utils.faiss_processing import MyFaiss
 from utils.vlm_processing import VLMProcessor
 from utils.trake_processing import TRAKE
 from utils.elastic_processing import ElasticProcessor
+from src.config.settings import get_settings
 
-bin_clip_file = os.path.join(SRC_DIR, 'dict', 'nw', 'faiss_index_clip.bin')
-meta_data = os.path.join(SRC_DIR, 'dict', 'metadata_clip.json')
+settings = get_settings()
+bin_clip_file = str(settings.get_faiss_index_path())
+meta_data = str(settings.get_metadata_path())
 
 _cosine_faiss = None
 _trake_search = None
@@ -147,7 +149,7 @@ def getImageSearchById(image_id, k):
 
 
 
-# res = getImageDataSingleTextSearch("Clip đua xe đạp, góc flycam từ trên cao: Một vận động viên áo xanh dương-trắng vượt qua 3 vận động viên khác để lên dẫn đầu, sau đó giữ vị trí này đến khi về đích.", 5)
+# res = getImageDataSingleTextSearch("Cycling race, overhead flycam angle: rider in blue-white overtakes three riders and leads until the finish.", 5)
 # for item in res:
 #     print(item['faiss_id_clip'])
 

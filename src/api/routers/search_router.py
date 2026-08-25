@@ -1,3 +1,4 @@
+import logging
 from typing import Optional
 from fastapi import APIRouter, Form, UploadFile, File, Response, status
 from src.schemas.search import TextSearchRequest, TranslateRequest, TranslateResponse
@@ -18,7 +19,9 @@ def handle_translate(request: TranslateRequest):
         success=True,
         translated_text=translated_text,
         from_lang=request.from_lang,
-        to_lang=request.to_lang
+        to_lang=request.to_lang,
+        translated=translator.last_translated,
+        provider=translator.last_provider
     )
 
 
@@ -180,4 +183,3 @@ def handle_video_keyframes(
             message=str(exc),
             data=DataResponse(items=[], total_items=0)
         )
-

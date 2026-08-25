@@ -11,7 +11,7 @@
 export { translateText } from "../services/translateService.js";
 export { askCopilot } from "../services/copilotService.js";
 
-import { getSearchConfig, isTransportError, probeBackend, runBackendSearch } from "../services/backendSearch.js";
+import { getSearchConfig, isTransportError, runBackendSearch } from "../services/backendSearch.js";
 import { mockSearch } from "../mocks/searchEngine.js";
 
 /**

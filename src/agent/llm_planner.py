@@ -1,16 +1,12 @@
 import logging
-import os
-from pathlib import Path
 from typing import Any, Dict
 
-from dotenv import load_dotenv
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from src.agent.memory_manager import memory_manager
 from src.agent.tools import agent_tools
-
-load_dotenv(dotenv_path=Path(__file__).resolve().parents[2] / ".env", override=True)
+from src.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 _agent_executor = None
@@ -29,13 +25,14 @@ Reasoning workflow:
 1. Analyze whether the user needs broad visual search, OCR, ASR, VQA, or temporal search.
 2. Call the most relevant tool or tools.
 3. Synthesize results in natural Vietnamese.
-4. Do not print raw JSON arrays. Extract useful fields such as video_key, frame_key, ocr_text, and answer.
-5. If results are unclear, ask for more clues such as color, action, object, text, or time relationship.
+4. Do not print raw JSON arrays. For every retrieval match, report video_id/video_key, frame_key and timestamp so the user can locate it. Include OCR text or answer only when relevant.
+5. A tool result containing an 'error' field is a failed search. State that it failed and never claim that the user's description was found.
+6. If results are unclear, ask for more clues such as color, action, object, text, or time relationship.
 """
 
 
 def _provider_name() -> str:
-    return os.getenv("LLM_PROVIDER", "auto").strip().lower()
+    return get_settings().llm_provider.strip().lower()
 
 
 def _is_prompt_limit_error(message: str) -> bool:
@@ -64,13 +61,14 @@ def _safe_error_message(exc: Exception) -> str:
 
 
 def get_llm():
-    """Initialize an LLM from explicit provider env vars."""
+    """Initialize an LLM from provider settings."""
+    settings = get_settings()
     provider = _provider_name()
-    openai_key = os.getenv("OPENAI_API_KEY")
-    openrouter_key = os.getenv("OPENROUTER_API_KEY")
-    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-    nvidia_key = os.getenv("NVIDIA_API_KEY")
-    google_key = os.getenv("GOOGLE_API_KEY")
+    openai_key = settings.openai_api_key
+    openrouter_key = settings.openrouter_api_key
+    anthropic_key = settings.anthropic_api_key
+    nvidia_key = settings.nvidia_api_key
+    google_key = settings.google_api_key
 
     if provider not in {"auto", "openai", "openrouter", "anthropic", "claude", "nvidia", "nim", "nv", "google", "gemini"}:
         raise ValueError("LLM_PROVIDER must be one of: auto, openai, openrouter, anthropic, claude, nvidia, nim, nv, google, gemini.")
@@ -81,34 +79,34 @@ def get_llm():
         from langchain_openai import ChatOpenAI
 
         return ChatOpenAI(
-            model=os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
+            model=settings.openrouter_model,
             temperature=0,
             api_key=openrouter_key,
-            max_tokens=int(os.getenv("OPENROUTER_MAX_TOKENS", "512")),
-            base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+            max_tokens=settings.openrouter_max_tokens,
+            base_url=settings.openrouter_base_url,
             default_headers={
-                "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "http://localhost:3000"),
-                "X-Title": os.getenv("OPENROUTER_APP_NAME", "AIC Backend"),
+                "HTTP-Referer": settings.openrouter_site_url,
+                "X-Title": settings.openrouter_app_name,
             },
         )
 
     if provider in {"auto", "openai"} and openai_key:
         from langchain_openai import ChatOpenAI
 
-        return ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), temperature=0)
+        return ChatOpenAI(model=settings.openai_model, temperature=0)
 
     if provider in {"auto"} and openrouter_key:
         from langchain_openai import ChatOpenAI
 
         return ChatOpenAI(
-            model=os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
+            model=settings.openrouter_model,
             temperature=0,
             api_key=openrouter_key,
-            max_tokens=int(os.getenv("OPENROUTER_MAX_TOKENS", "512")),
-            base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+            max_tokens=settings.openrouter_max_tokens,
+            base_url=settings.openrouter_base_url,
             default_headers={
-                "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "http://localhost:3000"),
-                "X-Title": os.getenv("OPENROUTER_APP_NAME", "AIC Backend"),
+                "HTTP-Referer": settings.openrouter_site_url,
+                "X-Title": settings.openrouter_app_name,
             },
         )
 
@@ -122,9 +120,9 @@ def get_llm():
             ) from exc
 
         return ChatAnthropic(
-            model=os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20240620"),
+            model=settings.anthropic_model,
             temperature=0,
-            max_tokens=int(os.getenv("ANTHROPIC_MAX_TOKENS", "2048")),
+            max_tokens=settings.anthropic_max_tokens,
         )
 
     if provider in {"auto", "nvidia", "nim", "nv"} and nvidia_key:
@@ -137,10 +135,10 @@ def get_llm():
             ) from exc
 
         return ChatNVIDIA(
-            model=os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-super-120b-a12b"),
+            model=settings.nvidia_model,
             temperature=0,
-            max_tokens=int(os.getenv("NVIDIA_MAX_TOKENS", "2048")),
-            top_p=float(os.getenv("NVIDIA_TOP_P", "1.0")),
+            max_tokens=settings.nvidia_max_tokens,
+            top_p=settings.nvidia_top_p,
         )
 
     if provider in {"auto", "google", "gemini"} and google_key:
@@ -152,7 +150,7 @@ def get_llm():
                 "Use LLM_PROVIDER=openai or align langchain-google-genai with langchain-core."
             ) from exc
 
-        return ChatGoogleGenerativeAI(model=os.getenv("GOOGLE_MODEL", "gemini-1.5-flash"), temperature=0)
+        return ChatGoogleGenerativeAI(model=settings.google_model, temperature=0)
 
     raise ValueError(
         "Missing API key for LLM planner. Set LLM_PROVIDER=openai with OPENAI_API_KEY, "
@@ -175,9 +173,57 @@ def get_agent_executor():
         MessagesPlaceholder(variable_name="agent_scratchpad"),
     ])
     agent = create_tool_calling_agent(get_llm(), agent_tools, prompt)
-    _agent_executor = AgentExecutor(agent=agent, tools=agent_tools, verbose=True, handle_parsing_errors=True)
+    _agent_executor = AgentExecutor(agent=agent, tools=agent_tools, verbose=True, handle_parsing_errors=True, return_intermediate_steps=True)
     return _agent_executor
 
+
+def _extract_tool_frames(intermediate_steps) -> list[dict]:
+    """Flatten tool observations into safe, structured frame locators."""
+    frames: list[dict] = []
+    seen: set[tuple] = set()
+
+    for _action, observation in intermediate_steps or []:
+        if not isinstance(observation, list):
+            continue
+        for result in observation:
+            if not isinstance(result, dict) or result.get("error"):
+                continue
+
+            nested = result.get("keyframes")
+            candidates = nested if isinstance(nested, list) else [result]
+            for candidate in candidates:
+                if not isinstance(candidate, dict):
+                    continue
+                item = dict(candidate)
+                video_id = (
+                    item.get("video_id")
+                    or item.get("video_key")
+                    or result.get("video_id")
+                    or result.get("video_key")
+                )
+                frame_key = (
+                    item.get("frame_key")
+                    or item.get("frame_name")
+                    or item.get("frame_id")
+                )
+                timestamp = item.get("timestamp")
+                if not video_id or (frame_key is None and timestamp is None):
+                    continue
+
+                item.setdefault("video_id", video_id)
+                item.setdefault("video_key", video_id)
+                if frame_key is not None:
+                    item.setdefault("frame_key", frame_key)
+                    item.setdefault("frame_name", str(frame_key))
+                identity = (str(video_id), str(frame_key), timestamp)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                frames.append(item)
+                if len(frames) >= 24:
+                    return frames
+
+    return frames
 
 def execute_chat_turn(session_id: str, user_message: str) -> Dict[str, Any]:
     """Run one conversational turn through the LLM planner agent."""
@@ -189,6 +235,7 @@ def execute_chat_turn(session_id: str, user_message: str) -> Dict[str, Any]:
         })
 
         output_text = response.get("output", "Toi khong co cau tra loi.")
+        tool_frames = _extract_tool_frames(response.get("intermediate_steps", []))
 
         memory_manager.add_user_message(session_id, user_message)
         memory_manager.add_ai_message(session_id, output_text)
@@ -196,7 +243,7 @@ def execute_chat_turn(session_id: str, user_message: str) -> Dict[str, Any]:
         return {
             "success": True,
             "response": output_text,
-            "data": None,
+            "data": {"frames": tool_frames},
         }
     except Exception as exc:
         safe_message = _safe_error_message(exc)
@@ -208,4 +255,5 @@ def execute_chat_turn(session_id: str, user_message: str) -> Dict[str, Any]:
             "response": f"Loi tac nhan: {safe_message}",
             "data": None,
         }
+
 

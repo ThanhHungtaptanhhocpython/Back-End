@@ -1,3 +1,4 @@
+import re
 from typing import Any, Dict, List
 
 import logging
@@ -64,12 +65,56 @@ def _compact_result(res: Dict[str, Any]) -> Dict[str, Any]:
     if error:
         compact["error"] = _short_text(error, 240)
 
+    # TRAKE returns nested frames. Keep locators, never base64 images.
+    frames = res.get("frames")
+    if isinstance(frames, list) and frames:
+        keyframes = []
+        for frame in frames[:8]:
+            if not isinstance(frame, dict):
+                continue
+            keyframe = {
+                key: frame[key]
+                for key in ("folder_key", "video_key", "frame_key", "frame_name", "timestamp")
+                if frame.get(key) not in (None, "", [], {})
+            }
+            if keyframe:
+                keyframes.append(keyframe)
+        if keyframes:
+            compact["video_id"] = compact.get("video_id") or keyframes[0].get("video_key")
+            compact["keyframes"] = keyframes
+
     return compact
 
 
 def _compact_results(results: List[Dict[str, Any]], limit: int = _MAX_TOOL_RESULTS) -> List[Dict[str, Any]]:
     return [_compact_result(res) for res in (results or [])[:limit]]
 
+
+
+
+def _temporal_queries(query: str) -> List[Dict[str, str]]:
+    """Convert a natural-language temporal description into ordered events."""
+    cleaned = " ".join(str(query or "").split()).strip(" .")
+    if not cleaned:
+        return []
+
+    # "A, before that B" means B happened before A.
+    before_pattern = r"\btr\u01b0\u1edbc \u0111\u00f3\b"
+    before_parts = re.split(before_pattern, cleaned, maxsplit=1, flags=re.IGNORECASE)
+    if len(before_parts) == 2 and all(part.strip(" ,.;:") for part in before_parts):
+        current, previous = before_parts
+        return [
+            {"query": previous.strip(" ,.;:")},
+            {"query": current.strip(" ,.;:")},
+        ]
+
+    ordered_connectors = (
+        r"\b(?:sau \u0111\u00f3|ti\u1ebfp theo|r\u1ed3i|"
+        r"sau c\u00f9ng|cu\u1ed1i c\u00f9ng)\b"
+    )
+    parts = re.split(ordered_connectors, cleaned, flags=re.IGNORECASE)
+    events = [part.strip(" ,.;:") for part in parts if part.strip(" ,.;:")]
+    return [{"query": event} for event in events]
 
 @tool
 def vector_search_tool(query: str, top_k: int = 20) -> List[Dict[str, Any]]:
@@ -125,7 +170,11 @@ def temporal_search_tool(query: str, top_k: int = 20) -> List[Dict[str, Any]]:
     """
     logger.info("Agent called temporal_search_tool with query: %s", query)
     try:
-        results = GetImageDataTrakeSearch(query, top_results=top_k)
+        events = _temporal_queries(query)
+        if not events:
+            return [{"error": "Temporal query is empty."}]
+        logger.info("Temporal query parsed into %d ordered event(s): %s", len(events), events)
+        results = GetImageDataTrakeSearch(events, top_results=top_k)
         return _compact_results(results)
     except Exception as e:
         return [{"error": _short_text(e, 240)}]
@@ -155,3 +204,4 @@ agent_tools = [
     temporal_search_tool,
     video_qa_tool,
 ]
+

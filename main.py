@@ -34,10 +34,13 @@ app = FastAPI(
 )
 
 # Configure CORS
+_cors_origins = settings.get_cors_origins()
+_allow_all = "*" in _cors_origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=["*"] if _allow_all else _cors_origins,
+    # Wildcard origins cannot be combined with credentials per the CORS spec.
+    allow_credentials=not _allow_all,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -70,6 +73,10 @@ app.add_exception_handler(Exception, global_exception_handler)
 
 
 app.include_router(health_router, prefix="")
+# search_router is intentionally registered under both prefixes: the frontend
+# calls search endpoints via an axios baseURL ending in "/users" (services/axios.js,
+# backendSearch.js) while copilotService.js strips that suffix and hits unprefixed
+# paths. Removing either registration will break one of those clients.
 app.include_router(search_router, prefix="/users")
 app.include_router(search_router, prefix="")
 app.include_router(chat_router)

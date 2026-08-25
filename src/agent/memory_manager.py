@@ -1,9 +1,10 @@
-import os
 from typing import Dict, List
 
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.messages import BaseMessage
+
+from src.config.settings import get_settings
 
 
 class MemoryManager:
@@ -14,7 +15,7 @@ class MemoryManager:
 
     def __init__(self):
         self.sessions: Dict[str, ChatMessageHistory] = {}
-        self.max_messages = max(2, int(os.getenv("CHAT_HISTORY_MESSAGES", "6")))
+        self.max_messages = max(2, int(get_settings().chat_history_messages))
 
     def get_session_history(self, session_id: str) -> BaseChatMessageHistory:
         if session_id not in self.sessions:

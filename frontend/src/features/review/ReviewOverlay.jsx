@@ -24,6 +24,7 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
   const [showVideo, setShowVideo] = useState(false);
   const backRef = useRef(null);
   const dialogRef = useDialogFocus(backRef);
+  const videoPlayback = useMemo(() => buildVideoPlayback(item), [item]);
 
   useEffect(() => {
     let active = true;
@@ -69,8 +70,11 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
   const compareItem = compareId ? (results || []).find((r) => r.id === compareId) : null;
   const atStart = curIdx <= 0;
   const atEnd = curIdx === -1 || curIdx >= seq.length - 1;
-  const videoPlayback = useMemo(() => buildVideoPlayback(item), [item]);
-
+  const filmstripLabel = loadingTimeline
+    ? `Loading timeline - ${item.videoKey}`
+    : stripMode === "timeline"
+      ? `Video timeline - ${item.videoKey} (${timeline.length} keyframes)`
+      : `Search query results (${results?.length || 0} frames)`;
   const handleStep = (dir) => {
     if (curIdx === -1) {
       if (dir > 0 && seq.length > 0) onSelect(seq[0]);
@@ -180,9 +184,7 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
             <div className="ws-filmstrip-head">
               <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                 <span className="ws-filmstrip-tag">
-                  {stripMode === "timeline"
-                    ? `Video timeline - ${item.videoKey} (${timeline.length} keyframes)`
-                    : `Search query results (${results?.length || 0} frames)`}
+                  {filmstripLabel}
                 </span>
                 {timeline.length > 0 ? (
                   <button

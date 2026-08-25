@@ -3,7 +3,7 @@
 /* ---------- stage layout ---------- */
 .ws-stage {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr) var(--ws-chat-w, 400px);
+  grid-template-columns: 280px minmax(0, 1fr) var(--ws-chat-w, 500px);
   gap: 16px;
   align-items: start;
 }

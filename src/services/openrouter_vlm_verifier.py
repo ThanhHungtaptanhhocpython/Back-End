@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import logging
 import re
+import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -18,6 +21,38 @@ from src.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
+VERDICT_CONTRACT_VERSION = "agent-vlm-verdict-v2"
+VALID_DECISIONS = {"match", "partial", "wrong", "uncertain"}
+_CACHE_LOCK = threading.Lock()
+
+VERDICT_JSON_SCHEMA = {
+    "name": "agent_vlm_verdicts",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "id": {"type": "string"},
+                        "score": {"type": "number", "minimum": 0, "maximum": 1},
+                        "decision": {"type": "string", "enum": sorted(VALID_DECISIONS)},
+                        "reason": {"type": "string"},
+                        "matched": {"type": "array", "items": {"type": "string"}},
+                        "missing": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["id", "score", "decision", "reason", "matched", "missing"],
+                },
+            }
+        },
+        "required": ["items"],
+    },
+}
+
 SYSTEM_PROMPT = """You are a strict visual verifier for keyframe retrieval.
 You receive a natural-language target description, a search plan, and several candidate keyframe images.
 Score each image by how well it visually matches the target.
@@ -28,6 +63,10 @@ Rules:
 - Penalize missing core entities, wrong scene, wrong action, wrong order, or wrong camera angle.
 - Do not invent details. If uncertain, use a lower score and explain what is missing.
 - Temporal descriptions may require nearby frames; score the current still image based on visible evidence only.
+- Treat every checklist item as a constraint, not as permission to infer an unseen detail.
+- Return every supplied candidate id exactly once. Never add an id that was not supplied.
+- Use decision=match only when all visually verifiable core constraints are visible.
+- matched and missing must contain short target constraints, not generic prose.
 
 JSON schema:
 {
@@ -143,32 +182,64 @@ def _extract_json_object(value: str) -> Dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _normalise_vlm_items(payload: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+def _normalise_vlm_items(
+    payload: Dict[str, Any],
+    expected_ids: set[str] | None = None,
+) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
     values = payload.get("items")
     if not isinstance(values, list):
-        return {}
+        return {}, ["response.items must be an array"]
     output: Dict[str, Dict[str, Any]] = {}
+    errors: List[str] = []
     for item in values:
         if not isinstance(item, dict):
+            errors.append("response contains a non-object item")
             continue
         item_id = _clean(item.get("id"))
         if not item_id:
+            errors.append("response item is missing id")
+            continue
+        if expected_ids is not None and item_id not in expected_ids:
+            errors.append(f"unexpected candidate id: {item_id}")
+            continue
+        if item_id in output:
+            errors.append(f"duplicate candidate id: {item_id}")
             continue
         try:
-            score = float(item.get("score", 0.0))
-        except (TypeError, ValueError):
-            score = 0.0
-        score = max(0.0, min(1.0, score))
-        matched = item.get("matched") if isinstance(item.get("matched"), list) else []
-        missing = item.get("missing") if isinstance(item.get("missing"), list) else []
+            score = float(item["score"])
+        except (KeyError, TypeError, ValueError):
+            errors.append(f"invalid score for {item_id}")
+            continue
+        if not 0.0 <= score <= 1.0:
+            errors.append(f"score out of range for {item_id}")
+            continue
+        decision = _clean(item.get("decision")).lower()
+        if decision not in VALID_DECISIONS:
+            errors.append(f"invalid decision for {item_id}: {decision or '<blank>'}")
+            continue
+        if not isinstance(item.get("matched"), list) or not isinstance(item.get("missing"), list):
+            errors.append(f"matched/missing must be arrays for {item_id}")
+            continue
+        if any(not isinstance(value, str) for value in item["matched"] + item["missing"]):
+            errors.append(f"matched/missing must contain strings for {item_id}")
+            continue
+        reason = _clean(item.get("reason"))[:500]
+        if not reason:
+            errors.append(f"missing reason for {item_id}")
+            continue
+        matched = item["matched"]
+        missing = item["missing"]
         output[item_id] = {
             "score": score,
-            "decision": _clean(item.get("decision")) or "uncertain",
-            "reason": _clean(item.get("reason"))[:500],
+            "decision": decision,
+            "reason": reason,
             "matched": [_clean(value) for value in matched if _clean(value)][:8],
             "missing": [_clean(value) for value in missing if _clean(value)][:8],
         }
-    return output
+    if expected_ids is not None:
+        for missing_id in sorted(expected_ids - set(output)):
+            errors.append(f"missing verdict for candidate id: {missing_id}")
+    return output, errors
 
 
 def _request_openrouter_vlm(messages: List[Dict[str, Any]], model: str, max_tokens: int, timeout: float) -> Dict[str, Any]:
@@ -178,28 +249,176 @@ def _request_openrouter_vlm(messages: List[Dict[str, Any]], model: str, max_toke
         "temperature": 0,
         "max_tokens": max_tokens,
         "messages": messages,
+        "response_format": {"type": "json_schema", "json_schema": VERDICT_JSON_SCHEMA},
     }
-    data = json.dumps(body).encode("utf-8")
-    request = urllib.request.Request(
-        settings.openrouter_base_url.rstrip("/") + "/chat/completions",
-        data=data,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {settings.openrouter_api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": settings.openrouter_site_url,
-            "X-Title": settings.openrouter_app_name,
-        },
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    content = (((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
-    return _extract_json_object(content)
+
+    def send(request_body: Dict[str, Any]) -> Dict[str, Any]:
+        request = urllib.request.Request(
+            settings.openrouter_base_url.rstrip("/") + "/chat/completions",
+            data=json.dumps(request_body).encode("utf-8"),
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {settings.openrouter_api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": settings.openrouter_site_url,
+                "X-Title": settings.openrouter_app_name,
+            },
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        content = (((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
+        return _extract_json_object(content)
+
+    try:
+        return send(body)
+    except urllib.error.HTTPError as exc:
+        # Some OpenRouter routes do not expose structured output even when the
+        # underlying model can still follow the strict JSON prompt.
+        if exc.code not in {400, 404, 422}:
+            raise
+        fallback_body = dict(body)
+        fallback_body.pop("response_format", None)
+        return send(fallback_body)
 
 
 def _chunks(values: List[Any], size: int) -> Iterable[List[Any]]:
     for index in range(0, len(values), max(1, size)):
         yield values[index : index + max(1, size)]
+
+
+def _prompt_fingerprint(plan: Dict[str, Any], model: str) -> str:
+    checks = []
+    for check in (plan.get("must_have_checks") or [])[:10]:
+        if isinstance(check, dict):
+            checks.append(_clean(check.get("label") or check.get("query_en")))
+    value = {
+        "contract": VERDICT_CONTRACT_VERSION,
+        "model": model,
+        "original_query": _clean(plan.get("original_query")),
+        "visual_query": _clean(plan.get("visual_query")),
+        "checks": checks,
+    }
+    return hashlib.sha256(json.dumps(value, ensure_ascii=True, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _cache_key(prompt_fingerprint: str, identity: str, path: Path) -> str:
+    try:
+        stat = path.stat()
+        image_version = f"{stat.st_size}:{stat.st_mtime_ns}"
+    except OSError:
+        image_version = "unknown"
+    raw = f"{prompt_fingerprint}|{identity}|{path.resolve()}|{image_version}"
+    return hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _read_verdict_cache(path: Path, ttl_seconds: int) -> Dict[str, Dict[str, Any]]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        logger.warning("Ignoring unreadable Agent VLM cache: %s", path)
+        return {}
+    entries = payload.get("entries") if isinstance(payload, dict) else None
+    if not isinstance(entries, dict):
+        return {}
+    if ttl_seconds <= 0:
+        return entries
+    cutoff = time.time() - ttl_seconds
+    fresh: Dict[str, Dict[str, Any]] = {}
+    for key, value in entries.items():
+        if not isinstance(value, dict):
+            continue
+        try:
+            created_at = float(value.get("created_at") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if created_at >= cutoff:
+            fresh[key] = value
+    return fresh
+
+
+def _write_verdict_cache(path: Path, entries: Dict[str, Dict[str, Any]], max_entries: int) -> None:
+    if max_entries > 0 and len(entries) > max_entries:
+        newest = sorted(entries.items(), key=lambda pair: float(pair[1].get("created_at") or 0.0), reverse=True)
+        entries = dict(newest[:max_entries])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps({"version": 1, "entries": entries}, ensure_ascii=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def _request_batch_with_retries(
+    messages: List[Dict[str, Any]],
+    model: str,
+    max_tokens: int,
+    timeout: float,
+    max_retries: int,
+    backoff_seconds: float,
+) -> Tuple[Dict[str, Any], int]:
+    retries_used = 0
+    for attempt in range(max_retries + 1):
+        try:
+            return _request_openrouter_vlm(messages, model, max_tokens, timeout), retries_used
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+            if attempt >= max_retries:
+                raise
+            retries_used += 1
+            if backoff_seconds > 0:
+                time.sleep(backoff_seconds * (2**attempt))
+    return {}, retries_used
+
+
+def _score_for_selection(item: Dict[str, Any]) -> float:
+    for key in ("verification_score", "agent_score", "final_score", "normalized_score", "score", "_score"):
+        try:
+            return max(0.0, float(item.get(key)))
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
+def _select_candidate_frames(
+    frames: List[Dict[str, Any]],
+    candidate_limit: int,
+    pool_limit: int,
+    per_video_limit: int,
+) -> List[Dict[str, Any]]:
+    if candidate_limit <= 0:
+        return []
+    pool = sorted(
+        frames[: max(candidate_limit, min(pool_limit, len(frames)))],
+        key=_score_for_selection,
+        reverse=True,
+    )
+    selected: List[Dict[str, Any]] = []
+    selected_ids = set()
+    video_counts: Dict[str, int] = {}
+
+    def add(item: Dict[str, Any]) -> bool:
+        identity = _frame_identity(item, "")
+        if identity in selected_ids:
+            return False
+        selected_ids.add(identity)
+        selected.append(item)
+        video = _clean(_first(item, "video_id", "video_key", "videoKey")) or "__unknown__"
+        video_counts[video] = video_counts.get(video, 0) + 1
+        return len(selected) >= candidate_limit
+
+    for item in pool:
+        video = _clean(_first(item, "video_id", "video_key", "videoKey")) or "__unknown__"
+        if video_counts.get(video, 0) >= per_video_limit:
+            continue
+        if add(item):
+            return selected
+
+    for item in pool:
+        if add(item):
+            break
+    return selected
 
 
 def verify_frames_with_openrouter_vlm(frames: List[Dict[str, Any]], plan: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
@@ -208,34 +427,79 @@ def verify_frames_with_openrouter_vlm(frames: List[Dict[str, Any]], plan: Dict[s
         return frames, {"enabled": False, "method": "none", "evaluated": 0}
 
     candidate_limit = max(1, min(int(settings.agent_vlm_max_candidates or 12), len(frames), 50))
+    pool_limit = max(candidate_limit, min(int(settings.agent_vlm_candidate_pool or 40), len(frames), 100))
+    per_video_limit = max(1, min(int(settings.agent_vlm_per_video_limit or 3), candidate_limit))
     batch_size = max(1, min(int(settings.agent_vlm_batch_size or 4), 8))
     max_side = max(256, min(int(settings.agent_vlm_image_max_side or 768), 1600))
     candidates: List[Tuple[str, Dict[str, Any], Path, str]] = []
     missing_images = 0
 
-    for index, item in enumerate(frames[:candidate_limit], start=1):
+    selected_frames = _select_candidate_frames(frames, candidate_limit, pool_limit, per_video_limit)
+    for item in selected_frames:
         path = resolve_keyframe_path(item)
         if path is None:
             missing_images += 1
             continue
-        candidate_id = f"c{index}"
+        candidate_id = f"c{len(candidates) + 1}"
         candidates.append((candidate_id, item, path, _frame_identity(item, candidate_id)))
 
     if not candidates:
-        return frames, {"enabled": True, "method": "openrouter_vlm", "evaluated": 0, "missing_images": missing_images, "error": "No local keyframe images resolved."}
+        return frames, {
+            "enabled": True,
+            "method": "openrouter_vlm",
+            "status": "fallback",
+            "fallback_used": True,
+            "evaluated": 0,
+            "missing_images": missing_images,
+            "error": "No local keyframe images resolved.",
+        }
 
     results: Dict[str, Dict[str, Any]] = {}
+    result_sources: Dict[str, str] = {}
     errors: List[str] = []
+    contract_errors: List[str] = []
+    retries_used = 0
+    api_calls = 0
     model = settings.agent_vlm_model
     checklist = plan.get("must_have_checks") or []
     checklist_text = "; ".join(_clean(check.get("label") or check.get("query_en")) for check in checklist[:10] if isinstance(check, dict))
 
-    for batch in _chunks(candidates, batch_size):
+    cache_enabled = bool(settings.agent_vlm_cache_enabled)
+    cache_path = settings.get_agent_vlm_cache_path()
+    cache_entries: Dict[str, Dict[str, Any]] = {}
+    cache_keys: Dict[str, str] = {}
+    cache_hits = 0
+    if cache_enabled:
+        with _CACHE_LOCK:
+            cache_entries = _read_verdict_cache(cache_path, max(0, int(settings.agent_vlm_cache_ttl_seconds or 0)))
+        fingerprint = _prompt_fingerprint(plan, model)
+        for candidate_id, _item, path, identity in candidates:
+            key = _cache_key(fingerprint, identity, path)
+            cache_keys[candidate_id] = key
+            cached = cache_entries.get(key)
+            verdict = cached.get("verdict") if isinstance(cached, dict) else None
+            if not isinstance(verdict, dict):
+                continue
+            normalised, cache_contract_errors = _normalise_vlm_items(
+                {"items": [{"id": candidate_id, **verdict}]},
+                {candidate_id},
+            )
+            if cache_contract_errors or candidate_id not in normalised:
+                continue
+            results[candidate_id] = normalised[candidate_id]
+            result_sources[candidate_id] = "cache"
+            cache_hits += 1
+
+    uncached_candidates = [candidate for candidate in candidates if candidate[0] not in results]
+    cache_updates: Dict[str, Dict[str, Any]] = {}
+
+    for batch in _chunks(uncached_candidates, batch_size):
         text_lines = [
             f"Target description: {_clean(plan.get('original_query'))}",
             f"Main English query: {_clean(plan.get('visual_query'))}",
-            f"Checklist: {checklist_text}",
-            "Candidate images are attached in order with ids below. Score every candidate id exactly once.",
+            f"Required visual constraints: {checklist_text or 'Use only the target description and main query.'}",
+            "Candidate images are attached in order with ids below. Return one complete verdict for every id exactly once.",
+            "Judge only visible evidence in each still image. Put every absent core constraint in missing.",
         ]
         for candidate_id, item, _path, identity in batch:
             text_lines.append(
@@ -248,7 +512,7 @@ def verify_frames_with_openrouter_vlm(frames: List[Dict[str, Any]], plan: Dict[s
             for candidate_id, _item, path, _identity in batch:
                 content.append({"type": "text", "text": f"Image {candidate_id}"})
                 content.append({"type": "image_url", "image_url": {"url": _image_to_data_url(path, max_side)}})
-            payload = _request_openrouter_vlm(
+            payload, batch_retries = _request_batch_with_retries(
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": content},
@@ -256,14 +520,53 @@ def verify_frames_with_openrouter_vlm(frames: List[Dict[str, Any]], plan: Dict[s
                 model=model,
                 max_tokens=int(settings.agent_vlm_max_tokens or 900),
                 timeout=float(settings.agent_vlm_timeout_seconds or 45.0),
+                max_retries=max(0, min(int(settings.agent_vlm_max_retries or 0), 3)),
+                backoff_seconds=max(0.0, float(settings.agent_vlm_retry_backoff_seconds or 0.0)),
             )
-            results.update(_normalise_vlm_items(payload))
+            retries_used += batch_retries
+            api_calls += 1 + batch_retries
+            expected_ids = {candidate_id for candidate_id, _item, _path, _identity in batch}
+            normalised, batch_contract_errors = _normalise_vlm_items(payload, expected_ids)
+            contract_errors.extend(batch_contract_errors)
+            for candidate_id, verdict in normalised.items():
+                results[candidate_id] = verdict
+                result_sources[candidate_id] = "api"
+                key = cache_keys.get(candidate_id)
+                if cache_enabled and key:
+                    cache_updates[key] = {"created_at": time.time(), "verdict": verdict}
         except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
             logger.warning("OpenRouter VLM verification batch failed: %s", exc)
             errors.append(_clean(exc)[:180])
+            max_retries = max(0, min(int(settings.agent_vlm_max_retries or 0), 3))
+            retries_used += max_retries
+            api_calls += 1 + max_retries
+
+    if cache_enabled and cache_updates:
+        try:
+            with _CACHE_LOCK:
+                latest_entries = _read_verdict_cache(cache_path, max(0, int(settings.agent_vlm_cache_ttl_seconds or 0)))
+                latest_entries.update(cache_updates)
+                _write_verdict_cache(cache_path, latest_entries, max(1, int(settings.agent_vlm_cache_max_entries or 5000)))
+        except OSError as exc:
+            logger.warning("Unable to persist Agent VLM cache: %s", exc)
+            errors.append(f"cache write failed: {_clean(exc)[:140]}")
 
     if not results:
-        summary = {"enabled": True, "method": "openrouter_vlm", "evaluated": 0, "missing_images": missing_images, "errors": errors[:3]}
+        summary = {
+            "enabled": True,
+            "method": "openrouter_vlm",
+            "status": "fallback",
+            "fallback_used": True,
+            "evaluated": 0,
+            "requested": len(candidates),
+            "missing_images": missing_images,
+            "cache_hits": cache_hits,
+            "cache_misses": len(uncached_candidates),
+            "api_calls": api_calls,
+            "retries": retries_used,
+            "contract_errors": contract_errors[:6],
+            "errors": errors[:3],
+        }
         return frames, summary
 
     by_id = {candidate_id: (item, identity) for candidate_id, item, _path, identity in candidates}
@@ -292,6 +595,8 @@ def verify_frames_with_openrouter_vlm(frames: List[Dict[str, Any]], plan: Dict[s
             "vlm_reason": verdict.get("reason"),
             "vlm_matched": verdict.get("matched", []),
             "vlm_missing": verdict.get("missing", []),
+            "vlm_source": result_sources.get(candidate_id, "api"),
+            "vlm_contract_version": VERDICT_CONTRACT_VERSION,
         }
         updated["reason"] = verdict.get("reason") or updated.get("reason")
         updated["agent_matched_checks"] = list(dict.fromkeys(list(updated.get("agent_matched_checks") or []) + list(verdict.get("matched") or [])))[:12]
@@ -308,9 +613,19 @@ def verify_frames_with_openrouter_vlm(frames: List[Dict[str, Any]], plan: Dict[s
     return combined_frames, {
         "enabled": True,
         "method": "openrouter_vlm",
+        "status": "verified" if len(results) == len(candidates) else "partial",
+        "fallback_used": len(results) < len(candidates),
         "model": model,
         "evaluated": len(results),
         "requested": len(candidates),
+        "candidate_pool": pool_limit,
+        "per_video_limit": per_video_limit,
         "missing_images": missing_images,
+        "cache_enabled": cache_enabled,
+        "cache_hits": cache_hits,
+        "cache_misses": len(uncached_candidates),
+        "api_calls": api_calls,
+        "retries": retries_used,
+        "contract_errors": contract_errors[:6],
         "errors": errors[:3],
     }

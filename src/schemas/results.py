@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 class DataResponse(BaseModel):
     items: List[Any]
     total_items: int
+    meta: Optional[Dict[str, Any]] = None
 
 class BaseResponse(BaseModel):
     success: bool

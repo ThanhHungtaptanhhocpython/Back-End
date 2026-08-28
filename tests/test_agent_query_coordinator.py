@@ -35,6 +35,34 @@ def test_cycling_finish_agent_plan_builds_structured_checks():
     assert any("close up bicycle wheels" in query for query in plan["visual_queries"])
 
 
+def test_agent_plan_executes_primary_visual_query_by_default():
+    query = (
+        "Canh o tram xang, co 4 tai xe xe om cong nghe. "
+        "3 nguoi dung cho, 1 nguoi chay xe tu trai sang phai. "
+        "Co bang gia xang dau trong khung hinh."
+    )
+
+    plan = build_agent_plan(query, topk=20)
+
+    assert len(plan["visual_queries"]) > 1
+    assert plan["executed_visual_queries"] == [plan["visual_query"]]
+    assert plan["support_visual_queries"] == plan["visual_queries"][1:]
+    assert plan["execution_strategy"]["mode"] == "primary_holistic_first"
+
+
+def test_agent_visual_query_limit_can_be_raised(monkeypatch):
+    monkeypatch.setenv("AGENT_VISUAL_QUERY_LIMIT", "2")
+    get_settings.cache_clear()
+
+    plan = build_agent_plan(
+        "Canh o tram xang co 4 tai xe xe om cong nghe va bang gia xang dau",
+        topk=20,
+    )
+
+    assert plan["executed_visual_queries"] == plan["visual_queries"][:2]
+    assert plan["support_visual_queries"] == plan["visual_queries"][2:]
+
+
 
 def test_generic_agent_plan_extracts_subject_action_object_and_appearance():
     plan = build_agent_plan("Mot nguoi phu nu ao do cam o di qua duong", topk=20)
@@ -99,6 +127,45 @@ def test_light_verifier_adds_temporal_neighbors_without_vlm():
     neighbor = next(item for item in verified if item["global_frame_id"] == "next")
     assert "temporal_neighbor" in neighbor["agent_verification"]["sources"]
     assert neighbor["agent_verification"]["note"].startswith("No VLM verification")
+
+
+def test_light_verifier_boosts_candidates_with_ocr_evidence():
+    plan = {
+        "original_query": "Khung hinh co chu TON DONG A tren bang hieu",
+        "visual_queries": ["signboard with text TON DONG A"],
+        "executed_visual_queries": ["signboard with text TON DONG A"],
+        "ocr_query": "TON DONG A",
+        "asr_query": "",
+        "routing": {"visual": 0.55, "ocr": 0.45, "asr": 0.0},
+        "must_have_checks": [{"id": "text", "label": "visible text TON DONG A", "query_en": "TON DONG A", "weight": 1.0}],
+    }
+    frames = [
+        {
+            "global_frame_id": "visual_only",
+            "video_id": "V1",
+            "frame_id": "0010",
+            "timestamp": 10.0,
+            "agent_score": 0.7,
+            "agent_queries": ["signboard with text TON DONG A"],
+            "score_breakdown": {"visual": 0.7, "ocr": 0.0, "asr": 0.0},
+        },
+        {
+            "global_frame_id": "with_ocr",
+            "video_id": "V2",
+            "frame_id": "0020",
+            "timestamp": 20.0,
+            "agent_score": 0.65,
+            "agent_queries": ["signboard with text TON DONG A"],
+            "score_breakdown": {"visual": 0.65, "ocr": 0.95, "asr": 0.0},
+            "ocr_text": "TON DONG A",
+        },
+    ]
+
+    verified, _summary = _rerank_with_light_verifier(frames, plan, topk=2, neighbor_provider=lambda *_args: [])
+
+    assert verified[0]["global_frame_id"] == "with_ocr"
+    assert verified[0]["agent_verification"]["modality_evidence_score"] > 0.0
+    assert "OCR: TON DONG A" in verified[0]["agent_matched_checks"]
 
 
 def test_gas_station_motorbike_taxi_plan_uses_domain_queries_not_asr():

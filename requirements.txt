@@ -1,12 +1,11 @@
-flask
-flask_cors
 python-dotenv
-mysqlclient
 numpy
 pandas
+pyarrow
 faiss-cpu
+sentencepiece
+torchscale
 open-clip-torch
-git+https://github.com/openai/CLIP.git
 deep-translator>=1.11.4
 transformers
 torch
@@ -18,13 +17,14 @@ pydantic-settings
 python-multipart
 opencv-python
 tqdm
-elasticsearch>=8.0.0
+elasticsearch>=8.0.0,<9.0.0
 easyocr
 
 langchain==0.2.16
 langchain-core==0.2.39
 langchain-community==0.2.16
 langchain-openai==0.1.23
+langchain-anthropic==0.1.23
+langchain-nvidia-ai-endpoints==0.2.2
 langchain-google-genai==1.0.10
-ffmpeg-python  
- 
+ffmpeg-python

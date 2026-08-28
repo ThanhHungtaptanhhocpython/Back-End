@@ -2,13 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { App as AntApp } from "antd";
 import { CloseOutlined, MessageOutlined } from "@ant-design/icons";
 import { CARD_W, GAP } from "../../shared/constants";
-import { runSearch as runSearchQuery, askCopilot, probeBackend as probeSearchBackend } from "../../shared/adapters";
+import { runSearch as runSearchQuery, runAgentSearch as runAgentSearchQuery, askCopilot, probeBackend as probeSearchBackend } from "../../shared/adapters";
 import { getFramePool } from "../../mocks/searchEngine";
 import useClock from "../../hooks/useClock";
 import useWorkspaceKeyboard from "../../hooks/useWorkspaceKeyboard";
 import Keycap from "../../components/Keycap";
 import StatusBar from "./StatusBar";
 import ExportModal from "./ExportModal";
+import BatchQueryModal from "./BatchQueryModal";
 import ShortcutOverlay from "./ShortcutOverlay";
 import QueryTabs from "../search/QueryTabs";
 import SearchBar from "../search/SearchBar";
@@ -25,8 +26,8 @@ function makeTab() {
     label: `Query ${String(tabSeq).padStart(2, "0")}`,
     searchType: "TEXT",
     query: "",
-    params: { topk: 24, clip: true, clipv2: false, imageFile: null },
-    status: "running",
+    params: { topk: 100, clip: true, clipv2: false, imageFile: null },
+    status: "idle",
     latency: 0,
     results: [],
     total: 0,
@@ -48,23 +49,29 @@ export default function Workstation({ view, onSwitchView }) {
   const [reviewTabKey, setReviewTabKey] = useState(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportItems, setExportItems] = useState([]);
+  const [exportDefaultSource, setExportDefaultSource] = useState("results");
+  const [batchOpen, setBatchOpen] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [editingKey, setEditingKey] = useState(null);
   const [backend, setBackend] = useState({ backend: "offline", demo: true, note: "LOCAL MOCK", at: "" });
   const [chatOpen, setChatOpen] = useState(true);
-  const [chatWidth, setChatWidth] = useState(400);
+  const [chatWidth, setChatWidth] = useState(500);
   const [chatMsgs, setChatMsgs] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatStatus, setChatStatus] = useState("idle");
   const [chatCtxFrame, setChatCtxFrame] = useState(null);
   const [chatFocus, setChatFocus] = useState(false);
   const [chatTab, setChatTab] = useState("qa");
+  const [agentSearchMsgs, setAgentSearchMsgs] = useState([]);
+  const [agentSearchInput, setAgentSearchInput] = useState("");
+  const [agentSearchStatus, setAgentSearchStatus] = useState("idle");
 
   /* keyboard preferences + transient helpers */
   const [powerUser, setPowerUser] = useState(false);
   const [undoState, setUndoState] = useState(null);
   const undoTimer = useRef(null);
   const invokeFocusStackRef = useRef([]);
+  const revealFocusedCardRef = useRef(false);
 
   const clock = useClock();
 
@@ -72,7 +79,9 @@ export default function Workstation({ view, onSwitchView }) {
   const gridRef = useRef(null);
   const trayRef = useRef(null);
   const composerRef = useRef(null);
+  const agentComposerRef = useRef(null);
   const cardRefs = useRef({});
+  const searchSeqRef = useRef(new Map());
 
   const activeTab = tabs.find((t) => t.key === activeKey) || tabs[0];
   const focusedItem = activeTab?.results.find((r) => r.id === focusedId) || null;
@@ -93,28 +102,47 @@ export default function Workstation({ view, onSwitchView }) {
 
   /* ---------- search actions ---------- */
   const runSearch = async (tab, pivotFrame) => {
-    setTabs((prev) => prev.map((t) => (t.key === tab.key ? { ...t, status: "running" } : t)));
+    const query = String(tab?.query || "").trim();
+    if (tab?.searchType !== "IMAGE" && !query) {
+      searchSeqRef.current.set(tab.key, (searchSeqRef.current.get(tab.key) || 0) + 1);
+      setTabs((prev) => prev.map((t) => (t.key === tab.key ? { ...t, status: "idle", results: [], total: 0, latency: 0 } : t)));
+      return;
+    }
+
+    const tabKey = tab.key;
+    const requestId = (searchSeqRef.current.get(tabKey) || 0) + 1;
+    searchSeqRef.current.set(tabKey, requestId);
+    const isLatestSearch = () => searchSeqRef.current.get(tabKey) === requestId;
+    const effectivePivot = pivotFrame || tab?.pivotItem;
+
+    if (tabKey === activeKey) setFocusedId(null);
+    setTabs((prev) => prev.map((t) => (t.key === tabKey ? { ...t, status: "running", results: [], total: 0, latency: 0 } : t)));
     try {
-      const res = await runSearchQuery(tab, pivotFrame);
+      const res = await runSearchQuery(tab, effectivePivot);
+      if (!isLatestSearch()) return;
+
       setTabs((prev) =>
-        prev.map((t) => (t.key === tab.key ? { ...t, status: "done", results: res.items, total: res.totalItems, latency: res.latency } : t))
+        prev.map((t) => (t.key === tabKey ? { ...t, status: "done", results: res.items, total: res.totalItems, latency: res.latency } : t))
       );
+      if (tabKey === activeKey) setFocusedId(res.items?.[0]?.id || null);
       setBackend({
         backend: res.source === "live" ? "online" : "offline",
         demo: res.source !== "live",
         note: res.source === "live" ? "FASTAPI" : res.source === "fallback" ? "FASTAPI UNAVAILABLE" : "LOCAL MOCK",
         at: new Date().toLocaleTimeString("en-GB", { hour12: false }),
       });
-      toast.success(`${res.type} · ${res.totalItems} frames · ${res.mode} · ${res.latency}ms`);
+      toast.success(`${res.type} - ${res.totalItems} frames - ${res.mode} - ${res.latency}ms`);
     } catch (error) {
-      setTabs((prev) => prev.map((t) => (t.key === tab.key ? { ...t, status: "err" } : t)));
+      if (!isLatestSearch()) return;
+      setTabs((prev) => prev.map((t) => (t.key === tabKey ? { ...t, status: "err" } : t)));
       toast.error(error instanceof Error ? error.message : "Search failed");
     }
   };
 
-  /* debounced auto-run on query/type/param changes (IMAGE is explicit — requires a seed) */
+  /* debounced auto-run on query/type/param changes (IMAGE is explicit - requires a seed) */
   useEffect(() => {
-    if (!activeTab || editingKey || activeTab.searchType === "IMAGE") return;
+    if (!activeTab || editingKey || activeTab.searchType === "IMAGE" || activeTab.searchType === "AGENT") return;
+    if (!String(activeTab.query || "").trim()) return;
     const id = setTimeout(() => {
       runSearch(activeTab, null);
     }, 420);
@@ -123,8 +151,11 @@ export default function Workstation({ view, onSwitchView }) {
 
   const runActive = () => {
     const tab = tabs.find((t) => t.key === activeKey);
-    if (tab) runSearch(tab, null);
+    if (!tab) return;
+    if (tab.searchType === "AGENT") runAgentSearchFromTab(tab);
+    else runSearch(tab, tab.pivotItem);
   };
+
 
   /* ---------- tab management ---------- */
   const addTab = () => {
@@ -170,7 +201,7 @@ export default function Workstation({ view, onSwitchView }) {
         toast.info("Removed from tray");
       } else {
         n.set(item.id, item);
-        toast.success("Kept in tray — Space again to release");
+        toast.success("Kept in tray - Space again to release");
       }
       return n;
     });
@@ -306,8 +337,110 @@ export default function Workstation({ view, onSwitchView }) {
     setTimeout(() => composerRef.current?.focus(), 50);
   };
 
+  const applyDeepSearchResults = (query, items) => {
+    if (!Array.isArray(items) || !items.length) return;
+    const fresh = makeTab();
+    fresh.label = `Deep Search ${String(tabSeq).padStart(2, "0")}`;
+    fresh.searchType = "TEXT";
+    fresh.query = query;
+    fresh.status = "done";
+    fresh.results = items;
+    fresh.total = items.length;
+    fresh.latency = 0;
+    setTabs((prev) => [...prev, fresh]);
+    setActiveKey(fresh.key);
+    setFocusedId(items[0]?.id || null);
+    setBackend({
+      backend: "online",
+      demo: false,
+      note: "FASTAPI DEEP SEARCH",
+      at: new Date().toLocaleTimeString("en-GB", { hour12: false }),
+    });
+    toast.success(`Deep search returned ${items.length} frames`);
+  };
+  const formatAgentSearchMessage = (result, addedLabel) => {
+    const queries = Array.isArray(result?.queriesUsed) ? result.queriesUsed : [];
+    const routing = result?.routing || result?.plan?.routing || {};
+    const queryLines = queries.slice(0, 4).map((query, index) => `${index + 1}. ${query.queryEn || query.query || ""}`);
+    const routeLine = ["visual", "ocr", "asr"]
+      .map((key) => `${key.toUpperCase()} ${Number(routing[key] || 0).toFixed(1)}`)
+      .join(" | ");
+    return [
+      "Expanded queries:",
+      ...(queryLines.length ? queryLines : ["1. " + (result?.plan?.original_query || "")]),
+      "",
+      "Routing:",
+      routeLine,
+      "",
+      `Results added to ${addedLabel}: ${result?.totalItems || 0} keyframes.`,
+    ].join("\n");
+  };
+
+  const applyAgentSearchResults = (query, result) => {
+    const items = Array.isArray(result?.items) ? result.items : [];
+    const fresh = makeTab();
+    fresh.searchType = "AGENT";
+    fresh.query = query;
+    fresh.status = "done";
+    fresh.results = items;
+    fresh.total = result?.totalItems || items.length;
+    fresh.latency = result?.latency || 0;
+    setTabs((prev) => [...prev, fresh]);
+    setActiveKey(fresh.key);
+    setFocusedId(items[0]?.id || null);
+    setBackend({
+      backend: result?.source === "live" ? "online" : "offline",
+      demo: result?.source !== "live",
+      note: result?.source === "live" ? "FASTAPI AGENT" : "LOCAL MOCK",
+      at: new Date().toLocaleTimeString("en-GB", { hour12: false }),
+    });
+    toast.success(`Agent Search added ${fresh.total} frames to ${fresh.label}`);
+    return fresh.label;
+  };
+
+  const runAgentSearchFromTab = async (tab) => {
+    const query = String(tab?.query || "").trim();
+    if (!query) return;
+    try {
+      const result = await runAgentSearchQuery(tab);
+      applyAgentSearchResults(query, result);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Agent Search failed");
+    }
+  };
+
+  const sendAgentSearch = async () => {
+    const text = agentSearchInput.trim();
+    if (!text || agentSearchStatus === "thinking") return;
+    const params = activeTab?.params || { topk: 100, clip: true, clipv2: false };
+    const userMsg = { id: `a${++chatSeq}`, role: "user", text, demo: false };
+    setAgentSearchMsgs((prev) => [...prev, userMsg]);
+    setAgentSearchInput("");
+    setAgentSearchStatus("thinking");
+
+    try {
+      const result = await runAgentSearchQuery({ searchType: "AGENT", query: text, params });
+      const addedLabel = applyAgentSearchResults(text, result);
+      const reply = {
+        id: `a${++chatSeq}`,
+        role: "assistant",
+        text: formatAgentSearchMessage(result, addedLabel),
+        demo: result?.source !== "live",
+        queriesUsed: result?.queriesUsed || [],
+        queryTitle: "Expanded queries",
+        routing: result?.routing || result?.plan?.routing || {},
+        mustHaveChecks: result?.plan?.must_have_checks || result?.plan?.search_plan?.must_have_checks || [],
+      };
+      setAgentSearchMsgs((prev) => [...prev, reply]);
+      setAgentSearchStatus("idle");
+    } catch (error) {
+      setAgentSearchStatus("err");
+      toast.error(error instanceof Error ? error.message : "Agent Search failed");
+    }
+  };
+
   /* ---------- copilot actions ---------- */
-  const sendChat = () => {
+  const sendChat = async () => {
     const text = chatInput.trim();
     if (!text || chatStatus === "thinking") return;
     const ctx = chatCtxFrame;
@@ -317,17 +450,40 @@ export default function Workstation({ view, onSwitchView }) {
     setChatCtxFrame(null);
     setChatStatus("thinking");
     const frames = userMsg.frames;
-    setTimeout(() => {
-      const reply = { id: `c${++chatSeq}`, role: "assistant", text: askCopilot(text, frames), frames, demo: true };
+
+    try {
+      const result = await askCopilot(text, frames);
+      if (Array.isArray(result?.frames) && result.frames.length) {
+        if (result?.mode === "agent_search") applyAgentSearchResults(result?.searchQuery || text, { items: result.frames, totalItems: result.frames.length, latency: 0, source: "live" });
+        else applyDeepSearchResults(result?.searchQuery || text, result.frames);
+      }
+      const reply = {
+        id: `c${++chatSeq}`,
+        role: "assistant",
+        text: result?.text || "No response returned.",
+        frames: Array.isArray(result?.frames) && result.frames.length ? result.frames : frames,
+        demo: Boolean(result?.demo),
+        queriesUsed: result?.queriesUsed || [],
+        queryTitle: result?.mode === "agent_search" ? "Expanded queries" : "Queries used",
+        routing: result?.routing || {},
+        mustHaveChecks: result?.searchPlan?.must_have_checks || result?.searchPlan?.search_plan?.must_have_checks || [],
+      };
       setChatMsgs((prev) => [...prev, reply]);
       setChatStatus("idle");
-    }, 650);
+    } catch (error) {
+      setChatStatus("err");
+      toast.error(error instanceof Error ? error.message : "Copilot failed");
+    }
   };
 
   const useTranslatedInSearch = (text) => {
-    if (!text.trim()) return;
-    patchTab({ query: text.trim() });
-    runActive();
+    const query = text.trim();
+    if (!query) return;
+    const tab = tabs.find((t) => t.key === activeKey);
+    if (!tab) return;
+    const nextTab = { ...tab, query };
+    setTabs((prev) => prev.map((t) => (t.key === activeKey ? nextTab : t)));
+    runSearch(nextTab, nextTab.pivotItem);
     toast.info("Query updated from translated text");
   };
 
@@ -342,7 +498,7 @@ export default function Workstation({ view, onSwitchView }) {
     const startX = e.clientX;
     const startW = chatWidth;
     const move = (ev) => {
-      const w = Math.min(560, Math.max(320, startW + (startX - ev.clientX)));
+      const w = Math.min(720, Math.max(380, startW + (startX - ev.clientX)));
       setChatWidth(w);
     };
     const up = () => {
@@ -385,7 +541,9 @@ export default function Workstation({ view, onSwitchView }) {
 
   const openExport = () => {
     rememberFocusTarget();
+    const tab = tabs.find((t) => t.key === activeKey);
     setExportItems(Array.from(kept.values()));
+    setExportDefaultSource(tab?.results?.length ? "results" : "tray");
     setExportOpen(true);
   };
 
@@ -397,6 +555,7 @@ export default function Workstation({ view, onSwitchView }) {
   const openExportFromReview = (item) => {
     rememberFocusTarget();
     setExportItems([item]);
+    setExportDefaultSource("custom");
     setExportOpen(true);
   };
 
@@ -444,6 +603,7 @@ export default function Workstation({ view, onSwitchView }) {
       else if (code === "ArrowUp") idx -= cols;
       idx = Math.max(0, Math.min(ids.length - 1, idx));
     }
+    revealFocusedCardRef.current = true;
     setFocusedId(ids[idx]);
   };
 
@@ -460,9 +620,12 @@ export default function Workstation({ view, onSwitchView }) {
   useEffect(() => {
     const el = cardRefs.current[focusedId];
     if (el) {
-      el.focus();
-      el.scrollIntoView({ block: "nearest", inline: "nearest" });
+      el.focus({ preventScroll: true });
+      if (revealFocusedCardRef.current) {
+        el.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
     }
+    revealFocusedCardRef.current = false;
   }, [focusedId]);
 
   const registerRef = (id, el) => {
@@ -471,7 +634,7 @@ export default function Workstation({ view, onSwitchView }) {
 
   const keptArray = Array.from(kept.values());
 
-  const ping = useCallback(async () => {
+  const ping = useCallback(async (showToast = true) => {
     setBackend((previous) => ({ ...previous, checking: true, at: "" }));
     const result = await probeSearchBackend();
     setBackend({
@@ -479,13 +642,15 @@ export default function Workstation({ view, onSwitchView }) {
       checking: false,
       at: new Date().toLocaleTimeString("en-GB", { hour12: false }),
     });
-    if (result.backend === "online") toast.success("FastAPI is online");
-    else toast.warning(`${result.note} — demo search remains available`);
+    if (showToast) {
+      if (result.backend === "online") toast.success("FastAPI is online");
+      else toast.warning(`${result.note} - demo search remains available`);
+    }
   }, [toast]);
 
   useEffect(() => {
-    void ping();
-  }, [ping]);
+    void ping(false);
+  }, []);
 
   return (
     <div className="ws-root">
@@ -514,6 +679,7 @@ export default function Workstation({ view, onSwitchView }) {
             tab={activeTab}
             onPatch={patchTab}
             onRun={runActive}
+            onAgentRun={() => activeTab && runAgentSearchFromTab(activeTab)}
             searchRef={searchRef}
             toast={toast}
           />
@@ -567,6 +733,12 @@ export default function Workstation({ view, onSwitchView }) {
             onStartResize={startChatResize}
             onUseInSearch={useTranslatedInSearch}
             onUseInChat={useTranslatedInChat}
+            agentMessages={agentSearchMsgs}
+            agentStatus={agentSearchStatus}
+            agentInput={agentSearchInput}
+            setAgentInput={setAgentSearchInput}
+            onAgentSearch={sendAgentSearch}
+            agentComposerRef={agentComposerRef}
           />
         </div>
       </div>
@@ -582,6 +754,7 @@ export default function Workstation({ view, onSwitchView }) {
         onRemove={removeKept}
         onClear={() => setKept(new Map())}
         onExport={openExport}
+        onOpenBatch={() => setBatchOpen(true)}
         onOpen={openReview}
         trayRef={trayRef}
       />
@@ -612,17 +785,28 @@ export default function Workstation({ view, onSwitchView }) {
         />
       ) : null}
 
-      <ExportModal open={exportOpen} items={exportItems} onClose={closeExport} toast={toast} />
+      <ExportModal
+        open={exportOpen}
+        items={exportItems}
+        searchItems={activeTab?.results || []}
+        keptItems={keptArray}
+        tabs={tabs}
+        searchType={activeTab?.searchType || "TEXT"}
+        defaultSource={exportDefaultSource}
+        onClose={closeExport}
+        toast={toast}
+      />
+      <BatchQueryModal open={batchOpen} onClose={() => setBatchOpen(false)} toast={toast} />
       <ShortcutOverlay open={showShortcuts} powerUser={powerUser} onTogglePowerUser={togglePowerUser} onClose={toggleHelp} />
-      <ChatFocus messages={chatMsgs} onClose={closeChatFocus} />
+      <ChatFocus open={chatFocus} messages={chatMsgs} onClose={closeChatFocus} />
 
       <div className="ws-ribbon">
         <span className="ws-ribbon-label">Keyboard</span>
         <span className="ws-key"><Keycap>?</Keycap> help</span>
         <span className="ws-key"><Keycap>Tab</Keycap> move</span>
-        <span className="ws-key"><Keycap>↑↓←→</Keycap> grid</span>
-        <span className="ws-key"><Keycap>↵</Keycap> open</span>
-        <span className="ws-key"><Keycap>␣</Keycap> keep</span>
+        <span className="ws-key"><Keycap>Arrows</Keycap> grid</span>
+        <span className="ws-key"><Keycap>Enter</Keycap> open</span>
+        <span className="ws-key"><Keycap>Space</Keycap> keep</span>
         <span className="ws-key"><Keycap>Del</Keycap> remove</span>
         <span className="ws-key"><Keycap>Esc</Keycap> leave / close</span>
         <span className={`ws-key ${powerUser ? "on" : "off"}`}>

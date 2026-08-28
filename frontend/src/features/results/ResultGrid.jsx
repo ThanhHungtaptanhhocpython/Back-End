@@ -26,10 +26,10 @@ export default function ResultGrid({ tab, keptMap, focusedId, onFocusItem, onOpe
   }
   const activeId = tab.results.some((r) => r.id === focusedId) ? focusedId : tab.results[0]?.id ?? null;
   return (
-    <div className="ws-grid" role="grid" aria-label={`Results grid · ${tab.results.length} frames`}>
-      {tab.results.map((item) => (
+    <div className="ws-grid" role="grid" aria-label={`Results grid - ${tab.results.length} frames`}>
+      {tab.results.map((item, index) => (
         <ResultCard
-          key={item.id}
+          key={`${tab.key || "tab"}-${tab.searchType || "TEXT"}-${tab.query || ""}-${item.id}-${item.rank || index}`}
           item={item}
           focused={activeId === item.id}
           isKept={keptMap.has(item.id)}

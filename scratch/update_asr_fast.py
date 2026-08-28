@@ -1,0 +1,341 @@
+import json
+import os
+
+def create_asr_notebook():
+    nb = {
+        "cells": [
+            {
+                "cell_type": "markdown",
+                "metadata": {},
+                "source": [
+                    "# 🎙️ AIC 2026 - Video/Audio ASR Extraction Pipeline (faster-whisper)\n",
+                    "### 🎯 Kaggle GPU Edition - Trích xuất giọng nói cho video từ **L21 đến L30**\n",
+                    "\n",
+                    "Notebook này sử dụng mô hình **faster-whisper (Large-v3-Turbo)** để trích xuất giọng nói tiếng Việt:\n",
+                    "- Nhanh gấp 4–5 lần Whisper nguyên bản nhờ CTranslate2 FP16 trên GPU T4.\n",
+                    "- Tự động quét cực nhanh các file video/audio (.mp4, .mkv, .mp3, .wav, .m4a).\n",
+                    "- Tự động căn chỉnh timestamp và map với keyframe gần nhất (`nearest_faiss_id`, `nearest_frame_name`).\n",
+                    "- Xuất file **`asr_results.json`** đúng 100% schema Elasticsearch `aic_asr` của Backend.\n",
+                    "\n",
+                    "---"
+                ]
+            },
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": [
+                    "# 1. Cài đặt các thư viện cần thiết\n",
+                    "!pip install -q faster-whisper transformers torch torchaudio tqdm Pillow\n",
+                    "!apt-get update -qq && apt-get install -y -qq ffmpeg"
+                ]
+            },
+            {
+                "cell_type": "markdown",
+                "metadata": {},
+                "source": [
+                    "## ⚙️ 2. Cấu hình & Tự động Phát hiện Thư mục Videos/Media trong Input"
+                ]
+            },
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": [
+                    "import os\n",
+                    "import sys\n",
+                    "import glob\n",
+                    "import json\n",
+                    "import csv\n",
+                    "import re\n",
+                    "import warnings\n",
+                    "from pathlib import Path\n",
+                    "from tqdm import tqdm\n",
+                    "import torch\n",
+                    "\n",
+                    "warnings.filterwarnings(\"ignore\")\n",
+                    "\n",
+                    "OUTPUT_JSON = Path(\"/kaggle/working/asr_results.json\")\n",
+                    "CHECKPOINT_JSON = Path(\"/kaggle/working/asr_results_checkpoint.json\")\n",
+                    "\n",
+                    "# Tự động tìm thư mục Videos/Media trong /kaggle/input/\n",
+                    "MEDIA_DIR = None\n",
+                    "search_base = \"/kaggle/input\"\n",
+                    "\n",
+                    "if os.path.exists(search_base):\n",
+                    "    for root, dirs, files in os.walk(search_base):\n",
+                    "        # Tìm thư mục có chứa file video\n",
+                    "        has_video = any(f.lower().endswith(('.mp4', '.mkv', '.avi', '.mp3', '.wav', '.m4a')) for f in files[:20])\n",
+                    "        if has_video:\n",
+                    "            MEDIA_DIR = Path(root)\n",
+                    "            break\n",
+                    "\n",
+                    "if not MEDIA_DIR:\n",
+                    "    if os.path.exists(\"D:/AIC_Data/Videos\"):\n",
+                    "        MEDIA_DIR = Path(\"D:/AIC_Data/Videos\")\n",
+                    "    else:\n",
+                    "        MEDIA_DIR = Path(\"/kaggle/input/your-videos-dataset/\")\n",
+                    "\n",
+                    "print(f\"📁 Thư mục Videos/Media tìm thấy: {MEDIA_DIR}\")\n",
+                    "print(f\"💾 File kết quả đầu ra: {OUTPUT_JSON}\")"
+                ]
+            },
+            {
+                "cell_type": "markdown",
+                "metadata": {},
+                "source": [
+                    "## 🔗 3. Xây dựng Keyframe Timestamp Index để Alignment"
+                ]
+            },
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": [
+                    "def build_keyframe_index():\n",
+                    "    video_keyframe_map = {}\n",
+                    "    faiss_id_counter = 0\n",
+                    "    \n",
+                    "    # Quét CSVs trong /kaggle/input/ (chỉ quét các file kết thúc bằng .csv)\n",
+                    "    csv_files = []\n",
+                    "    if os.path.exists(\"/kaggle/input\"):\n",
+                    "        for root, _, files in os.walk(\"/kaggle/input\"):\n",
+                    "            for f in files:\n",
+                    "                if f.lower().endswith('.csv'):\n",
+                    "                    csv_files.append(os.path.join(root, f))\n",
+                    "                    \n",
+                    "    for csv_f in csv_files:\n",
+                    "        v_id = os.path.splitext(os.path.basename(csv_f))[0]\n",
+                    "        # Chỉ xử lý các file CSV video L21 đến L30\n",
+                    "        if not re.search(r\"L(2[1-9]|30)_V\\d+\", v_id):\n",
+                    "            continue\n",
+                    "            \n",
+                    "        try:\n",
+                    "            with open(csv_f, 'r', encoding='utf-8') as f:\n",
+                    "                reader = csv.DictReader(f)\n",
+                    "                frames_list = []\n",
+                    "                for row in reader:\n",
+                    "                    try:\n",
+                    "                        n_val = int(row.get('n', 0))\n",
+                    "                        pts_time = float(row.get('pts_time', 0.0))\n",
+                    "                        frames_list.append({\n",
+                    "                            \"faiss_id\": faiss_id_counter,\n",
+                    "                            \"timestamp\": pts_time,\n",
+                    "                            \"frame_name\": f\"{n_val:04d}.webp\"\n",
+                    "                        })\n",
+                    "                        faiss_id_counter += 1\n",
+                    "                    except Exception:\n",
+                    "                        pass\n",
+                    "                if frames_list:\n",
+                    "                    video_keyframe_map[v_id] = sorted(frames_list, key=lambda x: x[\"timestamp\"])\n",
+                    "        except Exception:\n",
+                    "            pass\n",
+                    "            \n",
+                    "    if video_keyframe_map:\n",
+                    "        print(f\"✅ Đã nạp keyframes map cho {len(video_keyframe_map)} videos từ CSVs.\")\n",
+                    "    else:\n",
+                    "        print(\"ℹ️ Chưa có map-keyframes CSVs. Hệ thống sẽ căn chỉnh frame ước lượng theo giây.\")\n",
+                    "        \n",
+                    "    return video_keyframe_map\n",
+                    "\n",
+                    "def find_nearest_keyframe(target_time, video_id, keyframe_index):\n",
+                    "    if video_id not in keyframe_index or not keyframe_index[video_id]:\n",
+                    "        return {\"faiss_id\": 0, \"frame_name\": f\"{int(target_time):04d}.webp\"}\n",
+                    "    frames = keyframe_index[video_id]\n",
+                    "    return min(frames, key=lambda f: abs(f[\"timestamp\"] - target_time))\n",
+                    "\n",
+                    "keyframe_index = build_keyframe_index()"
+                ]
+            },
+            {
+                "cell_type": "markdown",
+                "metadata": {},
+                "source": [
+                    "## 🤖 4. Khởi tạo Whisper Model trên GPU (`large-v3-turbo`)"
+                ]
+            },
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": [
+                    "from faster_whisper import WhisperModel\n",
+                    "\n",
+                    "# Dùng model large-v3-turbo (chính xác cao nhất cho tiếng Việt và tốc độ cực nhanh trên T4)\n",
+                    "MODEL_SIZE = \"large-v3-turbo\"\n",
+                    "DEVICE = \"cuda\" if torch.cuda.is_available() else \"cpu\"\n",
+                    "COMPUTE_TYPE = \"float16\" if torch.cuda.is_available() else \"int8\"\n",
+                    "\n",
+                    "print(f\"Đang nạp model faster-whisper [{MODEL_SIZE}] trên GPU ({COMPUTE_TYPE})...\")\n",
+                    "model = WhisperModel(MODEL_SIZE, device=DEVICE, compute_type=COMPUTE_TYPE)\n",
+                    "print(\"✅ Whisper model đã sẵn sàng trên GPU!\")"
+                ]
+            },
+            {
+                "cell_type": "markdown",
+                "metadata": {},
+                "source": [
+                    "## ⚡ 5. Thực hiện Trích xuất ASR & Căn chỉnh Keyframe (L21 -> L30)"
+                ]
+            },
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": [
+                    "valid_video_exts = {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.mp3', '.wav', '.m4a', '.flac'}\n",
+                    "all_media = []\n",
+                    "\n",
+                    "if MEDIA_DIR and os.path.exists(MEDIA_DIR):\n",
+                    "    for root, _, files in os.walk(MEDIA_DIR):\n",
+                    "        for fname in files:\n",
+                    "            ext = os.path.splitext(fname)[1].lower()\n",
+                    "            if ext in valid_video_exts:\n",
+                    "                all_media.append(os.path.join(root, fname))\n",
+                    "\n",
+                    "# Lọc video từ L21 đến L30\n",
+                    "media_files = []\n",
+                    "for mf in all_media:\n",
+                    "    basename = os.path.basename(mf)\n",
+                    "    if re.search(r\"L(2[1-9]|30)_V\\d+\", basename):\n",
+                    "        media_files.append(mf)\n",
+                    "\n",
+                    "if not media_files:\n",
+                    "    media_files = sorted(all_media) # fallback nếu tên không chứa tiền tố Lxx\n",
+                    "else:\n",
+                    "    media_files = sorted(media_files)\n",
+                    "    \n",
+                    "print(f\"🔥 Tìm thấy tổng cộng {len(media_files)} video/audio thuộc dải L21 -> L30 để xử lý.\")\n",
+                    "\n",
+                    "# Nạp checkpoint đã xử lý trước đó\n",
+                    "processed_videos = set()\n",
+                    "asr_results = []\n",
+                    "if CHECKPOINT_JSON.exists():\n",
+                    "    try:\n",
+                    "        with open(CHECKPOINT_JSON, 'r', encoding='utf-8') as f:\n",
+                    "            asr_results = json.load(f)\n",
+                    "            processed_videos = {item[\"video_id\"] for item in asr_results}\n",
+                    "        print(f\"🔄 Đã nạp {len(asr_results)} đoạn ASR từ checkpoint ({len(processed_videos)} videos).\")\n",
+                    "    except Exception as e:\n",
+                    "        print(\"Lỗi nạp checkpoint:\", e)\n",
+                    "\n",
+                    "for media_path in tqdm(media_files, desc=\"🚀 GPU Trích xuất ASR L21 -> L30\"):\n",
+                    "    video_id = os.path.splitext(os.path.basename(media_path))[0]\n",
+                    "    # Lấy định danh video dạng L21_V001\n",
+                    "    m = re.search(r\"(L\\d+_V\\d+)\", video_id)\n",
+                    "    if m:\n",
+                    "        video_id = m.group(1)\n",
+                    "        \n",
+                    "    if video_id in processed_videos:\n",
+                    "        continue\n",
+                    "        \n",
+                    "    try:\n",
+                    "        # faster-whisper đọc trực tiếp video .mp4 qua ffmpeg C-API\n",
+                    "        segments, info = model.transcribe(\n",
+                    "            media_path,\n",
+                    "            language=\"vi\",\n",
+                    "            beam_size=5,\n",
+                    "            word_timestamps=False,\n",
+                    "            vad_filter=True, # Bỏ qua đoạn im lặng\n",
+                    "            vad_parameters=dict(min_silence_duration_ms=500)\n",
+                    "        )\n",
+                    "        \n",
+                    "        video_segments = []\n",
+                    "        for seg in segments:\n",
+                    "            start_time = round(float(seg.start), 3)\n",
+                    "            end_time = round(float(seg.end), 3)\n",
+                    "            text = seg.text.strip()\n",
+                    "            if not text:\n",
+                    "                continue\n",
+                    "                \n",
+                    "            mid_time = (start_time + end_time) / 2.0\n",
+                    "            nearest_frame = find_nearest_keyframe(mid_time, video_id, keyframe_index)\n",
+                    "            \n",
+                    "            doc = {\n",
+                    "                \"video_id\": video_id,\n",
+                    "                \"start_time\": start_time,\n",
+                    "                \"end_time\": end_time,\n",
+                    "                \"text\": text,\n",
+                    "                \"nearest_faiss_id\": int(nearest_frame[\"faiss_id\"]),\n",
+                    "                \"nearest_frame_name\": str(nearest_frame[\"frame_name\"])\n",
+                    "            }\n",
+                    "            video_segments.append(doc)\n",
+                    "            \n",
+                    "        asr_results.extend(video_segments)\n",
+                    "        processed_videos.add(video_id)\n",
+                    "        \n",
+                    "        # Lưu checkpoint sau mỗi video\n",
+                    "        os.makedirs(os.path.dirname(CHECKPOINT_JSON), exist_ok=True)\n",
+                    "        with open(CHECKPOINT_JSON, 'w', encoding='utf-8') as f:\n",
+                    "            json.dump(asr_results, f, ensure_ascii=False, indent=2)\n",
+                    "            \n",
+                    "    except Exception as e:\n",
+                    "        print(f\"Lỗi xử lý {media_path}: {e}\")\n",
+                    "\n",
+                    "os.makedirs(os.path.dirname(OUTPUT_JSON), exist_ok=True)\n",
+                    "with open(OUTPUT_JSON, 'w', encoding='utf-8') as f:\n",
+                    "    json.dump(asr_results, f, ensure_ascii=False, indent=2)\n",
+                    "\n",
+                    "print(f\"\\n🎉 HOÀN TẤT TOÀN BỘ! Đã lưu {len(asr_results)} đoạn ASR vào: {OUTPUT_JSON}\")"
+                ]
+            },
+            {
+                "cell_type": "markdown",
+                "metadata": {},
+                "source": [
+                    "## 📊 6. Kiểm tra & Hướng dẫn Tải về"
+                ]
+            },
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": [
+                    "if os.path.exists(OUTPUT_JSON):\n",
+                    "    with open(OUTPUT_JSON, 'r', encoding='utf-8') as f:\n",
+                    "        data = json.load(f)\n",
+                    "    print(f\"✅ Tổng số câu ASR trích xuất: {len(data)}\")\n",
+                    "    if data:\n",
+                    "        print(\"\\n--- 3 MẪU ĐẦU TIÊN ---\")\n",
+                    "        print(json.dumps(data[:3], indent=2, ensure_ascii=False))\n",
+                    "    print(f\"\\n👉 File kết quả đã sẵn sàng tại: {OUTPUT_JSON}\")\n",
+                    "    print(\"1. Ở cột bên phải Kaggle (tab Output), nhấn vào file `asr_results.json` để tải về máy.\")\n",
+                    "    print(\"2. Copy file vào thư mục Backend: `src/dict/asr_results.json`.\")\n",
+                    "    print(\"3. Chạy `python scripts/indexing/master_index_pipeline.py` để nạp vào Elasticsearch.\")"
+                ]
+            }
+        ],
+        "metadata": {
+            "kernelspec": {
+                "display_name": "Python 3",
+                "language": "python",
+                "name": "python3"
+            },
+            "language_info": {
+                "name": "python"
+            }
+        },
+        "nbformat": 4,
+        "nbformat_minor": 5
+    }
+    return nb
+
+base_dir = r"c:\Users\Lenovo\Documents\GitHub\AIC\Backend\Back-End"
+asr_nb = create_asr_notebook()
+
+# Write to scripts/notebooks/kaggle_new/
+os.makedirs(os.path.join(base_dir, "scripts", "notebooks", "kaggle_new"), exist_ok=True)
+with open(os.path.join(base_dir, "scripts", "notebooks", "kaggle_new", "extract_asr_kaggle.ipynb"), "w", encoding="utf-8") as f:
+    json.dump(asr_nb, f, indent=1, ensure_ascii=False)
+
+# Write to scripts/notebooks/
+with open(os.path.join(base_dir, "scripts", "notebooks", "04_Extract_ASR_Whisper.ipynb"), "w", encoding="utf-8") as f:
+    json.dump(asr_nb, f, indent=1, ensure_ascii=False)
+
+print("Updated ASR notebooks with ultra-fast scanner and L21->L30 filter!")

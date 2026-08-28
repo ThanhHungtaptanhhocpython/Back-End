@@ -1,6 +1,8 @@
 import unittest
 from unittest.mock import patch, MagicMock
+from fastapi.testclient import TestClient
 import sys
+import types
 import os
 
 backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -8,83 +10,89 @@ src_dir = os.path.join(backend_dir, 'src')
 sys.path.insert(0, backend_dir)
 sys.path.insert(0, src_dir)
 
-# 1. Mock heavy dependencies globally so they don't crash
-sys.modules['faiss'] = MagicMock()
-sys.modules['torch'] = MagicMock()
-sys.modules['transformers'] = MagicMock()
-sys.modules['open_clip'] = MagicMock()
-sys.modules['PIL'] = MagicMock()
+# Mock heavy deps only if they are not already imported for real elsewhere
+# (clobbering real torch/faiss breaks later tests that need them).
+sys.modules.setdefault('faiss', MagicMock())
+sys.modules.setdefault('torch', MagicMock())
+sys.modules.setdefault('transformers', MagicMock())
+sys.modules.setdefault('open_clip', MagicMock())
+sys.modules.setdefault('PIL', MagicMock())
+
+# test_task2.py stubs sys.modules['src.services.user_service'] with a MagicMock;
+# drop that stub so this module exercises the real service implementation.
+_stub = sys.modules.get("src.services.user_service")
+if _stub is not None and not isinstance(_stub, types.ModuleType):
+    del sys.modules["src.services.user_service"]
+
+import src.services.user_service as user_service
+
+
+def _make_fake_beit3_module(retriever):
+    """Return a stub module for src.services.beit3_retriever whose factory
+    yields `retriever`. The real module cannot be imported here because the
+    heavy deps above are mocked."""
+    mod = types.ModuleType("src.services.beit3_retriever")
+    mod.get_beit3_retriever = MagicMock(return_value=retriever)
+    return mod
+
 
 class Task3SingletonTests(unittest.TestCase):
     def setUp(self):
-        # Force reload modules to ensure we capture the initialization logic
-        modules_to_reload = [
-            'src.services.user_service',
-            'src.controllers.user_controller',
-            'src',
-            'utils.faiss_processing',
-            'utils.vlm_processing',
-            'utils.trake_processing'
-        ]
-        for m in modules_to_reload:
-            if m in sys.modules:
-                del sys.modules[m]
+        # Start each test from a clean singleton state
+        self._reset_singletons()
 
-    @patch('utils.faiss_processing.MyFaiss')
-    @patch('utils.vlm_processing.VLMProcessor')
-    def test_singleton_initialization(self, MockVLM, MockFaiss):
+    def _reset_singletons(self):
+        user_service._cosine_faiss = None
+        user_service._trake_search = None
+        user_service._vlm_processor = None
+        user_service._elastic_processor = None
+
+    @patch('src.services.user_service.TRAKE')
+    @patch('src.services.user_service.VLMProcessor')
+    @patch('src.services.user_service.MyFaiss')
+    def test_lazy_singletons_initialized_once(self, MockFaiss, MockVLM, MockTRAKE):
         """
-        Verify that MyFaiss and VLMProcessor are instantiated exactly once at module load,
-        and that TRAKE reuses the Faiss instance.
+        Verify that the lazy service getters create each dependency exactly once,
+        cache it, and that TRAKE receives the shared MyFaiss instance (DI).
         """
-        import src.services.user_service as user_service
-        
-        # Verify singletons are created at module level
-        self.assertIsNotNone(user_service.CosineFaiss)
-        self.assertIsNotNone(user_service.TrakeSearch)
-        self.assertIsNotNone(user_service.VlmProcessorInstance)
-        
-        # Verify TRAKE reuses CosineFaiss (Dependency Injection)
-        self.assertIs(user_service.TrakeSearch.faiss_searcher, user_service.CosineFaiss)
-        
-        # Verify VLMProcessor was instantiated exactly ONCE during import
-        MockVLM.assert_called_once()
-        
-        # Verify MyFaiss was instantiated exactly ONCE (for CosineFaiss)
-        # If TRAKE was creating its own Faiss, this would fail.
+        faiss_first = user_service.get_cosine_faiss()
+        faiss_second = user_service.get_cosine_faiss()
+        self.assertIs(faiss_first, faiss_second)
         MockFaiss.assert_called_once()
-        
-    @patch('utils.faiss_processing.MyFaiss')
-    @patch('utils.vlm_processing.VLMProcessor')
-    def test_qnasearch_uses_singleton(self, MockVLM, MockFaiss):
+
+        trake = user_service.get_trake_search()
+        MockTRAKE.assert_called_once_with(faiss_first)
+
+        vlm = user_service.get_vlm_processor()
+        self.assertIs(vlm, user_service.get_vlm_processor())
+        MockVLM.assert_called_once()
+
+    def test_qnasearch_reuses_retriever_instance(self):
         """
-        Verify that calling the /qnasearch endpoint does NOT instantiate VLMProcessor again.
+        Verify that /qnasearch serves every request through the same BEiT3
+        retriever instance (the module-level singleton) on both URL prefixes.
         """
-        import src.services.user_service as user_service
-        
-        # Setup mock behavior for the global instance
-        user_service.VlmProcessorInstance.batch_answer.return_value = ["mock answer"]
-        
-        # We also need to mock CosineFaiss.text_search to prevent errors in endpoint
-        user_service.CosineFaiss.text_search.return_value = ([], [], [], [])
-        
-        from src import app
-        client = app.test_client()
-        client.testing = True
-        
-        # Reset mock call counts after module initialization
-        MockVLM.reset_mock()
-        
-        # Make a request
-        res = client.post('/users/qnasearch', json={"query": "test query", "topk": 1})
-        
-        self.assertEqual(res.status_code, 200)
-        
-        # VERY IMPORTANT: Verify VLMProcessor was NOT instantiated during the request
-        MockVLM.assert_not_called()
-        
-        # Verify the singleton instance's batch_answer was used instead
-        user_service.VlmProcessorInstance.batch_answer.assert_called_once()
+        mock_retriever = MagicMock()
+        mock_retriever.search_visual.return_value = [
+            {"faiss_id": 101, "video_key": "V01", "frame_key": "L21_V001_0001"}
+        ]
+        fake_module = _make_fake_beit3_module(mock_retriever)
+
+        from main import app
+        client = TestClient(app)
+
+        with patch.dict(sys.modules, {"src.services.beit3_retriever": fake_module}):
+            res1 = client.post('/users/qnasearch', json={"query": "test query", "topk": 1})
+            res2 = client.post('/qnasearch', json={"query": "another query", "topk": 1})
+
+        self.assertEqual(res1.status_code, 200)
+        self.assertEqual(res2.status_code, 200)
+        self.assertTrue(res1.json()["success"])
+        self.assertEqual(res1.json()["data"]["total_items"], 1)
+        self.assertEqual(res1.json()["data"]["items"][0]["faiss_id"], 101)
+
+        # Both requests were served by the same retriever instance
+        self.assertEqual(mock_retriever.search_visual.call_count, 2)
 
 if __name__ == '__main__':
     unittest.main()

@@ -9,9 +9,20 @@
   background: var(--ws-surface);
   border: 1px solid var(--ws-border);
   border-radius: 10px;
-  height: calc(100vh - 340px);
-  min-height: 420px;
+  height: clamp(480px, calc(100vh - 220px), 860px);
   overflow: hidden;
+}
+
+.ws-chat-pane {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.ws-chat-pane[hidden] {
+  display: none;
 }
 
 .ws-chat-resize {
@@ -125,6 +136,7 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  user-select: text;
 }
 
 .ws-msg {
@@ -135,8 +147,38 @@
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
+.ws-msg-text,
+.ws-msg-line {
+  min-height: 1.5em;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.ws-msg-heading {
+  margin: 8px 0 3px;
+  font-weight: 700;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.ws-msg-text a {
+  color: var(--ws-primary);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.ws-msg button,
+.ws-query-copy {
+  user-select: none;
+  -webkit-user-select: none;
+}
 .ws-msg.user {
   align-self: flex-end;
   background: var(--ws-primary);
@@ -461,4 +503,163 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.ws-query-list {
+  margin-top: 10px;
+  border: 1px solid var(--ws-border);
+  border-radius: 8px;
+  background: var(--ws-surface);
+  overflow: hidden;
+  user-select: text;
+}
+
+.ws-query-list-title {
+  padding: 6px 8px;
+  background: var(--ws-surface-2);
+  border-bottom: 1px solid var(--ws-border);
+  color: var(--ws-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.ws-query-item {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid var(--ws-border);
+}
+
+.ws-query-item:last-child {
+  border-bottom: none;
+}
+
+.ws-query-kind {
+  color: var(--ws-primary-strong);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 22px;
+}
+
+.ws-query-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.ws-query-line {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 26px;
+  align-items: start;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.ws-query-line.en .ws-query-text {
+  color: var(--ws-text);
+  font-weight: 600;
+}
+
+.ws-query-lang {
+  color: var(--ws-faint);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 22px;
+}
+
+.ws-query-text {
+  color: var(--ws-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-word;
+  user-select: text;
+}
+
+.ws-query-copy {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--ws-border);
+  border-radius: 5px;
+  background: var(--ws-surface-2);
+  color: var(--ws-muted);
+  cursor: pointer;
+}
+
+.ws-query-copy:hover {
+  border-color: var(--ws-primary);
+  color: var(--ws-primary);
+}
+
+.ws-routing {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--ws-border);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--ws-surface);
+}
+
+.ws-routing-row {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--ws-muted);
+}
+
+.ws-routing-track {
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--ws-surface-2);
+}
+
+.ws-routing-track i {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  background: var(--ws-primary);
+}
+
+.ws-routing-row strong {
+  text-align: right;
+  color: var(--ws-text);
+}
+
+.ws-checklist {
+  margin-top: 10px;
+  border: 1px solid var(--ws-border);
+  border-radius: 8px;
+  background: var(--ws-surface);
+  overflow: hidden;
+}
+
+.ws-check-row {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 8px;
+  padding: 7px 8px;
+  border-top: 1px solid var(--ws-border);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.ws-check-index {
+  color: var(--ws-primary-strong);
+  font-weight: 800;
+  font-size: 10px;
+}
+
+.ws-check-label {
+  color: var(--ws-text);
+  word-break: break-word;
 }

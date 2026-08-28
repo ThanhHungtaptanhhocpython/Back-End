@@ -2,12 +2,20 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 class TextSearchRequest(BaseModel):
-    query: str = Field(..., min_length=1)
+    query: str = Field(default="")
     topk: int = Field(..., gt=0)
     clip: Optional[bool] = None
     clipv2: Optional[bool] = None
 
-# For /imagesearch, we receive fields via Form data, so we don't necessarily 
-# validate JSON body for it, but if needed we can define it here.
-# Since we will use Form(), we might not need an explicit BaseModel 
-# for the image search request itself in the router.
+class TranslateRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+    from_lang: str = Field(default="vi")
+    to_lang: str = Field(default="en")
+
+class TranslateResponse(BaseModel):
+    success: bool = True
+    translated_text: str
+    from_lang: str
+    to_lang: str
+    translated: Optional[bool] = None
+    provider: Optional[str] = None

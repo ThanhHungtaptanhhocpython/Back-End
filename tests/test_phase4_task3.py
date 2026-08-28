@@ -55,7 +55,8 @@ class TestMultimodalAPI(unittest.TestCase):
             ocr_query="Police",
             asr_query="",
             weights={"visual": 0.5, "ocr": 0.5, "asr": 0.0},
-            topk=50
+            topk=50,
+            original_query='Cảnh sát "Police"',
         )
 
 if __name__ == "__main__":

@@ -113,8 +113,13 @@ def merge_and_rank(
             merged[fid] = {
                 "faiss_id": fid,
                 "video_id": base_doc.get("video_id", ""),
+                "frame_id": base_doc.get("frame_id"),
+                "frame_idx": base_doc.get("frame_idx"),
                 "frame_name": base_doc.get("frame_name", ""),
+                "frame_path": base_doc.get("frame_path"),
                 "timestamp": base_doc.get("timestamp", 0.0),
+                "namespace": base_doc.get("namespace"),
+                "folder_key": base_doc.get("folder_key") or base_doc.get("namespace"),
                 "score_breakdown": {
                     "visual": 0.0,
                     "ocr": 0.0,
@@ -134,8 +139,9 @@ def merge_and_rank(
         # Capture base64 image if Faiss returned it
         if "image" in item:
             doc["image"] = item["image"]
-        if "folder_key" in item:
-            doc["folder_key"] = item["folder_key"]
+        for key in ("frame_id", "frame_idx", "frame_path", "namespace", "folder_key", "fps", "source_frame_idx", "keyframe_number"):
+            if item.get(key) not in (None, ""):
+                doc[key] = item[key]
 
     # Process OCR
     for item in ocr_items:
@@ -195,17 +201,16 @@ def multimodal_search(
     if visual_query and weights.get("visual", 0.0) > 0:
         logger.info(f"Executing Visual Search for '{visual_query}'...")
         try:
-            # We must import inside the function to avoid circular imports 
+            # We must import inside the function to avoid circular imports
             # if user_service imports from fusion_service later.
             from src.services.user_service import getImageDataSingleTextSearch
-            # Faiss text search returns dicts with 'image', 'faiss_id_clip' etc.
-            # We map it to our generic 'faiss_id' and a hypothetical raw score
-            # In user_service.getImageDataSingleTextSearch, we don't return raw scores currently,
-            # so we'll mock a descending raw score based on index position.
+            # getImageDataSingleTextSearch returns BEiT3Retriever results with
+            # real FAISS inner-product scores in 'score' and the FAISS vector
+            # id in 'vector_id'; map them to the generic keys this module uses.
             faiss_list = getImageDataSingleTextSearch(visual_query, topk)
-            for i, item in enumerate(faiss_list):
-                item["_score"] = float(topk - i)  # Descending fake score for normalization
-                item["faiss_id"] = item.get("faiss_id_clip")
+            for item in faiss_list:
+                item["_score"] = item.get("score", 0.0)
+                item["faiss_id"] = item.get("vector_id")
             visual_results = normalize_scores(faiss_list)
         except Exception as e:
             logger.error(f"Visual search failed: {e}")
@@ -284,3 +289,5 @@ def multimodal_search(
         return rerank_pool + bottom_pool
 
     return initial_results
+
+

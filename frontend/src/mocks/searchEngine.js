@@ -64,7 +64,7 @@ function makeThumb({ id, seed, timecode, camera, videoKey, frameKey, folderKey }
   ${rec ? `<circle cx="432" cy="24" r="5" fill="#ff3b30"><animate attributeName="opacity" values="1;0.2;1" dur="1.2s" repeatCount="indefinite" /></circle>` : ""}
   ${dots}
   <rect width="480" height="270" fill="url(#vg${gid})" />
-  <text x="14" y="26" font-family="monospace" font-size="13" fill="#ffd166" letter-spacing="1">${rec ? "● REC  " : "▸ PLAY  "}${esc(timecode)}</text>
+  <text x="14" y="26" font-family="monospace" font-size="13" fill="#ffd166" letter-spacing="1">${rec ? "-- REC  " : "▸ PLAY  "}${esc(timecode)}</text>
   <text x="14" y="44" font-family="monospace" font-size="11" fill="#7dd3fc" letter-spacing="1">${esc(camera)} • AK4K • ${gid}</text>
   <text x="466" y="258" text-anchor="end" font-family="monospace" font-size="11" fill="#94a3b8">${esc(folderKey)} / ${esc(videoKey)} / ${esc(frameKey)}</text>
   <text x="466" y="240" text-anchor="end" font-family="monospace" font-size="11" fill="#94a3b8">2026-08-02 AK-${Math.floor(rnd() * 900) + 100}</text>

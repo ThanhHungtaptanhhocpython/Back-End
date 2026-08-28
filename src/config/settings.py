@@ -16,6 +16,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -59,12 +60,74 @@ class Settings(BaseSettings):
     # --- External Services ---
     elasticsearch_url: str = "http://localhost:9200"
 
+    # --- CORS ---
+    # Comma-separated list of allowed origins. Use "*" to allow any origin
+    # (credentials will be disabled automatically in that case).
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000"
+
     # --- Model Configuration ---
     clip_model_name: str = "ViT-H-14-quickgelu"
     clip_pretrained: str = "dfn5b"
 
+    # --- BEiT3 Retrieval (real visual-search path) ---
+    # All paths are machine-specific runtime artifacts and must be set via
+    # the environment; there is no in-repo default because the checkpoint,
+    # FAISS index, and parquet files are not committed to Git.
+    beit3_faiss_index_path: Path | None = None
+    beit3_global_ids_path: Path | None = None
+    beit3_video_metadata_path: Path | None = None
+    beit3_index_meta_path: Path | None = None
+    beit3_checkpoint_path: Path | None = None
+    beit3_tokenizer_path: Path | None = None
+    beit3_device: str = "cuda"
+    beit3_max_seq_len: int = 64
+
+    # Optional overrides when the real global_ids.parquet column names don't
+    # match the auto-detected candidates (see BEiT3Retriever._detect_columns).
+    beit3_col_vector_id: str | None = None
+    beit3_col_video_id: str | None = None
+    beit3_col_frame_id: str | None = None
+    beit3_col_frame_path: str | None = None
+    beit3_col_timestamp: str | None = None
+    beit3_col_namespace: str | None = None
+
     # --- Logging ---
     log_level: str = "INFO"
+
+    # --- LLM / Agent (chat planner, translation fallback) ---
+    llm_provider: str = "auto"
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-4o-mini"
+    openrouter_api_key: str | None = None
+    openrouter_model: str = "openai/gpt-4o-mini"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_max_tokens: int = 512
+    openrouter_site_url: str = "http://localhost:3000"
+    openrouter_app_name: str = "AIC Backend"
+    openrouter_translate_model: str | None = None
+    openrouter_translate_max_tokens: int = 384
+    agent_llm_enabled: bool = False
+    agent_llm_model: str | None = None
+    agent_llm_max_tokens: int = 900
+    agent_vlm_enabled: bool = False
+    agent_vlm_model: str = "google/gemini-2.5-flash"
+    agent_vlm_max_candidates: int = 12
+    agent_vlm_batch_size: int = 4
+    agent_vlm_max_tokens: int = 900
+    agent_vlm_timeout_seconds: float = 45.0
+    agent_vlm_image_max_side: int = 768
+    anthropic_api_key: str | None = None
+    anthropic_model: str = "claude-3-5-sonnet-20240620"
+    anthropic_max_tokens: int = 2048
+    nvidia_api_key: str | None = None
+    nvidia_model: str = "nvidia/nemotron-3-super-120b-a12b"
+    nvidia_max_tokens: int = 2048
+    nvidia_top_p: float = 1.0
+    google_api_key: str | None = None
+    google_model: str = "gemini-1.5-flash"
+
+    # --- Chat memory ---
+    chat_history_messages: int = 6
 
     model_config = {
         "env_file": ".env",
@@ -72,15 +135,61 @@ class Settings(BaseSettings):
         "extra": "ignore",
     }
 
+
+    @field_validator("debug", mode="before")
+    @classmethod
+    def _coerce_debug_bool(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip().lower() in {"release", "production", "prod"}:
+            return False
+        return value
+    @field_validator(
+        "faiss_index_path",
+        "metadata_path",
+        "keyframes_root",
+        "features_root",
+        "beit3_faiss_index_path",
+        "beit3_global_ids_path",
+        "beit3_video_metadata_path",
+        "beit3_index_meta_path",
+        "beit3_checkpoint_path",
+        "beit3_tokenizer_path",
+        mode="before",
+    )
+    @classmethod
+    def _blank_path_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator(
+        "openai_api_key",
+        "openrouter_api_key",
+        "anthropic_api_key",
+        "nvidia_api_key",
+        "google_api_key",
+        "openrouter_translate_model",
+        "agent_llm_model",
+        mode="before",
+    )
+    @classmethod
+    def _blank_str_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    def get_cors_origins(self) -> list[str]:
+        """Return the parsed list of allowed CORS origins."""
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
     def get_faiss_index_path(self) -> Path:
         """Return the resolved Faiss index path.
 
-        Falls back to ``src/dict/nw/faiss_index_clip.bin`` when no
+        Falls back to ``src/dict/faiss_index.bin`` when no
         explicit override is provided via the environment.
         """
         if self.faiss_index_path is not None:
             return Path(self.faiss_index_path)
-        return self.src_dir / "dict" / "nw" / "faiss_index_clip.bin"
+        return self.src_dir / "dict" / "faiss_index.bin"
 
     def get_metadata_path(self) -> Path:
         """Return the resolved metadata JSON path.

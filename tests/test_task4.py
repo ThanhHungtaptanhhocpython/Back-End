@@ -1,6 +1,8 @@
 import unittest
-from unittest.mock import patch, mock_open, MagicMock
+from unittest.mock import patch, MagicMock
+from fastapi.testclient import TestClient
 import sys
+import types
 import os
 import numpy as np
 
@@ -9,27 +11,33 @@ src_dir = os.path.join(backend_dir, 'src')
 sys.path.insert(0, backend_dir)
 sys.path.insert(0, src_dir)
 
-sys.modules['faiss'] = MagicMock()
-sys.modules['torch'] = MagicMock()
-sys.modules['transformers'] = MagicMock()
-sys.modules['open_clip'] = MagicMock()
-sys.modules['open_clip'].create_model_and_transforms.return_value = (MagicMock(), MagicMock(), MagicMock())
-sys.modules['PIL'] = MagicMock()
+# Mock heavy deps only if they are not already imported for real elsewhere
+# (clobbering real torch/faiss breaks later tests that need them).
+sys.modules.setdefault('faiss', MagicMock())
+sys.modules.setdefault('torch', MagicMock())
+sys.modules.setdefault('transformers', MagicMock())
+_open_clip = sys.modules.setdefault('open_clip', MagicMock())
+if isinstance(_open_clip, MagicMock):
+    _open_clip.create_model_and_transforms.return_value = (MagicMock(), MagicMock(), MagicMock())
+sys.modules.setdefault('PIL', MagicMock())
+
+# test_task2.py stubs sys.modules['src.services.user_service'] with a MagicMock;
+# drop that stub so requests below hit the real service implementation.
+_stub = sys.modules.get("src.services.user_service")
+if _stub is not None and not isinstance(_stub, types.ModuleType):
+    del sys.modules["src.services.user_service"]
 
 class Task4ErrorHandlingTests(unittest.TestCase):
     def setUp(self):
-        # Force reload modules
+        # Drop cached modules so each test starts from a clean import state
         modules_to_reload = [
             'src.services.user_service',
-            'src.controllers.user_controller',
-            'src',
             'utils.faiss_processing',
             'utils.vlm_processing',
             'utils.trake_processing'
         ]
         for m in modules_to_reload:
-            if m in sys.modules:
-                del sys.modules[m]
+            sys.modules.pop(m, None)
 
     def test_faiss_missing_index_fallback(self):
         """Verify that MyFaiss doesn't crash on init if files are missing"""
@@ -47,49 +55,59 @@ class Task4ErrorHandlingTests(unittest.TestCase):
         self.assertEqual(scores.size, 0)
         self.assertEqual(ids.size, 0)
 
-    @patch('builtins.open')
-    @patch('utils.faiss_processing.MyFaiss')
-    @patch('utils.vlm_processing.VLMProcessor')
-    def test_qnasearch_skips_missing_images(self, MockVLM, MockFaiss, mock_open_func):
-        """Verify that /qnasearch gracefully skips missing image files without crashing."""
-        import src.services.user_service as user_service
-        
-        # Setup mock behavior for search results (3 items)
-        mock_infos = [
-            {"global_frame_id": 1, "video_id": "V01", "split": "videos-l21-a"},
-            {"global_frame_id": 2, "video_id": "V02", "split": "videos-l21-a"},
-            {"global_frame_id": 3, "video_id": "V03", "split": "videos-l21-a"}
+    def _fake_beit3_module(self, retriever):
+        """Return a stub module for src.services.beit3_retriever whose factory
+        yields `retriever`. The real module cannot be imported here because the
+        heavy deps above are mocked."""
+        mod = types.ModuleType("src.services.beit3_retriever")
+        mod.get_beit3_retriever = MagicMock(return_value=retriever)
+        return mod
+
+    def test_qnasearch_defaults_missing_answers(self):
+        """Verify that /qnasearch fills in an empty answer for items that omit it."""
+        mock_retriever = MagicMock()
+        # The first item intentionally omits the optional 'answer' field.
+        mock_retriever.search_visual.return_value = [
+            {"faiss_id": 101, "video_key": "V01", "frame_key": "L21_V001_0001"},
+            {"faiss_id": 102, "video_key": "V02", "frame_key": "L21_V002_0002", "answer": "prefilled"},
         ]
-        mock_paths = ["path1.webp", "path2.webp", "path3.webp"]
-        
-        user_service.CosineFaiss.text_search.return_value = (None, None, mock_infos, mock_paths)
-        user_service.VlmProcessorInstance.batch_answer.return_value = ["ans1", "ans3"]
-        
-        # Simulate open() raising an exception for the SECOND file, but succeeding for 1st and 3rd
-        def open_side_effect(path, mode):
-            if "path2.webp" in path:
-                raise Exception("Simulated File Error")
-            return mock_open(read_data=b"dummy_image_data")()
-            
-        mock_open_func.side_effect = open_side_effect
-        
-        from src import app
-        client = app.test_client()
-        client.testing = True
-        
-        res = client.post('/users/qnasearch', json={"query": "test query", "topk": 3})
+        fake_module = self._fake_beit3_module(mock_retriever)
+
+        from main import app
+        client = TestClient(app)
+
+        with patch.dict(sys.modules, {"src.services.beit3_retriever": fake_module}):
+            res = client.post('/users/qnasearch', json={"query": "test query", "topk": 2})
+
         self.assertEqual(res.status_code, 200)
-        
-        data = res.get_json()
+
+        data = res.json()
         self.assertTrue(data['success'])
-        
-        # Only 2 results should remain because the 2nd was skipped
-        self.assertEqual(len(data['data']), 2)
-        
-        # Verify VLM was only called with the TWO successful paths
-        called_paths = user_service.VlmProcessorInstance.batch_answer.call_args[0][0]
-        self.assertEqual(len(called_paths), 2)
-        self.assertNotIn("path2.webp", str(called_paths))
+        self.assertEqual(data['data']['total_items'], 2)
+
+        # Missing answers are defaulted to '', existing ones are preserved
+        self.assertEqual(data['data']['items'][0]['answer'], '')
+        self.assertEqual(data['data']['items'][1]['answer'], 'prefilled')
+
+    def test_qnasearch_returns_sanitized_error_on_failure(self):
+        """Verify that a retriever failure produces a sanitized JSON error instead of a crash."""
+        mock_retriever = MagicMock()
+        mock_retriever.search_visual.side_effect = RuntimeError("index unavailable")
+        fake_module = self._fake_beit3_module(mock_retriever)
+
+        from main import app
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with patch.dict(sys.modules, {"src.services.beit3_retriever": fake_module}):
+            res = client.post('/users/qnasearch', json={"query": "test query", "topk": 1})
+
+        self.assertEqual(res.status_code, 500)
+
+        data = res.json()
+        self.assertFalse(data['success'])
+        # Raw exception details must not leak to the client
+        self.assertNotIn("index unavailable", data['message'])
+        self.assertEqual(data['data']['items'], [])
 
 if __name__ == '__main__':
     unittest.main()

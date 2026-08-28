@@ -12,7 +12,7 @@ export default function StatusBar({ view, onSwitchView, clock, backend, onPing, 
           <div className="ws-brand-title">
             Keyframe Retrieval <em>Workstation</em>
           </div>
-          <div className="ws-brand-sub">AI Challenge 2026 · Multimodal video index · preview</div>
+          <div className="ws-brand-sub">AI Challenge 2026 - Multimodal video index - preview</div>
         </div>
       </div>
 
@@ -24,7 +24,7 @@ export default function StatusBar({ view, onSwitchView, clock, backend, onPing, 
           <div className="ws-status-line">
             <span className={`ws-led ${backend.checking ? "check" : backend.backend === "online" ? "on" : "off"}`} />
             <span style={{ color: backend.backend === "online" ? "var(--ws-green)" : "var(--ws-red)" }}>
-              {backend.checking ? "PROBING…" : backend.backend === "online" ? "ONLINE" : "OFFLINE"}
+              {backend.checking ? "PROBING..." : backend.backend === "online" ? "ONLINE" : "OFFLINE"}
             </span>
             <button className="ws-status-btn" onClick={onPing}>
               <ReloadOutlined /> ping
@@ -36,7 +36,7 @@ export default function StatusBar({ view, onSwitchView, clock, backend, onPing, 
           <div className="ws-status-line">
             <span className={`ws-led ${isDemo ? "demo" : "on"}`} />
             <span style={{ color: isDemo ? "var(--ws-amber)" : "var(--ws-green)" }}>
-              {isDemo ? "DEMO" : "LIVE"} · {backend.note || "LOCAL MOCK"}
+              {isDemo ? "DEMO" : "LIVE"} - {backend.note || "LOCAL MOCK"}
             </span>
           </div>
         </div>

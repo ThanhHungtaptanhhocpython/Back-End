@@ -6,6 +6,12 @@ class ChatRequest(BaseModel):
     message: str
     topk: Optional[int] = 100
 
+class DeepKeyframeSearchRequest(BaseModel):
+    session_id: Optional[str] = None
+    message: str
+    topk: Optional[int] = 20
+    per_query: Optional[int] = 30
+
 class ChatResponse(BaseModel):
     success: bool
     session_id: str

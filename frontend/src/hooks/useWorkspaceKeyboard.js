@@ -6,23 +6,23 @@ const GRID_NAV_CODES = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown
 /**
  * Contextual keyboard shortcuts for the workstation.
  *
- * Mandatory keys (always on — cannot be disabled):
+ * Mandatory keys (always on - cannot be disabled):
  *   ?            open help (outside fields and outside IME composition)
  *   Tab / Shift+Tab   native navigation, never intercepted
- *   ↑ ↓ ← → Home End  roving focus across the results grid
+ *   Up - Left Right Home End  roving focus across the results grid
  *   Enter        open the focused frame reviewer
- *   Space        keep / unkeep — only when a result card or reviewer owns focus
- *   Delete       remove frame with undo — never Backspace
- *   ← / →        reviewer previous / next
+ *   Space        keep / unkeep - only when a result card or reviewer owns focus
+ *   Delete       remove frame with undo - never Backspace
+ *   Left / Right        reviewer previous / next
  *   Esc          layered: first Esc leaves a field, next closes the top overlay;
  *                closing restores focus to the exact invoker card / button
  *
- * Optional power-user mode (off by default — separate setting):
+ * Optional power-user mode (off by default - separate setting):
  *   /  focus query   S  similar pivot   X  remove   E  export
  *
  * Safety rules enforced here:
  *  - IME composition (`isComposing` / keyCode 229) is never intercepted.
- *  - Ctrl/Cmd/Alt are never intercepted — the app uses plain contextual keys.
+ *  - Ctrl/Cmd/Alt are never intercepted - the app uses plain contextual keys.
  *  - Accelerators never fire inside input/textarea/select/contenteditable.
  *  - Auto-repeat is allowed ONLY for navigation arrows.
  *  - No Vim HJKL, no brackets, no G-chords, no Cmd+K, no Alt combos, no F2,
@@ -37,7 +37,7 @@ export default function useWorkspaceKeyboard(handlersRef) {
     const keydown = (e) => {
       const H = handlersRef.current;
 
-      /* IME composition — never intercept */
+      /* IME composition - never intercept */
       if (e.isComposing || e.keyCode === 229) return;
 
       const tgt = e.target;
@@ -46,7 +46,7 @@ export default function useWorkspaceKeyboard(handlersRef) {
       const onInteractive = tgt && (tgt.tagName === "BUTTON" || tgt.tagName === "A");
       const code = e.code;
 
-      /* never intercept modifier chords — plain contextual keys only */
+      /* never intercept modifier chords - plain contextual keys only */
       if (e.metaKey || e.ctrlKey || e.altKey) return;
 
       /* "?" (Shift+Slash) is a reserved keycap, not a chord */

@@ -1,0 +1,71 @@
+{
+  "version": "AIC2026_05_BEiT3_FAISS_v1.3",
+  "scope": "L21-L30",
+  "embedding_root": "/kaggle/input/datasets/quyminhthangnguyen/hcmai-2025-cloudflare-r2-backup/beit3_retrieval_embeddings_for_vectordb",
+  "selected_artifacts": 873,
+  "unique_video_ids": 873,
+  "vector_count": 286629,
+  "dimension": 1024,
+  "embedding_dtype": "float32",
+  "embedding_norm_sample": {
+    "sample_rows": 4096,
+    "min": 0.9999997615814209,
+    "median": 1.0,
+    "mean": 1.0,
+    "max": 1.0000001192092896,
+    "fraction_within_1e-3": 1.0,
+    "fraction_within_1e-2": 1.0
+  },
+  "index_type": "faiss.IndexIDMap2(faiss.IndexFlatIP(1024))",
+  "similarity": "inner product; equivalent to cosine because image/query vectors are L2 normalized",
+  "pairs_signature_sha256": "ec07bcf29274911d00bb629805be6cc973780976316a878d4707fbce5aba750f",
+  "build_elapsed_seconds_current_session": 21.580156676,
+  "files": {
+    "index": "/kaggle/working/aic2026_05_beit3_faiss/beit3_faiss.index",
+    "global_ids": "/kaggle/working/aic2026_05_beit3_faiss/global_ids.parquet",
+    "video_metadata": "/kaggle/working/aic2026_05_beit3_faiss/video_metadata.parquet"
+  },
+  "query_encoder": {
+    "model_name": "beit3_large_patch16_384_retrieval",
+    "checkpoint_name": "beit3_large_patch16_384_f30k_retrieval.pth",
+    "checkpoint_path_used": "/kaggle/working/aic2026_05_beit3_faiss/beit3_model/beit3_large_patch16_384_f30k_retrieval.pth",
+    "sentencepiece_path_used": "/kaggle/working/aic2026_05_beit3_faiss/beit3_model/beit3.spm",
+    "tokenizer_backend": "direct_sentencepiece_xlm_roberta_fairseq_id_mapping",
+    "max_text_len": 64,
+    "output_dim": 1024,
+    "output_l2_normalized": true,
+    "old_embedding_notebook_verification": {
+      "found": false,
+      "path": null,
+      "contains_model_name": null,
+      "contains_checkpoint_name": null
+    },
+    "official_source_urls": {
+      "modeling_finetune.py": "https://raw.githubusercontent.com/microsoft/unilm/master/beit3/modeling_finetune.py",
+      "modeling_utils.py": "https://raw.githubusercontent.com/microsoft/unilm/master/beit3/modeling_utils.py"
+    },
+    "official_source_sha256": {
+      "modeling_finetune.py": "dfa9a2dbba7e7b2a46023da0d693f6e781d946d86b2b7a52e69ed4bd463d763f",
+      "modeling_utils.py": "cc04b762b2c0ba32eb82d65a5e543adada156ce3584a351b56c87eb3de293a27"
+    }
+  },
+  "integrity": {
+    "expected_ntotal": 286629,
+    "actual_ntotal": 286629,
+    "expected_dim": 1024,
+    "actual_dim": 1024,
+    "mapping_rows": 286629,
+    "all_vector_ids_mapped": true,
+    "image_self_retrieval_score_probe_pass": true,
+    "image_self_retrieval_exact_top1_matches": 7,
+    "image_self_retrieval_probe_count": 8,
+    "text_query_smoke_pass": true
+  },
+  "sha256": {
+    "beit3_faiss.index": "bd10c71987d5583fdfe40a526d92f7a6f891b52b472ebd335e5525d42285b5b3",
+    "global_ids.parquet": "9bb51eb4a072700c711b7fd62b174b3993c0945e01f52e24b817255195bd78ce",
+    "video_metadata.parquet": "29af6941401e8cd411a780612df9860272f6e77223145806f10f82c7480b5a8d",
+    "beit3_large_patch16_384_f30k_retrieval.pth": "0aad8180f1b53cc3ef53b0f7268fc1294e6c1508a565b2fdfe610e3e8eb8ff64",
+    "beit3.spm": "6f5e2fefcf793761a76a6bfb8ad35489f9c203b25557673284b6d032f41043f4"
+  }
+}

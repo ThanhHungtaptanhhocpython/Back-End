@@ -21,7 +21,13 @@
         "end_time": { "type": "float" },
         "text": { "type": "text" },
         "nearest_faiss_id": { "type": "integer" },
-        "nearest_frame_name": { "type": "keyword" }
+        "nearest_frame_name": { "type": "keyword" },
+        "nearest_global_frame_id": { "type": "integer" },
+        "nearest_timestamp": { "type": "float" },
+        "alignment_delta_seconds": { "type": "float" },
+        "alignment_source": { "type": "keyword" },
+        "split": { "type": "keyword" },
+        "fps": { "type": "float" }
       }
     }
   }

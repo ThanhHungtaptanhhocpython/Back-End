@@ -3,7 +3,7 @@
 /* ---------- stage layout ---------- */
 .ws-stage {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr) var(--ws-chat-w, 400px);
+  grid-template-columns: 280px minmax(0, 1fr) var(--ws-chat-w, 500px);
   gap: 16px;
   align-items: start;
 }
@@ -317,4 +317,15 @@
   border-style: solid;
   border-color: var(--ws-green);
   color: var(--ws-green);
+}
+
+.ws-runbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ws-runbar .ws-btn {
+  flex: 1;
+  justify-content: center;
 }

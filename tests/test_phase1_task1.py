@@ -57,7 +57,7 @@ class TestSettingsDefaults(unittest.TestCase):
     """Verify that default values are sensible without any .env file."""
 
     def setUp(self) -> None:
-        self.settings = Settings()
+        self.settings = Settings(_env_file=None, debug=False, faiss_index_path=None, metadata_path=None, keyframes_root=None, features_root=None)
 
     def test_default_env(self) -> None:
         self.assertEqual(self.settings.env, "development")
@@ -85,13 +85,12 @@ class TestSettingsPathResolvers(unittest.TestCase):
     """Verify that path resolver methods return correct defaults."""
 
     def setUp(self) -> None:
-        self.settings = Settings()
+        self.settings = Settings(_env_file=None, debug=False, faiss_index_path=None, metadata_path=None, keyframes_root=None, features_root=None)
 
     def test_faiss_index_default_path(self) -> None:
         path = self.settings.get_faiss_index_path()
-        self.assertTrue(str(path).endswith("faiss_index_clip.bin"))
+        self.assertTrue(str(path).endswith("faiss_index.bin"))
         self.assertIn("dict", str(path))
-        self.assertIn("nw", str(path))
 
     def test_metadata_default_path(self) -> None:
         path = self.settings.get_metadata_path()
@@ -114,31 +113,31 @@ class TestSettingsEnvOverride(unittest.TestCase):
 
     @patch.dict(os.environ, {"PORT": "8080", "HOST": "127.0.0.1", "DEBUG": "true"})
     def test_override_server_settings(self) -> None:
-        settings = Settings()
+        settings = Settings(_env_file=None)
         self.assertEqual(settings.port, 8080)
         self.assertEqual(settings.host, "127.0.0.1")
         self.assertTrue(settings.debug)
 
     @patch.dict(os.environ, {"LOG_LEVEL": "DEBUG"})
     def test_override_log_level(self) -> None:
-        settings = Settings()
+        settings = Settings(_env_file=None)
         self.assertEqual(settings.log_level, "DEBUG")
 
     @patch.dict(os.environ, {"CLIP_MODEL_NAME": "ViT-B-32", "CLIP_PRETRAINED": "openai"})
     def test_override_model_config(self) -> None:
-        settings = Settings()
+        settings = Settings(_env_file=None)
         self.assertEqual(settings.clip_model_name, "ViT-B-32")
         self.assertEqual(settings.clip_pretrained, "openai")
 
     @patch.dict(os.environ, {"FAISS_INDEX_PATH": "/custom/path/index.bin"})
     def test_override_faiss_path(self) -> None:
-        settings = Settings()
+        settings = Settings(_env_file=None)
         path = settings.get_faiss_index_path()
         self.assertEqual(path.as_posix(), "/custom/path/index.bin")
 
     @patch.dict(os.environ, {"METADATA_PATH": "/custom/metadata.json"})
     def test_override_metadata_path(self) -> None:
-        settings = Settings()
+        settings = Settings(_env_file=None)
         path = settings.get_metadata_path()
         self.assertEqual(path.as_posix(), "/custom/metadata.json")
 
@@ -164,22 +163,22 @@ class TestSettingsFieldTypes(unittest.TestCase):
     """Verify that fields are parsed to the correct Python types."""
 
     def test_port_is_int(self) -> None:
-        settings = Settings()
+        settings = Settings(_env_file=None)
         self.assertIsInstance(settings.port, int)
 
     def test_debug_is_bool(self) -> None:
-        settings = Settings()
+        settings = Settings(_env_file=None)
         self.assertIsInstance(settings.debug, bool)
 
     def test_src_dir_is_path(self) -> None:
-        settings = Settings()
+        settings = Settings(_env_file=None)
         self.assertIsInstance(settings.src_dir, Path)
 
     @patch.dict(os.environ, {"PORT": "not_a_number"})
     def test_invalid_port_raises(self) -> None:
         from pydantic import ValidationError
         with self.assertRaises(ValidationError):
-            Settings()
+            Settings(_env_file=None)
 
 
 if __name__ == "__main__":

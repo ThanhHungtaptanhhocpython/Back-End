@@ -53,7 +53,7 @@ class Task3SingletonTests(unittest.TestCase):
     def test_lazy_singletons_initialized_once(self, MockFaiss, MockVLM, MockTRAKE):
         """
         Verify that the lazy service getters create each dependency exactly once,
-        cache it, and that TRAKE receives the shared MyFaiss instance (DI).
+        cache it, and that TRAKE no longer initializes the legacy MyFaiss dependency.
         """
         faiss_first = user_service.get_cosine_faiss()
         faiss_second = user_service.get_cosine_faiss()
@@ -61,7 +61,7 @@ class Task3SingletonTests(unittest.TestCase):
         MockFaiss.assert_called_once()
 
         trake = user_service.get_trake_search()
-        MockTRAKE.assert_called_once_with(faiss_first)
+        MockTRAKE.assert_called_once_with()
 
         vlm = user_service.get_vlm_processor()
         self.assertIs(vlm, user_service.get_vlm_processor())

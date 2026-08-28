@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { App as AntApp } from "antd";
 import { CloseOutlined, MessageOutlined } from "@ant-design/icons";
 import { CARD_W, GAP } from "../../shared/constants";
-import { runSearch as runSearchQuery, runAgentSearch as runAgentSearchQuery, askCopilot, probeBackend as probeSearchBackend } from "../../shared/adapters";
+import { runSearch as runSearchQuery, runAgentSearch as runAgentSearchQuery, askCopilot, askGroundedQa, probeBackend as probeSearchBackend } from "../../shared/adapters";
 import { getFramePool } from "../../mocks/searchEngine";
 import useClock from "../../hooks/useClock";
 import useWorkspaceKeyboard from "../../hooks/useWorkspaceKeyboard";
@@ -358,6 +358,27 @@ export default function Workstation({ view, onSwitchView }) {
     });
     toast.success(`Deep search returned ${items.length} frames`);
   };
+  const applyGroundedQaResults = (query, items) => {
+    if (!Array.isArray(items) || !items.length) return;
+    const fresh = makeTab();
+    fresh.label = `Q&A ${String(tabSeq).padStart(2, "0")}`;
+    fresh.searchType = "QA";
+    fresh.query = query;
+    fresh.status = "done";
+    fresh.results = items;
+    fresh.total = items.length;
+    fresh.latency = 0;
+    setTabs((prev) => [...prev, fresh]);
+    setActiveKey(fresh.key);
+    setFocusedId(items[0]?.id || null);
+    setBackend({
+      backend: "online",
+      demo: false,
+      note: "FASTAPI GROUNDED Q&A",
+      at: new Date().toLocaleTimeString("en-GB", { hour12: false }),
+    });
+    toast.success(`Q&A returned ${items.length} source frames`);
+  };
   const formatAgentSearchMessage = (result, addedLabel) => {
     const queries = Array.isArray(result?.queriesUsed) ? result.queriesUsed : [];
     const routing = result?.routing || result?.plan?.routing || {};
@@ -452,9 +473,10 @@ export default function Workstation({ view, onSwitchView }) {
     const frames = userMsg.frames;
 
     try {
-      const result = await askCopilot(text, frames);
+      const result = frames.length ? await askCopilot(text, frames) : await askGroundedQa(text);
       if (Array.isArray(result?.frames) && result.frames.length) {
         if (result?.mode === "agent_search") applyAgentSearchResults(result?.searchQuery || text, { items: result.frames, totalItems: result.frames.length, latency: 0, source: "live" });
+        else if (result?.mode === "grounded_qa") applyGroundedQaResults(text, result.frames);
         else applyDeepSearchResults(result?.searchQuery || text, result.frames);
       }
       const reply = {

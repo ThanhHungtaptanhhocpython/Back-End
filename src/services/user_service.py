@@ -11,11 +11,14 @@ SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-from utils.faiss_processing import MyFaiss
-from utils.vlm_processing import VLMProcessor
-from utils.trake_processing import TRAKE
-from utils.elastic_processing import ElasticProcessor
 from src.config.settings import get_settings
+
+# Heavy legacy model factories are imported only by the endpoint that needs
+# them. Keeping patchable placeholders also preserves test injection.
+MyFaiss = None
+VLMProcessor = None
+TRAKE = None
+ElasticProcessor = None
 
 settings = get_settings()
 bin_clip_file = str(settings.get_faiss_index_path())
@@ -29,25 +32,37 @@ _elastic_processor = None
 def get_cosine_faiss():
     global _cosine_faiss
     if _cosine_faiss is None:
-        _cosine_faiss = MyFaiss(bin_clip_file, meta_data)
+        factory = MyFaiss
+        if factory is None:
+            from utils.faiss_processing import MyFaiss as factory
+        _cosine_faiss = factory(bin_clip_file, meta_data)
     return _cosine_faiss
 
 def get_trake_search():
     global _trake_search
     if _trake_search is None:
-        _trake_search = TRAKE(get_cosine_faiss())
+        factory = TRAKE
+        if factory is None:
+            from utils.trake_processing import TRAKE as factory
+        _trake_search = factory()
     return _trake_search
 
 def get_vlm_processor():
     global _vlm_processor
     if _vlm_processor is None:
-        _vlm_processor = VLMProcessor()
+        factory = VLMProcessor
+        if factory is None:
+            from utils.vlm_processing import VLMProcessor as factory
+        _vlm_processor = factory()
     return _vlm_processor
 
 def get_elastic_processor():
     global _elastic_processor
     if _elastic_processor is None:
-        _elastic_processor = ElasticProcessor()
+        factory = ElasticProcessor
+        if factory is None:
+            from src.utils.elastic_processing import ElasticProcessor as factory
+        _elastic_processor = factory()
     return _elastic_processor
 
 def generate_random_answer():
@@ -119,24 +134,20 @@ def getImageDataSingleTextSearch(query, k):
     return get_beit3_retriever().search_visual(query, top_k=k)
 
 
-def getImageDataQAndASearch(query, k):
-    """Retrieve candidate frames for Q&A prompts with the production BEiT3 index.
-
-    The old Q&A path queried a legacy OpenCLIP FAISS index and then tried to
-    load images from `src/data/Keyframes`. The current corpus is served through
-    BEiT3 metadata/keyframe paths, so that legacy path could return zero frames
-    even when the visual text search finds good candidates.
-    """
-    from src.services.beit3_retriever import get_beit3_retriever
-
+def getGroundedQASearch(query, k):
+    """Return grounded Q&A frames and answer metadata."""
     text_query = query.strip()
     if not text_query:
-        return []
+        return [], {"status": "uncertain", "answer": "", "confidence": 0.0}
+    from src.services.grounded_qa_service import grounded_video_qa
 
-    results = get_beit3_retriever().search_visual(text_query, top_k=k)
-    for item in results:
-        item.setdefault('answer', '')
-    return results
+    return grounded_video_qa(text_query, top_k=k)
+
+
+def getImageDataQAndASearch(query, k):
+    """Compatibility wrapper returning only Q&A source frames."""
+    frames, _summary = getGroundedQASearch(query, k)
+    return frames
 
 def getImageSearchById(image_id, k):
     """Search similar keyframes using BEiT-3 vector ID."""

@@ -1,4 +1,4 @@
-import { getSearchConfig, normalizeBackendItem } from "./backendSearch.js";
+import { getSearchConfig, normalizeBackendItem, normalizeBackendResponse } from "./backendSearch.js";
 import { mockChatReply } from "../mocks/copilot.js";
 
 function cleanBaseUrl(baseUrl) {
@@ -191,6 +191,61 @@ export async function askCopilot(text, frames = [], { fetchImpl = globalThis.fet
   } catch (error) {
     console.warn("Chat backend transport error, falling back to mock:", error);
     return { text: mockChatReply(prompt, frames), demo: true, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export async function askGroundedQa(text, { fetchImpl = globalThis.fetch, topk = 24 } = {}) {
+  const prompt = String(text || "").trim();
+  if (!prompt) return { text: "", frames: [], demo: false };
+
+  const config = getSearchConfig();
+  const baseUrl = cleanBaseUrl(config.baseUrl) || "http://127.0.0.1:3000";
+  if (config.mode === "demo" || typeof fetchImpl !== "function") {
+    return { text: mockChatReply(prompt, []), frames: [], demo: true };
+  }
+
+  try {
+    const startedAt = Date.now();
+    const response = await fetchImpl(`${baseUrl}/users/qnasearch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: prompt, topk }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload?.message || payload?.detail || `Grounded Q&A failed with HTTP ${response.status}.`);
+    }
+
+    const normalized = normalizeBackendResponse(
+      payload,
+      { type: "QA", latency: Date.now() - startedAt },
+      baseUrl
+    );
+    const meta = normalized.meta || {};
+    const evaluated = normalized.items.filter((frame) => frame.backend?.qa_evidence_id);
+    const supporting = evaluated.filter((frame) => frame.backend?.qa_supporting);
+    const sourceFrames = supporting.length ? supporting : evaluated;
+    const confidence = Number(meta.confidence);
+    const confidenceLine = Number.isFinite(confidence)
+      ? `\n\nConfidence: ${Math.round(confidence * 100)}% (${meta.status || "unknown"})`
+      : "";
+
+    return {
+      text: `${String(meta.answer || payload?.message || "No grounded answer returned.").trim()}${confidenceLine}`,
+      frames: sourceFrames,
+      allFrames: normalized.items,
+      meta,
+      mode: "grounded_qa",
+      demo: false,
+    };
+  } catch (error) {
+    console.warn("Grounded Q&A request failed:", error);
+    return {
+      text: "Grounded Q&A is unavailable, so no answer was generated.",
+      frames: [],
+      demo: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 

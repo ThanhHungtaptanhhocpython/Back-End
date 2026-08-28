@@ -9,7 +9,7 @@
  *   - runSearch(tab, pivot)     -> Promise<{items, totalItems, latency, type, mode}>
  */
 export { translateText } from "../services/translateService.js";
-export { askCopilot } from "../services/copilotService.js";
+export { askCopilot, askGroundedQa } from "../services/copilotService.js";
 
 import { getSearchConfig, isTransportError, runBackendAgentSearch, runBackendSearch } from "../services/backendSearch.js";
 import { mockSearch } from "../mocks/searchEngine.js";

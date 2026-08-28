@@ -43,3 +43,5 @@ src/dict/objects/
 *.spm
 src/dict/nw/*.bin
 src/dict/faiss_index.bin
+src/dict/metadata_beit3.json
+src/dict/*.json.bak_*

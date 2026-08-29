@@ -36,6 +36,12 @@ src/dict/map-keyframes/
 src/dict/media-info/
 src/dict/objects/
 
+# Runtime media-info archive for video playback / frame capture.
+# Provide it on the deployment machine and point MEDIA_INFO_PATH at it; the
+# extracted per-video JSON is large and machine-specific, never commit it.
+media-info-aic25-b1.zip
+media-info-*.zip
+
 # BEiT3 / Faiss runtime artifacts (large, machine-specific; never commit)
 *.pth
 *.index
@@ -43,3 +49,4 @@ src/dict/objects/
 *.spm
 src/dict/nw/*.bin
 src/dict/faiss_index.bin
+.gstack/

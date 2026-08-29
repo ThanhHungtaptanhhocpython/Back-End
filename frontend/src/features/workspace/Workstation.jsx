@@ -207,6 +207,29 @@ export default function Workstation({ view, onSwitchView }) {
     });
   };
 
+  /* Add a captured-frame candidate to the tray, de-duped on video + frame. */
+  const captureToTray = (candidate) => {
+    const videoKey = candidate?.videoKey;
+    const frameIdx = candidate?.submissionFrameId ?? candidate?.backend?.frame_idx;
+    let added = false;
+    setKept((prev) => {
+      const dup = Array.from(prev.values()).some(
+        (entry) =>
+          entry.id === candidate.id ||
+          (entry.videoKey === videoKey &&
+            (entry.submissionFrameId ?? entry.backend?.frame_idx) === frameIdx),
+      );
+      if (dup) return prev;
+      const next = new Map(prev);
+      next.set(candidate.id, candidate);
+      added = true;
+      return next;
+    });
+    if (added) toast.success(`Captured ${candidate.frameName} - added to Selection Tray`);
+    else toast.info(`${candidate.frameName} is already in the tray`);
+    return added;
+  };
+
   const exclude = (item, tabKey = activeKey) => {
     setTabs((prev) =>
       prev.map((t) =>
@@ -782,6 +805,7 @@ export default function Workstation({ view, onSwitchView }) {
           onPivot={pivotCurrent}
           onAsk={askAboutFrame}
           onExportThis={openExportFromReview}
+          onCapture={captureToTray}
         />
       ) : null}
 

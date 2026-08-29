@@ -60,9 +60,33 @@ export function queryTypeFromSearchType(searchType) {
   return "kis";
 }
 
+/** Drop later rows that repeat an earlier `video_id,frame_idx` pair. */
+function dedupeByVideoFrame(items) {
+  const seen = new Set();
+  const kept = [];
+  for (const item of items || []) {
+    const key = `${videoNameForItem(item)}|${normalizeFrameId(item)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    kept.push(item);
+  }
+  return kept;
+}
+
 export function buildSubmissionCsv(items, queryType, answer = "") {
   const type = String(queryType || "kis").toLowerCase();
-  const rows = (items || []).slice(0, 100);
+
+  if (type === "trake") {
+    // TRAKE keeps its existing rule: one line, ordered frames, no dedupe.
+    const rows = (items || []).slice(0, 100);
+    if (rows.length === 0) return "";
+    const firstVideo = videoNameForItem(rows[0]);
+    return [firstVideo, ...rows.map(normalizeFrameId)].join(",");
+  }
+
+  // KIS / QA: a captured frame and a search hit for the same
+  // (video_id, frame_idx) must not produce two rows.
+  const rows = dedupeByVideoFrame(items || []).slice(0, 100);
 
   if (type === "qa") {
     return rows
@@ -72,12 +96,6 @@ export function buildSubmissionCsv(items, queryType, answer = "") {
         csvCell(String(firstDefined(item?.answer, item?.backend?.answer, answer)).slice(0, 100)),
       ].join(","))
       .join("\n");
-  }
-
-  if (type === "trake") {
-    if (rows.length === 0) return "";
-    const firstVideo = videoNameForItem(rows[0]);
-    return [firstVideo, ...rows.map(normalizeFrameId)].join(",");
   }
 
   return rows

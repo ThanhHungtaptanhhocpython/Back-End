@@ -121,8 +121,16 @@
 }
 
 .ws-review-player {
-  width: min(100%, calc((100vh - 190px) * 16 / 9));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(100%, calc((100vh - 230px) * 16 / 9));
   max-height: 100%;
+}
+
+.ws-review-player-frame {
+  position: relative;
+  width: 100%;
   aspect-ratio: 16 / 9;
   background: #000;
   border-radius: 6px;
@@ -130,13 +138,74 @@
   box-shadow: 0 6px 24px rgba(2, 6, 23, 0.45);
 }
 
-.ws-review-player iframe,
-.ws-review-player video {
+.ws-review-player-frame iframe,
+.ws-review-player-frame video,
+.ws-review-player-frame > .ws-review-yt {
   display: block;
   width: 100%;
   height: 100%;
   border: 0;
   background: #000;
+}
+
+/* Click-to-play surface shown only when the browser blocks autoplay. */
+.ws-review-play-shade {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  padding: 0;
+  color: #e2e8f0;
+  background: rgba(2, 6, 23, 0.55);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.ws-review-play-shade .anticon {
+  font-size: 34px;
+}
+
+.ws-review-play-shade small {
+  font-weight: 400;
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.ws-review-capture-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-height: 24px;
+}
+
+.ws-review-capture-hint {
+  font-size: 11px;
+  color: #94a3b8;
+  letter-spacing: 0.3px;
+}
+
+.ws-review-capture-note {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.ws-review-capture-note.ok {
+  color: #34d399;
+}
+
+.ws-review-capture-note.dupe {
+  color: #fbbf24;
+}
+
+.ws-review-capture-note.error {
+  color: #f87171;
 }
 .ws-review-cmp {
   display: flex;

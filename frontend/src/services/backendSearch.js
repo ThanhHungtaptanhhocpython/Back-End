@@ -213,7 +213,7 @@ export function normalizeBackendItem(item, rank, total, baseUrl = "") {
     width: finiteNumber(raw.width),
     height: finiteNumber(raw.height),
     image: imageSource(resolvedImage),
-    link: String(firstDefined(raw.link, raw.youtube_url, raw.youtubeUrl, raw.video_url, raw.videoUrl, raw.url, "")),
+    link: String(firstDefined(raw.link, raw.youtube_url, raw.youtubeUrl, raw.video_url, raw.videoUrl, raw.url) ?? ""),
     real: true,
     faissIndex: faissIndex === undefined ? undefined : finiteNumber(faissIndex),
     score: normaliseScore(scoreValue, rank, total),

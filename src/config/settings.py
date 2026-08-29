@@ -57,6 +57,22 @@ class Settings(BaseSettings):
     keyframes_root: Path | None = None
     features_root: Path | None = None
 
+    # --- Video playback / frame capture ---
+    # Archive (or directory) of per-video media-info JSON files carrying the
+    # YouTube ``watch_url`` and ``length``. ``media-info-aic25-b1.zip`` is a
+    # runtime asset that is not committed to Git; point this at wherever it
+    # lives on the deployment machine.
+    media_info_path: Path | None = None
+    # Archive (or directory) of per-video map-keyframes CSV files. These carry
+    # the authoritative per-video FPS and the keyframe-ordinal -> frame index
+    # mapping. Defaults to the committed ``src/dict/map-keyframes.zip``.
+    map_keyframes_path: Path | None = None
+    # Optional JSON object mapping ``video_id`` -> playback offset in seconds
+    # (``source_time = playback_time - playback_offset``). Only use this for
+    # videos whose YouTube timeline has been verified to differ from the
+    # dataset timeline; the default offset is ``0`` for every video.
+    playback_offsets_json: str = ""
+
     # --- External Services ---
     elasticsearch_url: str = "http://localhost:9200"
 
@@ -147,6 +163,8 @@ class Settings(BaseSettings):
         "metadata_path",
         "keyframes_root",
         "features_root",
+        "media_info_path",
+        "map_keyframes_path",
         "beit3_faiss_index_path",
         "beit3_global_ids_path",
         "beit3_video_metadata_path",
@@ -217,6 +235,58 @@ class Settings(BaseSettings):
         if self.features_root is not None:
             return Path(self.features_root)
         return self.src_dir / "data" / "features"
+
+    def get_media_info_path(self) -> Path:
+        """Return the resolved media-info archive/directory path.
+
+        Falls back to ``media-info-aic25-b1.zip`` at the repository root, then
+        to the extracted ``src/dict/media-info`` directory.
+        """
+        if self.media_info_path is not None:
+            return Path(self.media_info_path)
+        repo_root = self.src_dir.parent
+        root_zip = repo_root / "media-info-aic25-b1.zip"
+        if root_zip.exists():
+            return root_zip
+        return self.src_dir / "dict" / "media-info"
+
+    def get_map_keyframes_path(self) -> Path:
+        """Return the resolved map-keyframes archive/directory path.
+
+        Falls back to the committed ``src/dict/map-keyframes.zip``, then to the
+        extracted ``src/dict/map-keyframes`` directory.
+        """
+        if self.map_keyframes_path is not None:
+            return Path(self.map_keyframes_path)
+        bundled_zip = self.src_dir / "dict" / "map-keyframes.zip"
+        if bundled_zip.exists():
+            return bundled_zip
+        return self.src_dir / "dict" / "map-keyframes"
+
+    def get_playback_offsets(self) -> dict[str, float]:
+        """Return the parsed ``video_id -> offset seconds`` override map.
+
+        An empty or malformed value yields an empty map, which means every
+        video uses the default offset of ``0``.
+        """
+        import json
+
+        raw = (self.playback_offsets_json or "").strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError):
+            return {}
+        if not isinstance(parsed, dict):
+            return {}
+        offsets: dict[str, float] = {}
+        for key, value in parsed.items():
+            try:
+                offsets[str(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
+        return offsets
 
 
 @lru_cache()

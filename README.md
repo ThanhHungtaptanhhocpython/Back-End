@@ -92,6 +92,26 @@ Before running the backend, you must build the local data assets. Ensure your so
 2. **Build Faiss Index:** `python scripts/indexing/build_clip_faiss_index.py`
 3. **Index Elasticsearch:** Ensure Elasticsearch is running, then bulk insert OCR/ASR data.
 
+#### Video playback / frame capture assets
+
+The `/users/videos/{video_id}/playback` and `/users/videos/{video_id}/capture`
+endpoints need two per-video assets:
+
+| Asset | Env var | Default |
+| --- | --- | --- |
+| `media-info` (YouTube `watch_url` + `length`) | `MEDIA_INFO_PATH` | `media-info-aic25-b1.zip` at repo root, then `src/dict/media-info/` |
+| `map-keyframes` (authoritative FPS) | `MAP_KEYFRAMES_PATH` | committed `src/dict/map-keyframes.zip`, then `src/dict/map-keyframes/` |
+
+`media-info-aic25-b1.zip` is a large runtime asset and is **git-ignored** —
+copy it onto the machine (or set `MEDIA_INFO_PATH` to wherever it lives). Both
+values accept either a ZIP archive or an extracted directory, with or without a
+wrapping top-level folder.
+
+The YouTube timeline is assumed to be aligned with the dataset timeline, so the
+playback offset defaults to `0` for every video. If a specific video is
+verified to be shifted, add it to `PLAYBACK_OFFSETS_JSON`, e.g.
+`PLAYBACK_OFFSETS_JSON={"L21_V029": -172}` (`source_time = playback_time - offset`).
+
 ## 🏃‍♂️ Running the Server
 
 ### Step 1: Start Elasticsearch

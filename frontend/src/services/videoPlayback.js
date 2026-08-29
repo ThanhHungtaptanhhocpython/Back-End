@@ -29,24 +29,24 @@ export function resolveVideoUrl(item) {
   if (!item) return "";
   const raw = item.backend && typeof item.backend === "object" ? item.backend : {};
   const mappedLinks = runtimeVideoLinks();
-  return String(
-    firstDefined(
-      item.link,
-      raw.youtube_url,
-      raw.youtubeUrl,
-      raw.media_info?.watch_url,
-      raw.mediaInfo?.watchUrl,
-      raw.video_metadata?.watch_url,
-      raw.videoMetadata?.watchUrl,
-      raw.video_url,
-      raw.videoUrl,
-      raw.link,
-      raw.url,
-      mappedLinks[item.videoKey],
-      mappedLinks[String(item.videoKey || "").toUpperCase()],
-      ""
-    )
-  ).trim();
+  const found = firstDefined(
+    item.link,
+    raw.youtube_url,
+    raw.youtubeUrl,
+    raw.media_info?.watch_url,
+    raw.mediaInfo?.watchUrl,
+    raw.video_metadata?.watch_url,
+    raw.videoMetadata?.watchUrl,
+    raw.video_url,
+    raw.videoUrl,
+    raw.link,
+    raw.url,
+    mappedLinks[item.videoKey],
+    mappedLinks[String(item.videoKey || "").toUpperCase()]
+  );
+  const url = (found == null ? "" : String(found)).trim();
+  // Upstream normalizers can stringify a missing value to "undefined"/"null".
+  return url === "undefined" || url === "null" ? "" : url;
 }
 
 export function youtubeVideoId(url) {
@@ -66,13 +66,14 @@ export function youtubeVideoId(url) {
   return "";
 }
 
-export function buildVideoPlayback(item) {
+export function buildVideoPlayback(item, offsetSeconds = 0) {
   const url = resolveVideoUrl(item);
   if (!url) return null;
 
-  const VIDEO_OFFSETS = { "L21_V029": -172 };
-  const offset = item?.videoKey ? (VIDEO_OFFSETS[item.videoKey] || 0) : 0;
-  const start = Math.max(0, Math.floor(Number(item?.timestamp) || 0) + offset);
+  // Playback offset comes from backend metadata (default 0). There is no
+  // hardcoded per-video table here anymore — see PLAYBACK_OFFSETS_JSON.
+  const offset = Number(offsetSeconds) || 0;
+  const start = Math.max(0, Math.floor((Number(item?.timestamp) || 0) + offset));
   const youtubeId = youtubeVideoId(url);
   if (youtubeId) {
     const embed = new URL(`https://www.youtube.com/embed/${youtubeId}`);

@@ -793,6 +793,33 @@ def _queries_by_kind(queries: List[Dict[str, str]], kind: str, limit: int = 5) -
     return values
 
 
+def _agent_visual_query_limit() -> int:
+    try:
+        from src.config.settings import get_settings
+
+        raw_limit = int(get_settings().agent_visual_query_limit or 1)
+    except Exception:
+        raw_limit = 1
+    return max(1, min(raw_limit, 3))
+
+
+def _select_executed_visual_queries(visual_queries: List[str], primary_query: str) -> List[str]:
+    selected: List[str] = []
+    seen = set()
+    limit = _agent_visual_query_limit()
+    candidates = [primary_query, *visual_queries]
+    for query in candidates:
+        cleaned = _clean(query)
+        key = cleaned.lower()
+        if not cleaned or key in seen:
+            continue
+        seen.add(key)
+        selected.append(cleaned)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
 def build_agent_plan(message: str, topk: int = 100) -> Dict[str, Any]:
     prompt = _clean(message)
     parsed = _parse_query_light(prompt)
@@ -816,12 +843,28 @@ def build_agent_plan(message: str, topk: int = 100) -> Dict[str, Any]:
         weights["visual"] = 0.0
         weights = _normalise_weights(weights)
 
+    executed_visual_queries = _select_executed_visual_queries(visual_queries, visual_query)
+    executed_query_keys = {executed.lower() for executed in executed_visual_queries}
+    support_visual_queries = [
+        query
+        for query in visual_queries
+        if query and query.lower() not in executed_query_keys
+    ]
+
     return {
         "original_query": prompt,
         "expanded_queries": expanded,
         "routing": weights,
         "visual_query": visual_query,
+        "primary_visual_query": visual_query,
         "visual_queries": visual_queries,
+        "executed_visual_queries": executed_visual_queries,
+        "support_visual_queries": support_visual_queries,
+        "execution_strategy": {
+            "mode": "primary_holistic_first",
+            "visual_query_limit": len(executed_visual_queries),
+            "note": "Support queries are kept for explanation/checklist context; only executed queries are sent to visual search.",
+        },
         "ocr_query": ocr_query,
         "asr_query": asr_query,
         "precision_profile": structured_plan.get("profile", ""),
@@ -996,6 +1039,79 @@ def _agent_score_value(item: Dict[str, Any]) -> float:
     return 0.0
 
 
+_EVIDENCE_STOPWORDS = {
+    "with", "that", "this", "from", "into", "onto", "where", "there", "their",
+    "person", "people", "scene", "frame", "image", "video", "showing", "visible",
+}
+
+
+def _text_overlap_score(query: str, evidence: str) -> float:
+    query_norm = _normalise_text(query)
+    evidence_norm = _normalise_text(evidence)
+    if not query_norm or not evidence_norm:
+        return 0.0
+    if query_norm in evidence_norm:
+        return 1.0
+    tokens = [
+        token
+        for token in re.findall(r"[a-z0-9]+", query_norm)
+        if len(token) >= 3 and token not in _EVIDENCE_STOPWORDS
+    ]
+    if not tokens:
+        return 0.0
+    matched = sum(1 for token in dict.fromkeys(tokens) if token in evidence_norm)
+    return matched / max(1, len(dict.fromkeys(tokens)))
+
+
+def _score_breakdown_value(item: Dict[str, Any], key: str) -> float:
+    breakdown = item.get("score_breakdown")
+    if not isinstance(breakdown, dict):
+        return 0.0
+    try:
+        return max(0.0, min(1.0, float(breakdown.get(key) or 0.0)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _candidate_modality_evidence(item: Dict[str, Any], plan: Dict[str, Any]) -> Tuple[float, List[str], List[str]]:
+    routing = plan.get("routing") if isinstance(plan.get("routing"), dict) else {}
+    evidence_parts: List[Tuple[float, float]] = []
+    evidence_notes: List[str] = []
+    evidence_matches: List[str] = []
+
+    ocr_query = _clean(plan.get("ocr_query"))
+    if ocr_query:
+        ocr_text = _clean(item.get("ocr_text") or item.get("ocr") or item.get("text_ocr"))
+        ocr_score = max(_score_breakdown_value(item, "ocr"), _text_overlap_score(ocr_query, ocr_text))
+        if ocr_score > 0:
+            evidence_parts.append((max(0.1, float(routing.get("ocr", 0.25) or 0.25)), ocr_score))
+        if ocr_score >= 0.15:
+            evidence_notes.append("OCR evidence matched the text query")
+            evidence_matches.append(f"OCR: {ocr_query}")
+
+    asr_query = _clean(plan.get("asr_query"))
+    if asr_query:
+        asr_text = _clean(item.get("asr_text") or item.get("transcript") or item.get("speech_text"))
+        asr_score = max(_score_breakdown_value(item, "asr"), _text_overlap_score(asr_query, asr_text))
+        if asr_score > 0:
+            evidence_parts.append((max(0.1, float(routing.get("asr", 0.2) or 0.2)), asr_score))
+        if asr_score >= 0.15:
+            evidence_notes.append("ASR evidence matched the speech query")
+            evidence_matches.append("ASR: relevant speech")
+
+    if _timestamp_value(item) is not None:
+        timestamp_source = _clean(item.get("timestamp_source"))
+        if timestamp_source:
+            evidence_parts.append((0.05, 1.0))
+            evidence_notes.append(f"timestamp aligned by {timestamp_source}")
+
+    if not evidence_parts:
+        return 0.0, [], []
+    total_weight = sum(weight for weight, _score in evidence_parts) or 1.0
+    score = sum(weight * value for weight, value in evidence_parts) / total_weight
+    return max(0.0, min(1.0, score)), evidence_notes, evidence_matches
+
+
 def _timeline_seed_match_index(timeline: List[Dict[str, Any]], seed: Dict[str, Any]) -> Optional[int]:
     seed_identity = _frame_identity(seed, "")
     seed_frame = _frame_id_value(seed).lstrip("0")
@@ -1095,7 +1211,7 @@ def _rerank_with_light_verifier(
     if not frames:
         return [], {"enabled": True, "method": "light_no_vlm", "temporal_neighbors": 0}
 
-    visual_query_count = max(1, len(plan.get("visual_queries") or []))
+    visual_query_count = max(1, len(plan.get("executed_visual_queries") or plan.get("visual_queries") or []))
     max_agent_score = max(_agent_score_value(item) for item in frames) or 1.0
     entries: Dict[str, Dict[str, Any]] = {}
 
@@ -1107,17 +1223,21 @@ def _rerank_with_light_verifier(
         coverage = max(0.0, min(1.0, float(item.get("agent_checklist_coverage") or 0.0)))
         consensus = min(1.0, len(queries) / visual_query_count)
         base_score = min(1.0, _agent_score_value(item) / max_agent_score)
+        modality_score, modality_notes, modality_matches = _candidate_modality_evidence(item, plan)
+        if modality_matches:
+            matched = list(dict.fromkeys([*matched, *modality_matches]))
 
         if source == "temporal_neighbor":
             seed_score = min(1.0, float(item.get("_agent_temporal_seed_score") or 0.0) / max_agent_score)
             distance = int(temporal_distance or 0)
             decay = max(0.42, 1.0 - distance * 0.13)
-            score = (0.58 * seed_score + 0.22 * coverage + 0.20 * consensus) * decay * 0.96
+            score = (0.52 * seed_score + 0.20 * coverage + 0.16 * consensus + 0.12 * modality_score) * decay * 0.96
             evidence = ["nearby keyframe from a strong retrieved candidate"]
         else:
             distance = None
-            score = 0.54 * base_score + 0.30 * coverage + 0.16 * consensus
-            evidence = ["direct multi-query retrieval match"]
+            score = 0.46 * base_score + 0.25 * coverage + 0.14 * consensus + 0.15 * modality_score
+            evidence = ["direct visual retrieval match"]
+        evidence.extend(modality_notes)
 
         existing = entries.get(identity)
         if existing:
@@ -1126,6 +1246,7 @@ def _rerank_with_light_verifier(
             existing["queries"].update(queries)
             existing["matched"].update(matched)
             existing["missing"].update(missing)
+            existing["modality_evidence_score"] = max(existing.get("modality_evidence_score", 0.0), modality_score)
             if temporal_distance is not None:
                 previous_distance = existing.get("temporal_distance")
                 existing["temporal_distance"] = temporal_distance if previous_distance is None else min(previous_distance, temporal_distance)
@@ -1142,6 +1263,7 @@ def _rerank_with_light_verifier(
             "temporal_distance": temporal_distance,
             "best_rank": direct_rank,
             "evidence": evidence,
+            "modality_evidence_score": modality_score,
         }
 
     for rank, item in enumerate(frames, start=1):
@@ -1169,9 +1291,11 @@ def _rerank_with_light_verifier(
             "evidence": sorted(set(entry["evidence"])),
             "query_count": len(queries),
             "temporal_distance": temporal_distance,
+            "modality_evidence_score": round(float(entry.get("modality_evidence_score") or 0.0), 6),
+            "score_breakdown": item.get("score_breakdown") if isinstance(item.get("score_breakdown"), dict) else {},
             "matched": matched,
             "missing": missing[:4],
-            "note": "No VLM verification; score uses retrieval consensus, checklist coverage, OCR/ASR evidence, and nearby keyframes.",
+            "note": "No VLM verification; score uses retrieval rank, checklist coverage, OCR/ASR evidence, timestamp evidence, and nearby keyframes.",
         }
         item["agent_queries"] = queries[:4]
         item["agent_matched_checks"] = matched
@@ -1193,6 +1317,14 @@ def _format_answer(plan: Dict[str, Any], frames: List[Dict[str, Any]], added_to:
     expanded = plan.get("expanded_queries") or []
     routing = plan.get("routing") or {}
     query_lines = [f"{idx}. {query.get('query_en') or query.get('query')}" for idx, query in enumerate(expanded[:4], start=1)]
+    executed_queries = [query for query in (plan.get("executed_visual_queries") or []) if query]
+    support_queries = [query for query in (plan.get("support_visual_queries") or []) if query]
+    execution_lines = [
+        "Search execution:",
+        *(f"- {query}" for query in executed_queries[:3]),
+    ]
+    if support_queries:
+        execution_lines.append(f"Support queries kept for rerank/debug: {len(support_queries)}")
     routing_text = " | ".join(
         f"{name.upper()} {float(routing.get(name, 0.0)):.1f}"
         for name in ("visual", "ocr", "asr")
@@ -1205,6 +1337,8 @@ def _format_answer(plan: Dict[str, Any], frames: List[Dict[str, Any]], added_to:
             "",
             "Routing:",
             routing_text,
+            "",
+            *execution_lines,
             "",
             f"Results added to {target}: {len(frames)} keyframes.",
         ]
@@ -1223,7 +1357,7 @@ def run_agent_query_search(message: str, topk: int = 100, added_to: Optional[str
         }
 
     query_results: List[Tuple[str, List[Dict[str, Any]]]] = []
-    visual_queries = [query for query in plan.get("visual_queries", []) if query]
+    visual_queries = [query for query in (plan.get("executed_visual_queries") or [plan.get("visual_query")]) if query]
 
     use_fusion = bool(plan.get("ocr_query") or plan.get("asr_query"))
     if use_fusion:

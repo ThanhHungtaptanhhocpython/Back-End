@@ -65,7 +65,8 @@ class Settings(BaseSettings):
     media_info_path: Path | None = None
     # Archive (or directory) of per-video map-keyframes CSV files. These carry
     # the authoritative per-video FPS and the keyframe-ordinal -> frame index
-    # mapping. Defaults to the committed ``src/dict/map-keyframes.zip``.
+    # mapping. Defaults to the extracted ``src/dict/map-keyframes`` directory;
+    # an existing ``src/dict/map-keyframes.zip`` remains supported as fallback.
     map_keyframes_path: Path | None = None
     # Optional JSON object mapping ``video_id`` -> playback offset in seconds
     # (``source_time = playback_time - playback_offset``). Only use this for
@@ -125,13 +126,42 @@ class Settings(BaseSettings):
     agent_llm_enabled: bool = False
     agent_llm_model: str | None = None
     agent_llm_max_tokens: int = 900
+    agent_visual_query_limit: int = 1
     agent_vlm_enabled: bool = False
     agent_vlm_model: str = "google/gemini-2.5-flash"
     agent_vlm_max_candidates: int = 12
+    agent_vlm_candidate_pool: int = 40
+    agent_vlm_per_video_limit: int = 3
     agent_vlm_batch_size: int = 4
     agent_vlm_max_tokens: int = 900
     agent_vlm_timeout_seconds: float = 45.0
     agent_vlm_image_max_side: int = 768
+    agent_vlm_max_retries: int = 1
+    agent_vlm_retry_backoff_seconds: float = 0.5
+    agent_vlm_cache_enabled: bool = True
+    agent_vlm_cache_path: Path | None = None
+    agent_vlm_cache_max_entries: int = 5000
+    agent_vlm_cache_ttl_seconds: int = 2592000
+    trake_retrieval_top_k: int = 120
+    trake_candidates_per_event_video: int = 12
+    trake_beam_width: int = 40
+    trake_min_event_gap_seconds: float = 0.0
+    trake_max_event_gap_seconds: float = 300.0
+    trake_max_sequence_span_seconds: float = 900.0
+    trake_temporal_decay: float = 0.01
+    trake_evidence_window_seconds: float = 12.0
+    trake_ocr_enabled: bool = True
+    trake_asr_enabled: bool = True
+    trake_vlm_enabled: bool = True
+    trake_vlm_max_sequences: int = 5
+    qa_retrieval_pool: int = 40
+    qa_max_frames: int = 8
+    qa_per_video_limit: int = 3
+    qa_text_evidence_top_k: int = 12
+    qa_evidence_window_seconds: float = 15.0
+    qa_vlm_enabled: bool = True
+    qa_min_confidence: float = 0.55
+    qa_max_tokens: int = 700
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-3-5-sonnet-20240620"
     anthropic_max_tokens: int = 2048
@@ -171,6 +201,7 @@ class Settings(BaseSettings):
         "beit3_index_meta_path",
         "beit3_checkpoint_path",
         "beit3_tokenizer_path",
+        "agent_vlm_cache_path",
         mode="before",
     )
     @classmethod
@@ -253,15 +284,18 @@ class Settings(BaseSettings):
     def get_map_keyframes_path(self) -> Path:
         """Return the resolved map-keyframes archive/directory path.
 
-        Falls back to the committed ``src/dict/map-keyframes.zip``, then to the
-        extracted ``src/dict/map-keyframes`` directory.
+        Falls back to the extracted ``src/dict/map-keyframes`` directory, then
+        to an existing ``src/dict/map-keyframes.zip`` archive.
         """
         if self.map_keyframes_path is not None:
             return Path(self.map_keyframes_path)
+        map_dir = self.src_dir / "dict" / "map-keyframes"
+        if map_dir.exists():
+            return map_dir
         bundled_zip = self.src_dir / "dict" / "map-keyframes.zip"
         if bundled_zip.exists():
             return bundled_zip
-        return self.src_dir / "dict" / "map-keyframes"
+        return map_dir
 
     def get_playback_offsets(self) -> dict[str, float]:
         """Return the parsed ``video_id -> offset seconds`` override map.
@@ -287,6 +321,12 @@ class Settings(BaseSettings):
             except (TypeError, ValueError):
                 continue
         return offsets
+
+    def get_agent_vlm_cache_path(self) -> Path:
+        """Return the runtime cache path for OpenRouter VLM verdicts."""
+        if self.agent_vlm_cache_path is not None:
+            return Path(self.agent_vlm_cache_path)
+        return self.src_dir.parent / ".cache" / "agent_vlm_verdicts.json"
 
 
 @lru_cache()

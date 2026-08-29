@@ -84,7 +84,7 @@ class TestLazyInitialization(unittest.TestCase):
 
         # 4. Call get_trake_search() -> should initialize TRAKE once
         trake_instance_1 = user_service.get_trake_search()
-        mock_trake.assert_called_once_with(faiss_instance_1)
+        mock_trake.assert_called_once_with()
         
         trake_instance_2 = user_service.get_trake_search()
         self.assertIs(trake_instance_1, trake_instance_2)

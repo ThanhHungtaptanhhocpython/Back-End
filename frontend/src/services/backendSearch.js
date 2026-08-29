@@ -255,6 +255,7 @@ export function normalizeBackendResponse(payload, { type, latency }, baseUrl = "
   return {
     items,
     totalItems: items.length,
+    meta: payload.data.meta || null,
     latency,
     type,
     mode: "FASTAPI LIVE",

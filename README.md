@@ -100,7 +100,7 @@ endpoints need two per-video assets:
 | Asset | Env var | Default |
 | --- | --- | --- |
 | `media-info` (YouTube `watch_url` + `length`) | `MEDIA_INFO_PATH` | `media-info-aic25-b1.zip` at repo root, then `src/dict/media-info/` |
-| `map-keyframes` (authoritative FPS) | `MAP_KEYFRAMES_PATH` | committed `src/dict/map-keyframes.zip`, then `src/dict/map-keyframes/` |
+| `map-keyframes` (authoritative FPS) | `MAP_KEYFRAMES_PATH` | `src/dict/map-keyframes/`, then existing `src/dict/map-keyframes.zip` |
 
 `media-info-aic25-b1.zip` is a large runtime asset and is **git-ignored** —
 copy it onto the machine (or set `MEDIA_INFO_PATH` to wherever it lives). Both

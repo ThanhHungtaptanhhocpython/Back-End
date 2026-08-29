@@ -591,6 +591,42 @@ class BEiT3Retriever:
 
         return results
 
+    def get_frame_by_vector_id(self, vector_id: int) -> dict | None:
+        """Return the exact metadata row for a BEiT3 vector ID."""
+        try:
+            vector_id = int(vector_id)
+        except (TypeError, ValueError):
+            return None
+        row = self._id_to_row.get(vector_id)
+        if row is None:
+            return None
+        return self._build_result(1, 1.0, vector_id, row)
+
+    def get_nearest_frame(self, video_id: str, timestamp: float) -> dict | None:
+        """Return the keyframe nearest a timestamp in one video."""
+        rows = self._video_to_rows.get(str(video_id))
+        if not rows:
+            return None
+        try:
+            target = float(timestamp)
+        except (TypeError, ValueError):
+            return None
+        best_result = None
+        best_delta = float("inf")
+        for row in rows:
+            vector_id = int(row.get(self._columns["vector_id"]) or 0)
+            result = self._build_result(1, 1.0, vector_id, row)
+            result_timestamp = result.get("timestamp")
+            if result_timestamp is None:
+                continue
+            delta = abs(float(result_timestamp) - target)
+            if delta < best_delta:
+                best_delta = delta
+                best_result = result
+        if best_result is not None:
+            best_result["timestamp_delta"] = best_delta
+        return best_result
+
     def _build_video_to_rows(self) -> dict[str, list[dict]]:
         """Index rows by video_id in chronological frame_id order."""
         video_col = self._columns.get("video_id") or "video_id"

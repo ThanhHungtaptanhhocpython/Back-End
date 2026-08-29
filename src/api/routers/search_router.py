@@ -42,12 +42,13 @@ def handle_single_text_search(request: TextSearchRequest):
 def handle_qna_search(request: TextSearchRequest):
     if not request.query.strip():
         return _empty_query_response()
-    from src.services.user_service import getImageDataQAndASearch
+    from src.services.user_service import getGroundedQASearch
     
-    res = getImageDataQAndASearch(request.query, request.topk)
+    res, summary = getGroundedQASearch(request.query, request.topk)
     return BaseResponse(
         success=True,
-        data=DataResponse(items=res, total_items=len(res))
+        message=summary.get("answer"),
+        data=DataResponse(items=res, total_items=len(res), meta=summary)
     )
 
 @router.post("/imagesearch", response_model=BaseResponse)

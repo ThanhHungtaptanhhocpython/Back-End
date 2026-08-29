@@ -50,3 +50,14 @@ media-info-*.zip
 src/dict/nw/*.bin
 src/dict/faiss_index.bin
 .gstack/
+src/dict/metadata_beit3.json
+src/dict/*.json.bak_*
+
+# Terraform
+*.tfvars
+*.tfvars.json
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+crash.log

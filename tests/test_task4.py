@@ -63,8 +63,8 @@ class Task4ErrorHandlingTests(unittest.TestCase):
         mod.get_beit3_retriever = MagicMock(return_value=retriever)
         return mod
 
-    def test_qnasearch_defaults_missing_answers(self):
-        """Verify that /qnasearch fills in an empty answer for items that omit it."""
+    def test_qnasearch_returns_grounded_fallback_when_no_images_resolve(self):
+        """Q&A must return an explicit uncertain answer instead of empty text."""
         mock_retriever = MagicMock()
         # The first item intentionally omits the optional 'answer' field.
         mock_retriever.search_visual.return_value = [
@@ -85,9 +85,10 @@ class Task4ErrorHandlingTests(unittest.TestCase):
         self.assertTrue(data['success'])
         self.assertEqual(data['data']['total_items'], 2)
 
-        # Missing answers are defaulted to '', existing ones are preserved
-        self.assertEqual(data['data']['items'][0]['answer'], '')
-        self.assertEqual(data['data']['items'][1]['answer'], 'prefilled')
+        self.assertEqual(data['data']['meta']['status'], 'uncertain')
+        self.assertTrue(data['data']['meta']['answer'])
+        self.assertEqual(data['data']['items'][0]['answer'], data['data']['meta']['answer'])
+        self.assertEqual(data['data']['items'][1]['answer'], data['data']['meta']['answer'])
 
     def test_qnasearch_returns_sanitized_error_on_failure(self):
         """Verify that a retriever failure produces a sanitized JSON error instead of a crash."""

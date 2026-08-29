@@ -3,11 +3,11 @@ import csv
 import math
 import os
 import re
+import logging
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
-from .faiss_processing import MyFaiss
 from src.config.settings import get_settings
 from src.services.reranker_service import reranker_service
 from src.utils.nlp_processing import QueryPlanner, Translation
@@ -21,21 +21,131 @@ from src.utils.nlp_processing import QueryPlanner, Translation
 '''
 
 
-class TRAKE:
-    def __init__(self, faiss_searcher: MyFaiss):
-        """
-        Initialize TRAKE system with MyFaiss.
+logger = logging.getLogger(__name__)
 
-        Args:
-            faiss_searcher: Existing instance of MyFaiss.
+
+class TRAKE:
+    def __init__(self, faiss_searcher: Any = None):
+        """Initialize ordered-event retrieval on the active BEiT3 corpus.
+
+        ``faiss_searcher`` remains optional only for backwards compatibility;
+        TRAKE no longer loads or queries the legacy CLIP index.
         """
         settings = get_settings()
         self.faiss_searcher = faiss_searcher
+        self.settings = settings
         self.keyframes_base_path = str(settings.get_keyframes_root())
         self.map_keyframes_dir = os.path.join(str(settings.src_dir), "dict", "map-keyframes")
         self._keyframe_map_cache: Dict[str, Dict[int, int]] = {}
         self.enable_vqa = os.getenv("TRAKE_ENABLE_VQA", "false").strip().lower() in {"1", "true", "yes", "on"}
         self.vqa_max_sequences = int(os.getenv("TRAKE_VQA_MAX_SEQUENCES", "5"))
+        self.min_event_gap = max(0.0, float(settings.trake_min_event_gap_seconds))
+        self.max_event_gap = max(self.min_event_gap, float(settings.trake_max_event_gap_seconds))
+        self.max_sequence_span = max(self.max_event_gap, float(settings.trake_max_sequence_span_seconds))
+        self.temporal_decay = max(0.0, float(settings.trake_temporal_decay))
+        self.evidence_window = max(0.1, float(settings.trake_evidence_window_seconds))
+
+    @staticmethod
+    def _float(value: Any, default: float = 0.0) -> float:
+        try:
+            parsed = float(value)
+            return parsed if math.isfinite(parsed) else default
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _normalise_retrieval_scores(candidates: List[Dict]) -> None:
+        if not candidates:
+            return
+        values = [TRAKE._float(candidate.get("score")) for candidate in candidates]
+        low, high = min(values), max(values)
+        span = high - low
+        for candidate, value in zip(candidates, values):
+            candidate["raw_visual_score"] = value
+            candidate["visual_score"] = (value - low) / span if span > 1e-9 else 1.0
+            candidate["score"] = candidate["visual_score"]
+
+    def _plan_event(self, event_query: str) -> Dict[str, Any]:
+        modality_plan = QueryPlanner.parse_query(event_query)
+        translated = Translation()(modality_plan.get("visual_query") or event_query) or event_query
+        local_plan = {
+            "profile": "trake_ordered_event",
+            "visual_queries": [translated],
+            "ocr_queries": [modality_plan["ocr_query"]] if modality_plan.get("ocr_query") else [],
+            "asr_queries": [modality_plan["asr_query"]] if modality_plan.get("asr_query") else [],
+            "must_have_checks": [],
+        }
+        llm_plan: Dict[str, Any] = {}
+        try:
+            from src.services.openrouter_agent_planner import plan_agent_query_with_openrouter
+
+            llm_plan = plan_agent_query_with_openrouter(event_query, local_plan)
+        except Exception as exc:
+            logger.warning("TRAKE event enrichment failed; using translated query: %s", exc)
+        return {
+            "original_query": event_query,
+            "visual_query": (llm_plan.get("visual_queries") or [translated])[0],
+            "ocr_query": (llm_plan.get("ocr_queries") or local_plan["ocr_queries"] or [""])[0],
+            "asr_query": (llm_plan.get("asr_queries") or local_plan["asr_queries"] or [""])[0],
+            "planner_source": llm_plan.get("planner_source") or "translation",
+        }
+
+    def _search_event_evidence(self, event_plan: Dict[str, Any]) -> Dict[str, List[Dict]]:
+        evidence: Dict[str, List[Dict]] = {"ocr": [], "asr": []}
+        if not event_plan.get("ocr_query") and not event_plan.get("asr_query"):
+            return evidence
+        try:
+            from src.services.user_service import get_elastic_processor
+
+            processor = get_elastic_processor()
+            if self.settings.trake_ocr_enabled and event_plan.get("ocr_query"):
+                evidence["ocr"] = processor.search_ocr(event_plan["ocr_query"], topk=80)
+            if self.settings.trake_asr_enabled and event_plan.get("asr_query"):
+                evidence["asr"] = processor.search_asr(event_plan["asr_query"], topk=80)
+        except Exception as exc:
+            logger.warning("TRAKE text evidence retrieval failed; continuing visual-only: %s", exc)
+        return evidence
+
+    def _apply_event_evidence(self, candidates: List[Dict], evidence: Dict[str, List[Dict]]) -> None:
+        for modality in ("ocr", "asr"):
+            rows = evidence.get(modality) or []
+            if not rows:
+                continue
+            raw_scores = [self._float(row.get("_score")) for row in rows]
+            low, high = min(raw_scores), max(raw_scores)
+            span = high - low
+            for row, raw_score in zip(rows, raw_scores):
+                row["_trake_score"] = (raw_score - low) / span if span > 1e-9 else 1.0
+
+        for candidate in candidates:
+            video_id = str(candidate.get("video_id") or "")
+            timestamp = self._float(candidate.get("timestamp"))
+            evidence_scores = {"ocr": 0.0, "asr": 0.0}
+            evidence_text: Dict[str, str] = {}
+            for modality in ("ocr", "asr"):
+                for row in evidence.get(modality) or []:
+                    if str(row.get("video_id") or "") != video_id:
+                        continue
+                    row_timestamp = self._float(
+                        row.get("nearest_timestamp")
+                        if modality == "asr"
+                        else row.get("timestamp")
+                    )
+                    gap = abs(timestamp - row_timestamp)
+                    if gap > self.evidence_window:
+                        continue
+                    proximity = math.exp(-gap / self.evidence_window)
+                    score = self._float(row.get("_trake_score")) * proximity
+                    if score > evidence_scores[modality]:
+                        evidence_scores[modality] = score
+                        evidence_text[modality] = str(row.get("text") or row.get("ocr_text") or "")[:240]
+
+            visual = self._float(candidate.get("visual_score"))
+            active = [score for score in evidence_scores.values() if score > 0]
+            evidence_score = max(active) if active else 0.0
+            candidate["evidence_scores"] = evidence_scores
+            candidate["evidence_text"] = evidence_text
+            candidate["score"] = min(1.0, (0.82 * visual) + (0.18 * evidence_score)) if active else visual
 
     def retrieve_top_k(self, query: str, k: int = 200) -> List[Dict]:
         """Retrieve candidates from the BEiT3 corpus used by the current keyframes.
@@ -46,15 +156,16 @@ class TRAKE:
         """
         from src.services.beit3_retriever import get_beit3_retriever
 
-        translated_query = Translation()(query)
-        results = get_beit3_retriever().search_visual(translated_query or query, top_k=k)
+        event_plan = self._plan_event(query)
+        translated_query = event_plan["visual_query"]
+        results = get_beit3_retriever().search_visual(translated_query, top_k=k)
 
         candidates = []
         for result in results:
             frame_path = str(result.get("frame_path") or "").replace("\\", "/")
             path_parts = frame_path.split("/")
             namespace = str(result.get("namespace") or (path_parts[0] if path_parts else ""))
-            split = f"videos-{namespace.replace('_', '-')}" if namespace else ""
+            split = namespace
             frame_id = result.get("frame_idx", result.get("frame_id"))
             try:
                 global_frame_id = int(frame_id)
@@ -63,6 +174,7 @@ class TRAKE:
 
             candidates.append({
                 "faiss_idx": int(result.get("vector_id", -1)),
+                "vector_id": int(result.get("vector_id", -1)),
                 "global_frame_id": global_frame_id,
                 "timestamp": result.get("timestamp", 0.0) or 0.0,
                 "frame_name": Path(frame_path).name or str(result.get("frame_name") or ""),
@@ -70,8 +182,13 @@ class TRAKE:
                 "split": split,
                 "score": float(result.get("score", 0.0)),
                 "image_path": frame_path,
+                "query": query,
+                "query_en": translated_query or query,
+                "planner_source": event_plan["planner_source"],
             })
 
+        self._normalise_retrieval_scores(candidates)
+        self._apply_event_evidence(candidates, self._search_event_evidence(event_plan))
         return candidates
     def group_by_video(self, candidates_list: List[List[Dict]]) -> Dict:
         """
@@ -91,22 +208,39 @@ class TRAKE:
                     continue
                 video_groups[video_id][event_idx].append(candidate)
 
+        limit = max(1, int(self.settings.trake_candidates_per_event_video))
+        for event_lists in video_groups.values():
+            for event_index, candidates in enumerate(event_lists):
+                event_lists[event_index] = sorted(
+                    candidates,
+                    key=lambda item: self._float(item.get("score")),
+                    reverse=True,
+                )[:limit]
+
         return video_groups
+
+    def _candidate_timestamp(self, candidate: Dict) -> float:
+        if candidate.get("timestamp") is not None:
+            return self._float(candidate.get("timestamp"))
+        return self._float(candidate.get("global_frame_id")) / 25.0
+
     def beam_search_sequences(self, video_id: str, event_candidates: List[List[Dict]], beam_width: int = 50) -> List[Dict]:
         """
         Find top temporal sequences using beam search.
         """
         beam = []
         for candidate in event_candidates[0]:
+            timestamp = self._candidate_timestamp(candidate)
             seq_info = {
                 "video_id": video_id,
                 "frames": [candidate["frame_name"]],
                 "global_frame_ids": [candidate["global_frame_id"]],
-                "timestamps": [candidate.get("timestamp", 0.0)],
+                "timestamps": [timestamp],
                 "splits": [candidate["split"]],
                 "base_score": candidate["score"],
                 "total_score": candidate["score"],
                 "frame_details": [candidate],
+                "temporal_gaps": [],
             }
             beam.append(seq_info)
 
@@ -116,27 +250,29 @@ class TRAKE:
         for event_idx in range(1, len(event_candidates)):
             new_beam = []
             next_candidates = event_candidates[event_idx]
-            next_candidates.sort(key=lambda x: x["global_frame_id"])
+            next_candidates.sort(key=self._candidate_timestamp)
 
             for seq in beam:
-                last_frame_id = seq["global_frame_ids"][-1]
+                last_timestamp = seq["timestamps"][-1]
                 for candidate in next_candidates:
-                    if candidate["global_frame_id"] > last_frame_id:
-                        new_base_score = seq["base_score"] + candidate["score"]
-                        time_gap = candidate.get("timestamp", 0.0) - seq["timestamps"][0]
-                        alpha = 0.01
-                        penalty = math.exp(-alpha * time_gap) if time_gap > 0 else 1.0
+                    candidate_timestamp = self._candidate_timestamp(candidate)
+                    adjacent_gap = candidate_timestamp - last_timestamp
+                    total_span = candidate_timestamp - seq["timestamps"][0]
+                    if adjacent_gap > self.min_event_gap and adjacent_gap <= self.max_event_gap and total_span <= self.max_sequence_span:
+                        new_base_score = seq["base_score"] + self._float(candidate.get("score"))
+                        penalty = math.exp(-self.temporal_decay * total_span) if total_span > 0 else 1.0
                         new_total_score = new_base_score * penalty
 
                         new_seq = {
                             "video_id": video_id,
                             "frames": seq["frames"] + [candidate["frame_name"]],
                             "global_frame_ids": seq["global_frame_ids"] + [candidate["global_frame_id"]],
-                            "timestamps": seq["timestamps"] + [candidate.get("timestamp", 0.0)],
+                            "timestamps": seq["timestamps"] + [candidate_timestamp],
                             "splits": list(set(seq["splits"] + [candidate["split"]])),
                             "base_score": new_base_score,
                             "total_score": new_total_score,
                             "frame_details": seq["frame_details"] + [candidate],
+                            "temporal_gaps": seq.get("temporal_gaps", []) + [adjacent_gap],
                         }
                         new_beam.append(new_seq)
 
@@ -158,7 +294,11 @@ class TRAKE:
             if any(len(candidates) == 0 for candidates in event_candidates):
                 continue
 
-            sequences = self.beam_search_sequences(video_id, event_candidates, beam_width=50)
+            sequences = self.beam_search_sequences(
+                video_id,
+                event_candidates,
+                beam_width=max(1, int(self.settings.trake_beam_width)),
+            )
             valid_sequences.extend(sequences)
 
         return valid_sequences
@@ -172,6 +312,9 @@ class TRAKE:
 
     def _split_to_folder(self, split: str) -> str:
         clean = str(split or "").replace("videos-", "").replace("videos_", "")
+        if re.fullmatch(r"L\d+_[A-Za-z0-9]+", clean, flags=re.IGNORECASE):
+            prefix, suffix = clean.split("_", 1)
+            return f"{prefix.upper()}_{suffix.lower()}"
         parts = clean.split("-")
         if len(parts) >= 2:
             return f"{parts[0].upper()}_{'_'.join(parts[1:])}"
@@ -272,6 +415,25 @@ class TRAKE:
                 "video_id": sequence.get("video_id"),
                 "frame_names": [frame.get("frame_name") for frame in sequence["frame_details"]],
                 "timestamps": [frame.get("timestamp", 0.0) for frame in sequence["frame_details"]],
+                "score": sequence.get("total_score", 0.0),
+                "base_score": sequence.get("base_score", 0.0),
+                "temporal_gaps": sequence.get("temporal_gaps", []),
+                "event_queries": [frame.get("query") for frame in sequence["frame_details"]],
+                "event_queries_en": [frame.get("query_en") for frame in sequence["frame_details"]],
+                "evidence": [
+                    {
+                        "scores": frame.get("evidence_scores", {}),
+                        "text": frame.get("evidence_text", {}),
+                    }
+                    for frame in sequence["frame_details"]
+                ],
+                "verification_score": sequence.get("verification_score"),
+                "vlm_score": sequence.get("vlm_score"),
+                "vlm_decision": sequence.get("vlm_decision"),
+                "vlm_reason": sequence.get("vlm_reason"),
+                "vlm_matched_events": sequence.get("vlm_matched_events", []),
+                "vlm_missing_events": sequence.get("vlm_missing_events", []),
+                "verification": sequence.get("verification", {}),
                 "frames": frames,
             })
 
@@ -288,7 +450,8 @@ class TRAKE:
         candidates_list = []
         for i, event in enumerate(events):
             print(f"Retrieving candidates for event {i + 1}: {event[:50]}...")
-            candidates = self.retrieve_top_k(event, top_k)
+            retrieval_top_k = max(top_k, int(self.settings.trake_retrieval_top_k))
+            candidates = self.retrieve_top_k(event, retrieval_top_k)
             candidates_list.append(candidates)
             print(f"Found {len(candidates)} candidates for event {i + 1}")
 
@@ -329,6 +492,23 @@ class TRAKE:
             ranked_sequences.sort(key=lambda x: x["total_score"], reverse=True)
         else:
             print("Skipping BLIP-VQA validation (set TRAKE_ENABLE_VQA=true to enable).")
+
+        try:
+            from src.services.openrouter_trake_verifier import verify_trake_sequences
+
+            ranked_sequences, vlm_summary = verify_trake_sequences(
+                ranked_sequences,
+                events,
+                self._resolve_image_path,
+            )
+        except Exception as exc:
+            logger.warning("TRAKE sequence VLM verification failed; keeping temporal ranking: %s", exc)
+            vlm_summary = {"enabled": True, "status": "fallback", "evaluated": 0, "error": str(exc)[:180]}
+        for sequence in ranked_sequences:
+            sequence["verification"] = {
+                "method": "openrouter_sequence_vlm" if sequence.get("vlm_score") is not None else "temporal_evidence",
+                "summary": vlm_summary,
+            }
 
         print("Formatting response...")
         return self.format_response(ranked_sequences)

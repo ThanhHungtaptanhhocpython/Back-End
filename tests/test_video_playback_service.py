@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from src.config.settings import Settings
 from src.services.video_playback_service import (
     VideoMetadataError,
     VideoNotFoundError,
@@ -209,3 +210,18 @@ def test_metadata_is_cached(flat_media_info: Path, flat_map_keyframes: Path, mon
     monkeypatch.setattr(service, "_load_media_info", _boom)
     second = service.get_metadata("L21_V001")
     assert first is second
+
+
+def test_default_map_keyframes_source_exists_for_capture():
+    settings = Settings(_env_file=None)
+    source = settings.get_map_keyframes_path()
+
+    assert source.exists(), f"default map-keyframes source is missing: {source}"
+    extracted_dir = source.parent / "map-keyframes"
+    if extracted_dir.exists():
+        assert source == extracted_dir
+        assert any(source.glob("*.csv")), "map-keyframes directory contains no CSV data"
+    else:
+        assert source == extracted_dir.with_suffix(".zip")
+        with zipfile.ZipFile(source) as archive:
+            assert any(Path(name).suffix.lower() == ".csv" for name in archive.namelist())

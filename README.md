@@ -112,6 +112,24 @@ playback offset defaults to `0` for every video. If a specific video is
 verified to be shifted, add it to `PLAYBACK_OFFSETS_JSON`, e.g.
 `PLAYBACK_OFFSETS_JSON={"L21_V029": -172}` (`source_time = playback_time - offset`).
 
+#### Captured-frame previews (optional)
+
+On success, `POST /users/videos/{video_id}/capture` also tries to attach an
+**exact** still for the submitted frame (`preview_url`), extracted from the
+YouTube `watch_url` in `media-info`. This needs:
+
+* the `yt-dlp` Python dependency (in `requirements.txt`), and an **FFmpeg
+  binary** on `PATH` (or set `VIDEO_CAPTURE_FFMPEG_BIN` to its path);
+* **outbound network access to YouTube** from the server.
+
+Only the generated WebP is stored, under `.cache/video-captures/<video_id>/<frame_idx>.webp`
+(`VIDEO_CAPTURE_CACHE_PATH`); repeated captures reuse it and least-recently-used
+stills are evicted once the cache passes `VIDEO_CAPTURE_CACHE_MAX_BYTES`
+(500 MB default). `VIDEO_CAPTURE_EXTRACT_TIMEOUT_SECONDS` (90s) bounds one
+extraction. All of this is optional — when the tools, network, or source video
+are unavailable the frame index is still returned and remains exportable, just
+with `preview_url: null` and a `preview_error` reason; app startup is unaffected.
+
 ## 🏃‍♂️ Running the Server
 
 ### Step 1: Start Elasticsearch

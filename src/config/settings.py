@@ -74,6 +74,20 @@ class Settings(BaseSettings):
     # dataset timeline; the default offset is ``0`` for every video.
     playback_offsets_json: str = ""
 
+    # --- Captured-frame previews (exact server-side still extraction) ---
+    # Directory that stores generated WebP stills at
+    # ``<cache>/<video_id>/<frame_idx>.webp``. Defaults to
+    # ``.cache/video-captures`` under the repository root. Only preview
+    # extraction depends on the tools below; the app starts fine without them.
+    video_capture_cache_path: Path | None = None
+    # Name of (or absolute path to) the FFmpeg binary used to decode a single
+    # frame from the resolved source stream.
+    video_capture_ffmpeg_bin: str = "ffmpeg"
+    # Hard wall-clock limit (seconds) for one yt-dlp + FFmpeg extraction.
+    video_capture_extract_timeout_seconds: float = 90.0
+    # Evict least-recently-used stills once the cache exceeds this many bytes.
+    video_capture_cache_max_bytes: int = 500 * 1024 * 1024
+
     # --- External Services ---
     elasticsearch_url: str = "http://localhost:9200"
 
@@ -195,6 +209,7 @@ class Settings(BaseSettings):
         "features_root",
         "media_info_path",
         "map_keyframes_path",
+        "video_capture_cache_path",
         "beit3_faiss_index_path",
         "beit3_global_ids_path",
         "beit3_video_metadata_path",
@@ -321,6 +336,15 @@ class Settings(BaseSettings):
             except (TypeError, ValueError):
                 continue
         return offsets
+
+    def get_video_capture_cache_path(self) -> Path:
+        """Return the directory that stores generated captured-frame stills.
+
+        Falls back to ``.cache/video-captures`` under the repository root.
+        """
+        if self.video_capture_cache_path is not None:
+            return Path(self.video_capture_cache_path)
+        return self.src_dir.parent / ".cache" / "video-captures"
 
     def get_agent_vlm_cache_path(self) -> Path:
         """Return the runtime cache path for OpenRouter VLM verdicts."""

@@ -42,6 +42,17 @@ export function captureCandidateId(videoId, frameIdx) {
   return `capture:${String(videoId)}:${Number(frameIdx)}`;
 }
 
+/**
+ * Resolve the backend `preview_url` (a relative captured-frame path, or an
+ * absolute/data URL) into something the browser can load directly.
+ */
+export function normalizePreviewUrl(raw, baseUrl) {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+  if (/^(https?:|data:|blob:)/i.test(value)) return value;
+  return videoApiUrl(baseUrl, value);
+}
+
 /** Normalize the backend playback envelope into a flat camelCase record. */
 export function normalizePlaybackItem(raw) {
   const item = raw && typeof raw === "object" ? raw : {};
@@ -141,19 +152,26 @@ export async function captureFrame(
     sourceTimeSeconds: firstFinite(data.source_time_seconds, seconds),
     fps: firstFinite(data.fps),
     frameIdx: Number(data.frame_idx),
+    // Exact server-extracted still for this frame, or "" when unavailable.
+    previewUrl: normalizePreviewUrl(data.preview_url, config.baseUrl),
+    previewError: data.preview_error ? String(data.preview_error) : null,
   };
 }
 
 /**
  * Turn a capture result into a Selection Tray candidate that matches the
- * workstation card shape used by the export pipeline. The preview image is
- * reused from the frame being reviewed — no real frame is grabbed or stored.
+ * workstation card shape used by the export pipeline. The preview image is the
+ * exact server-extracted still for the submitted frame (`capture.previewUrl`);
+ * there is no fallback to the reviewed frame's thumbnail. When extraction is
+ * unavailable the candidate stays selectable/exportable with an empty `image`.
  */
 export function buildCaptureCandidate(reviewItem, capture) {
   const videoId = String(capture?.videoId || reviewItem?.videoKey || "");
   const frameIdx = Number(capture?.frameIdx);
   const fps = firstFinite(capture?.fps, reviewItem?.fps, 25);
   const sourceTime = firstFinite(capture?.sourceTimeSeconds);
+  const previewUrl = String(capture?.previewUrl || "");
+  const previewError = capture?.previewError ? String(capture.previewError) : null;
   const folderKey = String(
     reviewItem?.folderKey || reviewItem?.backend?.folder_key || videoId.split("_")[0] || "UNKNOWN",
   );
@@ -171,7 +189,10 @@ export function buildCaptureCandidate(reviewItem, capture) {
     timestamp: sourceTime,
     timecode: toTimecode(sourceTime, fps || 25),
     fps: fps || 25,
-    image: reviewItem?.image || "",
+    image: previewUrl,
+    previewUrl,
+    previewError,
+    hasPreview: Boolean(previewUrl),
     link: reviewItem?.link || reviewItem?.backend?.watch_url || "",
     real: true,
     rank: null,
@@ -187,6 +208,7 @@ export function buildCaptureCandidate(reviewItem, capture) {
       playback_time_seconds: firstFinite(capture?.playbackTimeSeconds),
       fps: fps || 25,
       captured: true,
+      preview_url: previewUrl || null,
     },
   };
 }

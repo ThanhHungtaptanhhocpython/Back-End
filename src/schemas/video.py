@@ -45,6 +45,12 @@ class CaptureResultModel(BaseModel):
     source_time_seconds: float
     fps: float
     frame_idx: int
+    # Populated only when an exact still was extracted for this frame: a
+    # relative path served by the captured-frame route. ``None`` means the
+    # frame is still valid/exportable but has no substitute preview image.
+    preview_url: Optional[str] = None
+    # Short human-readable reason preview extraction was skipped or failed.
+    preview_error: Optional[str] = None
 
 
 class CaptureResponse(BaseModel):

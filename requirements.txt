@@ -28,3 +28,4 @@ langchain-anthropic==0.1.23
 langchain-nvidia-ai-endpoints==0.2.2
 langchain-google-genai==1.0.10
 ffmpeg-python
+yt-dlp

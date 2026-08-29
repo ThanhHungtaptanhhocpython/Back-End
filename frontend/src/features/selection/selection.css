@@ -78,6 +78,28 @@
   display: block;
 }
 
+.ws-tray-thumb-missing {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ws-muted);
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--ws-panel, #1e293b),
+    var(--ws-panel, #1e293b) 6px,
+    var(--ws-border, #334155) 6px,
+    var(--ws-border, #334155) 12px
+  );
+}
+
 .ws-tray-thumb-label {
   font-size: 10px;
   color: var(--ws-muted);

@@ -143,10 +143,11 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
       const candidate = buildCaptureCandidate(videoItem, result);
       const outcome = onCapture?.(candidate, result);
       const added = outcome === undefined ? true : Boolean(outcome);
+      const previewSuffix = candidate.hasPreview ? "" : " - preview unavailable";
       setCaptureNote({
         type: added ? "ok" : "dupe",
         text: added
-          ? `Captured frame ${result.frameIdx} (${toTimecode(result.sourceTimeSeconds, result.fps || captureFps)}) - added to tray`
+          ? `Captured frame ${result.frameIdx} (${toTimecode(result.sourceTimeSeconds, result.fps || captureFps)}) - added to tray${previewSuffix}`
           : `Frame ${result.frameIdx} is already in the tray`,
       });
     } catch (err) {
@@ -304,7 +305,15 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
                 onClick={() => videoPlayback && setShowVideo(true)}
                 title={videoPlayback ? "Play video from this timestamp" : hydratedItem.frameName}
               >
-                <img className="ws-review-img" src={hydratedItem.image} alt={hydratedItem.frameName} />
+                {hydratedItem.image ? (
+                  <img className="ws-review-img" src={hydratedItem.image} alt={hydratedItem.frameName} />
+                ) : (
+                  <div className="ws-review-img ws-review-img-missing" role="img" aria-label="Exact preview unavailable">
+                    <VideoCameraOutlined />
+                    <span>Preview unavailable</span>
+                    <small>{hydratedItem.previewError || "The captured frame is still export-ready."}</small>
+                  </div>
+                )}
                 {videoPlayback ? (
                   <span className="ws-review-media-play">
                     <VideoCameraOutlined />

@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from main import app
+from src.services import video_frame_preview_service as vfps
 from src.services import video_playback_service as vps
 
 client = TestClient(app)
@@ -41,6 +42,16 @@ def fixture_service(tmp_path: Path, monkeypatch):
     )
     service = vps.VideoPlaybackService(media, kmap)
     monkeypatch.setattr(vps, "get_video_playback_service", lambda: service)
+
+    # Route tests must not reach out to YouTube; force the "no preview" path.
+    class _StubPreview:
+        def get_or_create(self, **_kwargs):
+            raise vfps.FramePreviewError("FFmpeg binary is not available on this server.")
+
+        def get_existing(self, *_args, **_kwargs):
+            return None
+
+    monkeypatch.setattr(vfps, "get_video_frame_preview_service", lambda: _StubPreview())
     return service
 
 
@@ -90,6 +101,43 @@ def test_capture_returns_frame_idx():
     assert data["frame_idx"] == 351
     assert data["fps"] == 30.0
     assert data["source_time_seconds"] == pytest.approx(11.7333)
+
+
+def test_capture_response_carries_preview_contract_on_extractor_failure():
+    resp = client.post(
+        "/users/videos/L21_V001/capture",
+        json={"playback_time_seconds": 11.7333},
+    )
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    # The valid frame index is still returned...
+    assert data["frame_idx"] == 351
+    # ...but no original review image is substituted.
+    assert data["preview_url"] is None
+    assert "FFmpeg" in (data["preview_error"] or "")
+
+
+def test_captured_frame_route_serves_existing_still_and_404s_otherwise(tmp_path, monkeypatch):
+    still = tmp_path / "L21_V001" / "351.webp"
+    still.parent.mkdir(parents=True)
+    still.write_bytes(b"RIFF\x00\x00\x00\x00WEBPfake")
+
+    class _Preview:
+        def get_existing(self, video_id, frame_idx):
+            path = tmp_path / str(video_id) / f"{int(frame_idx)}.webp"
+            return path if path.is_file() else None
+
+        def get_or_create(self, **_kwargs):
+            raise vfps.FramePreviewError("unused")
+
+    monkeypatch.setattr(vfps, "get_video_frame_preview_service", lambda: _Preview())
+
+    ok = client.get("/users/videos/captures/L21_V001/351.webp")
+    assert ok.status_code == 200
+    assert ok.headers["content-type"] == "image/webp"
+
+    missing = client.get("/users/videos/captures/L21_V001/999.webp")
+    assert missing.status_code == 404
 
 
 def test_capture_negative_timestamp_is_400():

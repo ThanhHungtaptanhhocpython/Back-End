@@ -15,6 +15,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Response, status
+from fastapi.responses import FileResponse
 
 from src.schemas.video import (
     CaptureRequest,
@@ -87,13 +88,71 @@ def get_video_playback(
     return PlaybackResponse(success=True, data=PlaybackData(items=[item], total_items=1))
 
 
+@router.get("/videos/captures/{video_id}/{frame_idx}.webp")
+def serve_captured_frame(video_id: str, frame_idx: int) -> Response:
+    """Serve a previously extracted captured-frame still (WebP)."""
+    from src.services.video_frame_preview_service import (
+        FramePreviewError,
+        get_video_frame_preview_service,
+    )
+
+    try:
+        path = get_video_frame_preview_service().get_existing(video_id, frame_idx)
+    except FramePreviewError:
+        path = None
+    if path is None:
+        return Response(status_code=status.HTTP_404_NOT_FOUND)
+    return FileResponse(
+        str(path),
+        media_type="image/webp",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+def _build_frame_preview(video_id: str, frame_idx: int) -> tuple[Optional[str], Optional[str]]:
+    """Best-effort exact still for ``frame_idx``; ``(preview_url, preview_error)``.
+
+    Never raises: a preview must not break the capture response.
+    """
+    from src.services.video_frame_preview_service import (
+        FramePreviewError,
+        get_video_frame_preview_service,
+    )
+    from src.services.video_playback_service import get_video_playback_service
+
+    try:
+        playback = get_video_playback_service()
+        meta = playback.get_metadata(video_id)
+        # Extract at the canonical playback timestamp for this exact frame,
+        # not wherever the user happened to pause between frames.
+        target_seconds = playback.playback_start_seconds(video_id, frame_idx)
+        key = get_video_frame_preview_service().get_or_create(
+            video_id=meta.video_id,
+            frame_idx=frame_idx,
+            watch_url=meta.watch_url,
+            target_seconds=target_seconds,
+        )
+        return f"videos/captures/{key}", None
+    except FramePreviewError as exc:
+        logger.info("frame preview unavailable for %s#%s: %s", video_id, frame_idx, exc)
+        return None, str(exc)
+    except Exception as exc:  # noqa: BLE001 - a preview must never break capture
+        logger.warning("frame preview crashed for %s#%s: %s", video_id, frame_idx, exc, exc_info=True)
+        return None, "Preview extraction failed unexpectedly."
+
+
 @router.post("/videos/{video_id}/capture", response_model=CaptureResponse)
 def capture_video_frame(
     video_id: str,
     request: CaptureRequest,
     response: Response,
 ) -> CaptureResponse:
-    """Convert the current player time into a 0-based dataset frame index."""
+    """Convert the current player time into a 0-based dataset frame index.
+
+    On success this also tries to attach an exact server-extracted still
+    (``preview_url``); if extraction is unavailable the frame index is still
+    returned with ``preview_url: null`` and a ``preview_error`` reason.
+    """
     from src.services.video_playback_service import (
         VideoPlaybackError,
         get_video_playback_service,
@@ -117,6 +176,8 @@ def capture_video_frame(
             ),
         )
 
+    preview_url, preview_error = _build_frame_preview(result.video_id, result.frame_idx)
+
     return CaptureResponse(
         success=True,
         data=CaptureResultModel(
@@ -125,5 +186,7 @@ def capture_video_frame(
             source_time_seconds=result.source_time_seconds,
             fps=result.fps,
             frame_idx=result.frame_idx,
+            preview_url=preview_url,
+            preview_error=preview_error,
         ),
     )

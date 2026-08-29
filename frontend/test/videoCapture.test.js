@@ -7,6 +7,7 @@ import {
   captureFrame,
   fetchPlayback,
   normalizePlaybackItem,
+  normalizePreviewUrl,
   VideoCaptureError,
   videoApiUrl,
 } from "../src/services/videoCapture.js";
@@ -111,6 +112,70 @@ test("captureFrame POSTs the timestamp and parses the frame index", async () => 
   assert.deepEqual(JSON.parse(call.init.body), { playback_time_seconds: 11.7333 });
   assert.equal(result.frameIdx, 351);
   assert.equal(result.fps, 30);
+  // No preview fields in the response -> empty preview, no error.
+  assert.equal(result.previewUrl, "");
+  assert.equal(result.previewError, null);
+});
+
+test("normalizePreviewUrl resolves relative captured-frame paths and passes URLs through", () => {
+  assert.equal(normalizePreviewUrl("", "http://localhost:3000"), "");
+  assert.equal(
+    normalizePreviewUrl("videos/captures/L21_V001/351.webp", "http://localhost:3000"),
+    "http://localhost:3000/users/videos/captures/L21_V001/351.webp",
+  );
+  assert.equal(
+    normalizePreviewUrl("https://cdn.example/x.webp", "http://localhost:3000"),
+    "https://cdn.example/x.webp",
+  );
+});
+
+test("captureFrame normalizes preview_url and surfaces preview_error", async () => {
+  const withPreview = await captureFrame("L21_V001", 11.7333, {
+    config: { baseUrl: "http://localhost:3000", mode: "live" },
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: {
+          video_id: "L21_V001",
+          playback_time_seconds: 11.7333,
+          source_time_seconds: 11.7333,
+          fps: 30,
+          frame_idx: 351,
+          preview_url: "videos/captures/L21_V001/351.webp",
+          preview_error: null,
+        },
+      }),
+    }),
+  });
+  assert.equal(
+    withPreview.previewUrl,
+    "http://localhost:3000/users/videos/captures/L21_V001/351.webp",
+  );
+  assert.equal(withPreview.previewError, null);
+
+  const noPreview = await captureFrame("L21_V001", 11.7333, {
+    config: { baseUrl: "http://localhost:3000", mode: "live" },
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: {
+          video_id: "L21_V001",
+          playback_time_seconds: 11.7333,
+          source_time_seconds: 11.7333,
+          fps: 30,
+          frame_idx: 351,
+          preview_url: null,
+          preview_error: "FFmpeg binary is not available on this server.",
+        },
+      }),
+    }),
+  });
+  assert.equal(noPreview.previewUrl, "");
+  assert.equal(noPreview.previewError, "FFmpeg binary is not available on this server.");
 });
 
 test("captureFrame surfaces backend 400s as VideoCaptureError", async () => {
@@ -131,7 +196,7 @@ test("buildCaptureCandidate produces a tray candidate with the canonical id", ()
   const reviewItem = {
     videoKey: "L21_V001",
     folderKey: "L21",
-    image: "data:image/webp;base64,AAAA",
+    image: "data:image/webp;base64,REVIEWTHUMB",
     link: "https://youtube.com/watch?v=abc123",
   };
   const candidate = buildCaptureCandidate(reviewItem, {
@@ -140,6 +205,7 @@ test("buildCaptureCandidate produces a tray candidate with the canonical id", ()
     sourceTimeSeconds: 11.7333,
     fps: 30,
     frameIdx: 351,
+    previewUrl: "http://localhost:3000/users/videos/captures/L21_V001/351.webp",
   });
 
   assert.equal(candidate.id, "capture:L21_V001:351");
@@ -148,7 +214,44 @@ test("buildCaptureCandidate produces a tray candidate with the canonical id", ()
   assert.equal(candidate.frameName, "L21_V001_351");
   assert.equal(candidate.submissionFrameId, 351);
   assert.equal(candidate.backend.frame_idx, 351);
-  assert.equal(candidate.image, "data:image/webp;base64,AAAA");
+  assert.equal(candidate.captured, true);
+});
+
+test("buildCaptureCandidate uses preview_url and never the reviewed frame image", () => {
+  const reviewItem = { videoKey: "L21_V001", image: "data:image/webp;base64,REVIEWTHUMB" };
+  const previewUrl = "http://localhost:3000/users/videos/captures/L21_V001/351.webp";
+  const candidate = buildCaptureCandidate(reviewItem, {
+    videoId: "L21_V001",
+    sourceTimeSeconds: 11.7333,
+    fps: 30,
+    frameIdx: 351,
+    previewUrl,
+  });
+
+  assert.equal(candidate.image, previewUrl);
+  assert.equal(candidate.previewUrl, previewUrl);
+  assert.equal(candidate.hasPreview, true);
+  assert.notEqual(candidate.image, reviewItem.image);
+  assert.equal(candidate.backend.preview_url, previewUrl);
+});
+
+test("buildCaptureCandidate keeps an empty image when extraction is unavailable", () => {
+  const reviewItem = { videoKey: "L21_V001", image: "data:image/webp;base64,REVIEWTHUMB" };
+  const candidate = buildCaptureCandidate(reviewItem, {
+    videoId: "L21_V001",
+    sourceTimeSeconds: 11.7333,
+    fps: 30,
+    frameIdx: 351,
+    previewUrl: "",
+    previewError: "yt-dlp is not installed on this server.",
+  });
+
+  assert.equal(candidate.image, "");
+  assert.equal(candidate.hasPreview, false);
+  assert.equal(candidate.previewError, "yt-dlp is not installed on this server.");
+  assert.equal(candidate.backend.preview_url, null);
+  // Still a valid, exportable candidate.
+  assert.equal(candidate.submissionFrameId, 351);
   assert.equal(candidate.captured, true);
 });
 

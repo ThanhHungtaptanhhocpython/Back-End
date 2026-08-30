@@ -103,9 +103,38 @@ function requestFor(tab, pivot) {
     throw new BackendSearchError("Search query is empty.", { kind: "request" });
   }
   if (type === "IMAGE") {
+    const effectivePivot = pivot || tab?.pivotItem;
+
+    // A captured frame has no global FAISS vector id: its frame_idx is a
+    // per-video index. Re-encode its exact extracted still with BEiT3 through
+    // the capture-specific endpoint instead of mis-sending frame_idx as
+    // faiss_index (which would search from an unrelated corpus vector).
+    if (effectivePivot?.captured) {
+      const videoId = firstDefined(
+        effectivePivot.videoKey,
+        effectivePivot.video_id,
+        effectivePivot.backend?.video_id
+      );
+      const frameIdx = Number(
+        firstDefined(
+          effectivePivot.submissionFrameId,
+          effectivePivot.backend?.frame_idx,
+          effectivePivot.globalFrameId,
+          effectivePivot.frameKey
+        )
+      );
+      if (videoId === undefined || !Number.isFinite(frameIdx)) {
+        throw new BackendSearchError("This captured frame has no video id / frame index to search from.", { kind: "request" });
+      }
+      return {
+        endpoint: `videos/captures/${encodeURIComponent(videoId)}/${encodeURIComponent(frameIdx)}/similar`,
+        body: { topk },
+        headers: { "Content-Type": "application/json" },
+      };
+    }
+
     const body = new FormData();
     const image = params.imageFile;
-    const effectivePivot = pivot || tab?.pivotItem;
     const faissIndex = firstDefined(
       effectivePivot?.faissIndex,
       effectivePivot?.vector_id,

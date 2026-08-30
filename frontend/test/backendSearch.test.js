@@ -91,6 +91,70 @@ test("routes an image pivot as multipart data", async () => {
   assert.equal(body.get("topk"), "2");
 });
 
+test("routes a captured-frame pivot to the capture-similar endpoint without faiss_index", async () => {
+  let call;
+  await runBackendSearch(
+    { searchType: "IMAGE", params: { topk: 30 } },
+    {
+      captured: true,
+      videoKey: "L21_V001",
+      submissionFrameId: 351,
+      frameKey: "351",
+      backend: { video_id: "L21_V001", frame_idx: 351 },
+    },
+    {
+      config: { baseUrl: "http://localhost:3000/users", mode: "live" },
+      fetchImpl: async (url, init) => {
+        call = { url, init };
+        return { ok: true, json: async () => successPayload };
+      },
+    }
+  );
+
+  assert.equal(call.url, "http://localhost:3000/users/videos/captures/L21_V001/351/similar");
+  assert.equal(call.init.headers["Content-Type"], "application/json");
+  assert.deepEqual(JSON.parse(call.init.body), { topk: 30 });
+  // A captured frame_idx is per-video; it must never be sent as faiss_index.
+  assert.ok(!/faiss_index/.test(String(call.init.body)));
+});
+
+test("captured pivot with frame_idx 0 still targets the capture-similar endpoint", async () => {
+  let call;
+  await runBackendSearch(
+    { searchType: "IMAGE", params: { topk: 10 } },
+    { captured: true, videoKey: "L21_V001", submissionFrameId: 0 },
+    {
+      config: { baseUrl: "http://localhost:3000", mode: "live" },
+      fetchImpl: async (url, init) => {
+        call = { url, init };
+        return { ok: true, json: async () => successPayload };
+      },
+    }
+  );
+  assert.equal(call.url, "http://localhost:3000/users/videos/captures/L21_V001/0/similar");
+});
+
+test("a non-captured keyframe pivot still sends faiss_index to imagesearch", async () => {
+  let url;
+  let body;
+  await runBackendSearch(
+    { searchType: "IMAGE", params: { topk: 5 } },
+    { faissIndex: 277466, submissionFrameId: 3048, globalFrameId: 3048 },
+    {
+      config: { baseUrl: "http://localhost:3000/users", mode: "live" },
+      fetchImpl: async (u, init) => {
+        url = u;
+        body = init.body;
+        return { ok: true, json: async () => successPayload };
+      },
+    }
+  );
+
+  assert.equal(url, "http://localhost:3000/users/imagesearch");
+  assert.equal(body.get("faiss_index"), "277466");
+  assert.equal(body.get("topk"), "5");
+});
+
 test("does not classify valid HTTP failures as transport failures", async () => {
   await assert.rejects(
     runBackendSearch(

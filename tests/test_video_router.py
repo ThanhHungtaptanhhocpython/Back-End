@@ -163,8 +163,14 @@ def test_capture_missing_body_is_422():
 
 
 def test_endpoints_do_not_load_beit3():
-    for module_name in ("src.services.beit3_retriever", "torch"):
-        sys.modules.pop(module_name, None)
-    client.get("/users/videos/L21_V001/playback", params={"frame_idx": 10})
-    client.post("/users/videos/L21_V001/capture", json={"playback_time_seconds": 5})
-    assert "src.services.beit3_retriever" not in sys.modules
+    saved = {name: sys.modules.pop(name, None) for name in ("src.services.beit3_retriever", "torch")}
+    try:
+        client.get("/users/videos/L21_V001/playback", params={"frame_idx": 10})
+        client.post("/users/videos/L21_V001/capture", json={"playback_time_seconds": 5})
+        assert "src.services.beit3_retriever" not in sys.modules
+    finally:
+        # Restore anything that was already imported. Leaving ``torch`` popped
+        # corrupts its C-extension module lookup for every later test in the run.
+        for name, module in saved.items():
+            if module is not None and name not in sys.modules:
+                sys.modules[name] = module

@@ -167,6 +167,20 @@ def getImageSearchById(image_id, k):
 # res2 = getImageSearchById(36244, 5)
 # for item in res2:
 #     print(item['frame_key'])
+def getCaptureSimilarSearch(image_path, k):
+    """Similar-frame search seeded by a captured frame's exact preview still.
+
+    Encodes the server-extracted WebP with BEiT-3's vision tower and searches
+    the same 1024-d FAISS index as visual text search. The captured frame's
+    per-video ``frame_idx`` is never passed as a global FAISS vector id, so this
+    cannot silently return matches for an unrelated corpus frame. Errors
+    propagate so the caller can report them instead of inventing results.
+    """
+    from src.services.beit3_retriever import get_beit3_retriever
+
+    return get_beit3_retriever().search_by_image(image_path, top_k=k)
+
+
 def getImageSearchByFile(image_file, k):
     result = []
     try:

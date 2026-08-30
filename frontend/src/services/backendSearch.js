@@ -9,6 +9,8 @@ const SEARCH_ENDPOINTS = Object.freeze({
   TEMPORAL: "temporalsearch",
   OCR: "ocrsearch",
   ASR: "asrsearch",
+  // Compatibility alias: the "OCR Text" type is "OCR" and hits /ocrsearch. The
+  // backend still exposes /ocrandodsearch (same OCR service) for old callers.
   "OCR+OD": "ocrandodsearch",
   MULTIMODAL: "multimodalsearch",
   AGENT: "agentsearch",

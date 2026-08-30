@@ -170,13 +170,14 @@ export function mockSearch(tab, pivot = null) {
         const d = Math.abs(s.f.seed - base) + Math.abs(s.f.faissIndex - base) * 0.02;
         s.raw = Math.max(0, 1 - d / 900);
       });
-    } else if (type === "OCR+OD") {
+    } else if (type === "OCR") {
+      // OCR Text only: rank on burned-in text (and the folder / video labels),
+      // never on detected-object classes.
       const tokens = q.split(/\s+/).filter(Boolean);
       scored.forEach((s) => {
         let hit = 0;
         tokens.forEach((t) => {
           if (s.f.ocrText.toLowerCase().includes(t)) hit += 2;
-          if (s.f.odClasses.some((c) => c.toLowerCase().includes(t))) hit += 1.5;
           if (s.f.folderKey.toLowerCase().includes(t) || s.f.videoKey.toLowerCase().includes(t)) hit += 1;
         });
         s.raw = hit > 0 ? 0.5 + Math.min(hit, 4) * 0.12 : (hashString(q + s.f.id) / 4294967296) * 0.12;

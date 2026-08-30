@@ -73,6 +73,24 @@ test("routes a text query to FastAPI's users endpoint", async () => {
   assert.deepEqual(JSON.parse(call.init.body), { query: "forklift", topk: 3 });
 });
 
+test("routes an OCR Text query to the /ocrsearch endpoint", async () => {
+  let call;
+  await runBackendSearch(
+    { searchType: "OCR", query: "north gate", params: { topk: 5 } },
+    null,
+    {
+      config: { baseUrl: "http://localhost:3000", mode: "live" },
+      fetchImpl: async (url, init) => {
+        call = { url, init };
+        return { ok: true, json: async () => successPayload };
+      },
+    },
+  );
+
+  assert.equal(call.url, "http://localhost:3000/users/ocrsearch");
+  assert.deepEqual(JSON.parse(call.init.body), { query: "north gate", topk: 5 });
+});
+
 test("temporalRequestBody folds context into every event and caps topk at 100", () => {
   const body = temporalRequestBody(
     ["Bối cảnh: video nấu ăn về nấm", "E1: cắt nấm", "E2: bắc chảo lên bếp"].join("\n"),
@@ -262,7 +280,7 @@ test("normalizes OCR results into keyframe image URLs", () => {
     },
   };
 
-  const result = normalizeBackendResponse(payload, { type: "OCR+OD", latency: 66 }, "http://localhost:3000/users");
+  const result = normalizeBackendResponse(payload, { type: "OCR", latency: 66 }, "http://localhost:3000/users");
   assert.equal(result.items[0].image, "http://localhost:3000/keyframes/L25/L25_V041/181.jpg");
   assert.equal(result.items[0].ocrText, "remember");
 });

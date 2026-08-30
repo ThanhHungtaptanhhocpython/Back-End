@@ -134,7 +134,7 @@ export default function BatchQueryModal({ open, onClose, toast }) {
           key: `batch_${i}`,
           searchType: q.type.toUpperCase() === "QA" ? "QA" : "TEXT",
           query: q.text,
-          params: { topk, clip: true },
+          params: { topk },
         };
 
         const res = await runSearch(searchTab);

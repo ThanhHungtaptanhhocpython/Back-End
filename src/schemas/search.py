@@ -4,8 +4,15 @@ from pydantic import BaseModel, Field
 class TextSearchRequest(BaseModel):
     query: str = Field(default="")
     topk: int = Field(..., gt=0)
-    clip: Optional[bool] = None
-    clipv2: Optional[bool] = None
+
+class CaptureSimilarRequest(BaseModel):
+    """Body for the captured-frame "Similar" search.
+
+    Carries no image bytes and no ``faiss_index``: the server re-encodes the
+    exact cached preview still for ``(video_id, frame_idx)`` with BEiT3.
+    """
+    topk: int = Field(default=100, gt=0)
+
 
 class TranslateRequest(BaseModel):
     text: str = Field(..., min_length=1)

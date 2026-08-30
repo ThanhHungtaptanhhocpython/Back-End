@@ -1,6 +1,4 @@
-import { useState } from "react";
 import { App as AntApp, ConfigProvider, theme } from "antd";
-import BodyContent from "./components/BodyContent/BodyContent";
 import Workstation from "./features/workspace/Workstation";
 import "./styles/tokens.css";
 import "./features/workspace/workspace.css";
@@ -22,18 +20,10 @@ const lightTheme = {
 };
 
 export default function App() {
-  const [view, setView] = useState("preview");
-  if (view === "legacy") {
-    return (
-      <div className="legacy-root">
-        <BodyContent />
-      </div>
-    );
-  }
   return (
     <ConfigProvider theme={lightTheme}>
       <AntApp>
-        <Workstation view={view} onSwitchView={setView} />
+        <Workstation />
       </AntApp>
     </ConfigProvider>
   );

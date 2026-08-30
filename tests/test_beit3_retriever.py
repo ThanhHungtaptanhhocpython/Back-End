@@ -227,6 +227,89 @@ class SearchVisualIntegrationTests(unittest.TestCase):
             self.retriever.search_visual("x", top_k=-5)
 
 
+class SearchByImageTests(unittest.TestCase):
+    """Image-query encoding + FAISS search with a synthetic index and model.
+
+    The BEiT3 vision forward pass is stubbed (it needs the real multi-GB
+    checkpoint); the preprocessing, L2 normalization, and FAISS search that a
+    captured-frame "Similar" pivot relies on are all real.
+    """
+
+    def setUp(self):
+        dim = 1024
+        rng = np.random.default_rng(1)
+        vectors = rng.normal(size=(4, dim)).astype(np.float32)
+        vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)
+        ids = np.array([11, 22, 33, 44], dtype=np.int64)
+
+        index = faiss.IndexIDMap2(faiss.IndexFlatIP(dim))
+        index.add_with_ids(vectors, ids)
+        self._match_vec = vectors[1:2].copy()  # exact match for id=22
+
+        self.df = pd.DataFrame(
+            {
+                "global_id": ids,
+                "video_id": ["L21_V001"] * 4,
+                "frame_id": ["000011", "000022", "000033", "000044"],
+                "frame_path": [f"frame_{i}.webp" for i in ids],
+                "timestamp": [float(i) for i in ids],
+            }
+        )
+
+        r = _bare_retriever()
+        r._index = index
+        r._global_ids = self.df
+        r._video_metadata = None
+        r._video_meta_by_id = None
+        r._keyframe_time_by_video = {}
+        r._media_info_by_id = {}
+        r._columns = r._detect_columns(self.df)
+        r._id_to_row = r._build_id_lookup(self.df, r._columns["vector_id"])
+
+        self.captured_input = {}
+
+        def fake_model(image=None, text_description=None, padding_mask=None, only_infer=True):
+            self.captured_input["image"] = image
+            return torch.from_numpy(self._match_vec), None
+
+        r._model = fake_model
+        self.retriever = r
+
+    @staticmethod
+    def _sample_image():
+        from PIL import Image
+
+        return Image.new("RGB", (11, 7), (128, 64, 200))
+
+    def test_encode_image_returns_normalized_1024_vector(self):
+        vec = self.retriever.encode_image(self._sample_image())
+        self.assertEqual(vec.shape, (1, 1024))
+        self.assertAlmostEqual(float(np.linalg.norm(vec)), 1.0, places=4)
+
+        tensor = self.captured_input["image"]
+        self.assertEqual(tuple(tensor.shape), (1, 3, 384, 384))
+        self.assertEqual(tensor.dtype, torch.float32)
+
+    def test_search_by_image_queries_faiss_with_that_vector(self):
+        results = self.retriever.search_by_image(self._sample_image(), top_k=3)
+        self.assertEqual(len(results), 3)
+
+        top = results[0]
+        self.assertEqual(top["vector_id"], 22)
+        self.assertEqual(top["faiss_id"], 22)
+        self.assertAlmostEqual(top["score"], 1.0, places=4)  # exact match -> IP == 1.0
+        self.assertEqual(top["video_id"], "L21_V001")
+
+        scores = [row["score"] for row in results]
+        self.assertEqual(scores, sorted(scores, reverse=True))
+
+    def test_search_by_image_rejects_invalid_top_k(self):
+        with self.assertRaises(BEiT3RetrieverError):
+            self.retriever.search_by_image(self._sample_image(), top_k=0)
+        with self.assertRaises(BEiT3RetrieverError):
+            self.retriever.search_by_image(self._sample_image(), top_k=-3)
+
+
 class QueryVectorValidationTests(unittest.TestCase):
     def test_rejects_wrong_shape(self):
         r = _bare_retriever()

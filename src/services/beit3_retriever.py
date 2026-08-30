@@ -45,6 +45,15 @@ UNK_ID = 3
 
 EXPECTED_DIM = 1024
 
+# Image-query preprocessing must match exactly how the BEiT3 keyframe index was
+# built (see scripts/model_encoding/run_beit3_encoder.py): bicubic resize to
+# 384x384, scale to [0, 1], then normalize with timm's IMAGENET_INCEPTION_MEAN /
+# IMAGENET_INCEPTION_STD (both 0.5 per channel). Anything else lands the query
+# in a slightly different point of the shared space than the indexed frames.
+IMAGE_INPUT_SIZE = 384
+IMAGE_NORM_MEAN = (0.5, 0.5, 0.5)
+IMAGE_NORM_STD = (0.5, 0.5, 0.5)
+
 _VECTOR_ID_CANDIDATES = ["global_id", "global_frame_id", "vector_id", "faiss_id", "id"]
 _VIDEO_ID_CANDIDATES = ["video_id", "video"]
 _FRAME_ID_CANDIDATES = ["frame_id", "frame_index", "keyframe_id", "frame_name"]
@@ -428,6 +437,48 @@ class BEiT3Retriever:
         self._validate_query_vector(vec)
         return vec
 
+    def _preprocess_image(self, image: Any) -> torch.Tensor:
+        """Apply the exact index-time preprocessing to an image query.
+
+        ``image`` may be a filesystem path, a file-like object, or a PIL
+        ``Image``. Returns a ``(1, 3, 384, 384)`` float32 tensor on the model
+        device.
+        """
+        from PIL import Image
+
+        if isinstance(image, Image.Image):
+            pil = image.convert("RGB")
+        else:
+            try:
+                pil = Image.open(image).convert("RGB")
+            except (OSError, ValueError) as exc:
+                raise BEiT3RetrieverError(f"Could not read the query image: {exc}") from exc
+
+        resample = getattr(Image, "Resampling", Image).BICUBIC
+        pil = pil.resize((IMAGE_INPUT_SIZE, IMAGE_INPUT_SIZE), resample)
+
+        arr = np.asarray(pil, dtype=np.float32) / 255.0
+        if arr.ndim != 3 or arr.shape[2] != 3:
+            raise BEiT3RetrieverError("Query image did not decode to 3-channel RGB.")
+        arr = (arr - np.asarray(IMAGE_NORM_MEAN, dtype=np.float32)) / np.asarray(
+            IMAGE_NORM_STD, dtype=np.float32
+        )
+        chw = np.ascontiguousarray(arr.transpose(2, 0, 1))
+        return torch.from_numpy(chw).unsqueeze(0).to(self._device)
+
+    def encode_image(self, image: Any) -> np.ndarray:
+        """Encode an image query into a normalized (1, 1024) float32 vector."""
+        tensor = self._preprocess_image(image)
+        with torch.no_grad():
+            vision_cls, _ = self._model(image=tensor, only_infer=True)
+        if vision_cls is None:
+            raise BEiT3RetrieverError("BEiT3 returned no vision embedding for the query image.")
+        vec = vision_cls.detach().cpu().numpy().astype(np.float32)
+        norms = np.linalg.norm(vec, axis=1, keepdims=True)
+        vec = (vec / np.where(norms > 0.0, norms, 1.0)).astype(np.float32)
+        self._validate_query_vector(vec)
+        return vec
+
     # ------------------------------------------------------------------
     # Search
     # ------------------------------------------------------------------
@@ -588,6 +639,40 @@ class BEiT3Retriever:
                 continue
             rank += 1
             results.append(self._build_result(rank, float(score), int(vid), row))
+
+        return results
+
+    def search_by_image(self, image: Any, top_k: int = 20) -> list[dict]:
+        """Encode an image with the BEiT3 vision tower and search the FAISS index.
+
+        This is the "find similar" path for a captured frame: the query is the
+        exact server-extracted still, and every hit carries a real FAISS vector
+        id. The captured frame's own per-video ``frame_idx`` is never treated as
+        a global vector id -- that is what ``search_by_vector_id`` would require,
+        and doing so returns matches for an unrelated corpus frame.
+        """
+        if not isinstance(top_k, int) or isinstance(top_k, bool) or top_k <= 0:
+            raise BEiT3RetrieverError(f"top_k must be a positive integer, got {top_k!r}.")
+
+        query_vec = self.encode_image(image)
+        scores, ids = self._index.search(query_vec, top_k)
+        scores = scores[0]
+        ids = ids[0]
+
+        results: list[dict] = []
+        rank = 0
+        for score, vector_id in zip(scores, ids):
+            if vector_id == -1:
+                continue
+            row = self._id_to_row.get(int(vector_id))
+            if row is None:
+                logger.error(
+                    "FAISS returned vector_id=%s with no matching row in global_ids.parquet.",
+                    vector_id,
+                )
+                continue
+            rank += 1
+            results.append(self._build_result(rank, float(score), int(vector_id), row))
 
         return results
 

@@ -103,23 +103,49 @@ function requestFor(tab, pivot) {
     throw new BackendSearchError("Search query is empty.", { kind: "request" });
   }
   if (type === "IMAGE") {
+    const effectivePivot = pivot || tab?.pivotItem;
+
+    // A captured frame has no global FAISS vector id: its frame_idx is a
+    // per-video index. Re-encode its exact extracted still with BEiT3 through
+    // the capture-specific endpoint instead of mis-sending frame_idx as
+    // faiss_index (which would search from an unrelated corpus vector).
+    if (effectivePivot?.captured) {
+      const videoId = firstDefined(
+        effectivePivot.videoKey,
+        effectivePivot.video_id,
+        effectivePivot.backend?.video_id
+      );
+      const frameIdx = Number(
+        firstDefined(
+          effectivePivot.submissionFrameId,
+          effectivePivot.backend?.frame_idx,
+          effectivePivot.globalFrameId,
+          effectivePivot.frameKey
+        )
+      );
+      if (videoId === undefined || !Number.isFinite(frameIdx)) {
+        throw new BackendSearchError("This captured frame has no video id / frame index to search from.", { kind: "request" });
+      }
+      return {
+        endpoint: `videos/captures/${encodeURIComponent(videoId)}/${encodeURIComponent(frameIdx)}/similar`,
+        body: { topk },
+        headers: { "Content-Type": "application/json" },
+      };
+    }
+
     const body = new FormData();
     const image = params.imageFile;
-    const effectivePivot = pivot || tab?.pivotItem;
     const faissIndex = firstDefined(
       effectivePivot?.faissIndex,
       effectivePivot?.vector_id,
       effectivePivot?.globalFrameId,
       effectivePivot?.gid,
-      effectivePivot?.faiss_id_clip,
       effectivePivot?.faiss_id,
       effectivePivot?.faiss_idx
     );
     if (image instanceof Blob) body.append("image", image, image.name || "reference-image");
     if (faissIndex !== undefined && faissIndex !== null) body.append("faiss_index", String(faissIndex));
     body.append("topk", String(topk));
-    body.append("clip", String(Boolean(params.clip)));
-    body.append("clipv2", String(Boolean(params.clipv2)));
     return { endpoint, body };
   }
 
@@ -133,7 +159,7 @@ function requestFor(tab, pivot) {
 
   return {
     endpoint,
-    body: { query, topk, clip: Boolean(params.clip), clipv2: Boolean(params.clipv2) },
+    body: { query, topk },
     headers: { "Content-Type": "application/json" },
   };
 }
@@ -149,7 +175,7 @@ export function getSearchConfig(env = viteEnv()) {
 /** Convert a FastAPI result record into the card shape consumed by ResultCard. */
 export function normalizeBackendItem(item, rank, total, baseUrl = "") {
   const raw = item && typeof item === "object" ? item : {};
-  const faissIndex = firstDefined(raw.faiss_index, raw.faiss_id_clip, raw.faiss_id, raw.faiss_idx, raw.nearest_faiss_id, raw.vector_id);
+  const faissIndex = firstDefined(raw.faiss_index, raw.faiss_id, raw.faiss_idx, raw.nearest_faiss_id, raw.vector_id);
   const frameKey = firstDefined(raw.frame_key, raw.frame_id, raw.n, raw.global_frame_id, raw.id, faissIndex, rank);
   const videoKey = String(firstDefined(raw.video_key, raw.video_id, raw.videoKey, "unknown-video"));
   const folderKey = String(firstDefined(raw.folder_key, raw.folderKey, raw.namespace, raw.split, "UNKNOWN"));
@@ -312,7 +338,7 @@ export async function runBackendAgentSearch(tab, { config = getSearchConfig(), f
     response = await fetchImpl(apiUrl(config.baseUrl, "agentsearch"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, topk: positiveInteger(params.topk, 100), clip: Boolean(params.clip), clipv2: Boolean(params.clipv2) }),
+      body: JSON.stringify({ query, topk: positiveInteger(params.topk, 100) }),
     });
   } catch (cause) {
     throw new BackendSearchError("FastAPI Agent Search service is unavailable.", { kind: "transport", cause });

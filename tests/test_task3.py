@@ -15,7 +15,6 @@ sys.path.insert(0, src_dir)
 sys.modules.setdefault('faiss', MagicMock())
 sys.modules.setdefault('torch', MagicMock())
 sys.modules.setdefault('transformers', MagicMock())
-sys.modules.setdefault('open_clip', MagicMock())
 sys.modules.setdefault('PIL', MagicMock())
 
 # test_task2.py stubs sys.modules['src.services.user_service'] with a MagicMock;
@@ -42,24 +41,17 @@ class Task3SingletonTests(unittest.TestCase):
         self._reset_singletons()
 
     def _reset_singletons(self):
-        user_service._cosine_faiss = None
         user_service._trake_search = None
         user_service._vlm_processor = None
         user_service._elastic_processor = None
 
     @patch('src.services.user_service.TRAKE')
     @patch('src.services.user_service.VLMProcessor')
-    @patch('src.services.user_service.MyFaiss')
-    def test_lazy_singletons_initialized_once(self, MockFaiss, MockVLM, MockTRAKE):
+    def test_lazy_singletons_initialized_once(self, MockVLM, MockTRAKE):
         """
-        Verify that the lazy service getters create each dependency exactly once,
-        cache it, and that TRAKE no longer initializes the legacy MyFaiss dependency.
+        Verify that the lazy service getters create each dependency exactly once
+        and cache it.
         """
-        faiss_first = user_service.get_cosine_faiss()
-        faiss_second = user_service.get_cosine_faiss()
-        self.assertIs(faiss_first, faiss_second)
-        MockFaiss.assert_called_once()
-
         trake = user_service.get_trake_search()
         MockTRAKE.assert_called_once_with()
 

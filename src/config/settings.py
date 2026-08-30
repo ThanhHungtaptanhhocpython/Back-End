@@ -35,12 +35,8 @@ class Settings(BaseSettings):
         port: The port number to bind the server to.
         src_dir: Absolute path to the `src/` directory. All data paths
             are resolved relative to this.
-        faiss_index_path: Path to the Faiss binary index file.
-        metadata_path: Path to the metadata JSON file.
         keyframes_root: Root directory for keyframe images.
         features_root: Root directory for per-video .npy feature files.
-        clip_model_name: OpenCLIP model architecture name.
-        clip_pretrained: OpenCLIP pretrained weights identifier.
         log_level: Python logging level string.
     """
 
@@ -52,8 +48,6 @@ class Settings(BaseSettings):
 
     # --- Data Paths (resolved relative to src_dir if not absolute) ---
     src_dir: Path = _default_src_dir()
-    faiss_index_path: Path | None = None
-    metadata_path: Path | None = None
     keyframes_root: Path | None = None
     features_root: Path | None = None
 
@@ -95,10 +89,6 @@ class Settings(BaseSettings):
     # Comma-separated list of allowed origins. Use "*" to allow any origin
     # (credentials will be disabled automatically in that case).
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000"
-
-    # --- Model Configuration ---
-    clip_model_name: str = "ViT-H-14-quickgelu"
-    clip_pretrained: str = "dfn5b"
 
     # --- BEiT3 Retrieval (real visual-search path) ---
     # All paths are machine-specific runtime artifacts and must be set via
@@ -203,8 +193,6 @@ class Settings(BaseSettings):
             return False
         return value
     @field_validator(
-        "faiss_index_path",
-        "metadata_path",
         "keyframes_root",
         "features_root",
         "media_info_path",
@@ -244,25 +232,6 @@ class Settings(BaseSettings):
     def get_cors_origins(self) -> list[str]:
         """Return the parsed list of allowed CORS origins."""
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
-
-    def get_faiss_index_path(self) -> Path:
-        """Return the resolved Faiss index path.
-
-        Falls back to ``src/dict/faiss_index.bin`` when no
-        explicit override is provided via the environment.
-        """
-        if self.faiss_index_path is not None:
-            return Path(self.faiss_index_path)
-        return self.src_dir / "dict" / "faiss_index.bin"
-
-    def get_metadata_path(self) -> Path:
-        """Return the resolved metadata JSON path.
-
-        Falls back to ``src/dict/metadata_clip.json``.
-        """
-        if self.metadata_path is not None:
-            return Path(self.metadata_path)
-        return self.src_dir / "dict" / "metadata_clip.json"
 
     def get_keyframes_root(self) -> Path:
         """Return the resolved keyframes root directory.

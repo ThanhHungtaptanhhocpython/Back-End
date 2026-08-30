@@ -1,7 +1,12 @@
 import logging
 from typing import Optional
 from fastapi import APIRouter, Form, UploadFile, File, Response, status
-from src.schemas.search import TextSearchRequest, TranslateRequest, TranslateResponse
+from src.schemas.search import (
+    CaptureSimilarRequest,
+    TextSearchRequest,
+    TranslateRequest,
+    TranslateResponse,
+)
 from src.schemas.temporal import TemporalSearchRequest
 from src.schemas.results import AgentSearchResponse, BaseResponse, DataResponse
 
@@ -55,11 +60,15 @@ def handle_qna_search(request: TextSearchRequest):
 def handle_image_search(
     response: Response,
     topk: Optional[str] = Form("100"),
-    clip: Optional[str] = Form(None),
-    clipv2: Optional[str] = Form(None),
     faiss_index: Optional[str] = Form("default"),
     image: Optional[UploadFile] = File(None)
 ):
+    """Image pivot search, entirely on the BEiT-3 1024-d index.
+
+    An uploaded ``image`` is encoded with BEiT-3's vision tower; a
+    ``faiss_index`` is an existing BEiT-3 vector id. Either way the results
+    carry real FAISS vector ids.
+    """
     try:
         topk_int = int(topk) if topk is not None else 100
         if topk_int <= 0:
@@ -86,6 +95,61 @@ def handle_image_search(
         return BaseResponse(success=False, message="Either an uploaded image file or a valid faiss_index must be provided.", data=DataResponse(items=[], total_items=0))
 
     return BaseResponse(success=True, data=DataResponse(items=res, total_items=len(res)))
+
+
+@router.post("/videos/captures/{video_id}/{frame_idx}/similar", response_model=BaseResponse)
+def handle_capture_similar_search(
+    video_id: str,
+    frame_idx: int,
+    request: CaptureSimilarRequest,
+    response: Response,
+):
+    """Find keyframes similar to a captured frame's exact extracted still.
+
+    A captured frame has no global FAISS vector id -- its ``frame_idx`` is a
+    per-video index -- so this re-encodes the cached WebP preview with BEiT3's
+    vision tower and searches the same 1024-d index used by visual text search.
+
+    The cached preview is the only image source. If it is missing (never
+    extracted, or LRU-evicted) this returns a clear "re-capture" error and does
+    NOT fall back to another keyframe or to ``search_by_vector_id``.
+    """
+    from src.services.video_frame_preview_service import (
+        FramePreviewError,
+        get_video_frame_preview_service,
+    )
+
+    try:
+        still_path = get_video_frame_preview_service().get_existing(video_id, frame_idx)
+    except FramePreviewError:
+        still_path = None
+
+    if still_path is None:
+        response.status_code = status.HTTP_404_NOT_FOUND
+        return BaseResponse(
+            success=False,
+            message=(
+                f"No captured preview image is cached for {video_id} frame {frame_idx}. "
+                "Re-capture the frame, then run Similar again."
+            ),
+            data=DataResponse(items=[], total_items=0),
+        )
+
+    from src.services.user_service import getCaptureSimilarSearch
+
+    try:
+        res = getCaptureSimilarSearch(str(still_path), request.topk)
+    except Exception as exc:  # noqa: BLE001 - surface a clear message, never a random result set
+        logging.error("Captured-frame Similar search failed for %s#%s: %s", video_id, frame_idx, exc)
+        response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+        return BaseResponse(
+            success=False,
+            message=f"Similar search failed: {exc}",
+            data=DataResponse(items=[], total_items=0),
+        )
+
+    return BaseResponse(success=True, data=DataResponse(items=res, total_items=len(res)))
+
 
 @router.post("/trakesearch", response_model=BaseResponse)
 @router.post("/temporalsearch", response_model=BaseResponse)

@@ -49,13 +49,42 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         return response
 
 
+def _cors_headers_for(request: Request) -> dict:
+    """Echo CORS headers on error responses.
+
+    ``CORSMiddleware`` only decorates responses that pass *through* it; a
+    response produced by this catch-all handler is created outside that
+    middleware, so without this a 500 reaches the browser with no
+    ``Access-Control-Allow-Origin`` and ``fetch`` rejects with an opaque
+    "Failed to fetch" instead of surfacing the real error.
+    """
+    origin = request.headers.get("origin")
+    if not origin:
+        return {}
+    try:
+        from src.config.settings import get_settings
+
+        allowed = get_settings().get_cors_origins()
+    except Exception:
+        allowed = []
+    if "*" in allowed:
+        return {"Access-Control-Allow-Origin": "*"}
+    if origin in allowed:
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Vary": "Origin",
+        }
+    return {}
+
+
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Catch-all exception handler to prevent leaking raw tracebacks to clients.
 
     Returns the standard BaseResponse schema with status 500.
     """
     request_id = getattr(request.state, "request_id", "unknown")
-    
+
     # Log the full traceback for the developer
     logger.exception(f"Unhandled Exception on {request.url.path} (request_id={request_id}): {exc}")
 
@@ -70,5 +99,5 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
                 "total_items": 0,
             },
         },
-        headers={"X-Request-ID": request_id}
+        headers={"X-Request-ID": request_id, **_cors_headers_for(request)},
     )

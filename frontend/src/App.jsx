@@ -4,6 +4,7 @@ import "./styles/tokens.css";
 import "./features/workspace/workspace.css";
 import "./features/search/search.css";
 import "./features/results/results.css";
+import "./features/results/temporal.css";
 import "./features/selection/selection.css";
 import "./features/review/review.css";
 import "./features/chat/chat.css";

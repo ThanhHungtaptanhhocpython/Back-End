@@ -1,4 +1,6 @@
 import { toTimecode } from "../shared/format.js";
+import { buildTemporalEventQueries, MAX_TEMPORAL_TOPK, parseTemporalQuery } from "../shared/temporalQuery.js";
+import { normalizeTemporalResponse } from "../shared/temporalNormalize.js";
 
 const SEARCH_ENDPOINTS = Object.freeze({
   TEXT: "singletextsearch",
@@ -65,13 +67,26 @@ function imageSource(value) {
   return `data:image/webp;base64,${value}`;
 }
 
-function temporalEvents(query) {
-  const events = String(query || "")
-    .split(/\n+|\s*->\s*|\s*(?:ti\u1ebfp theo|tiep theo)(?:\s+l\u00e0\s+c\u1ea3nh|\s+la\s+canh|\s+l\u00e0|\s+la)?\s*|\s*(?:sau \u0111\u00f3|sau do)(?:\s+\u0111\u01b0\u1ee3c|\s+duoc|\s+l\u00e0|\s+la)?\s*|\s*(?:r\u1ed3i|roi)\s*/i)
-    .map((event) => event.replace(/^\s*(c\u1ea3nh|canh|khung h\u00ecnh|khung hinh|frame|clip|video)\s*(n\u00e0y|nay)?\s*:?\s*/i, "").trim())
-    .filter(Boolean)
-    .map((event) => ({ query: event }));
-  return events.length ? events : [{ query: "" }];
+function temporalTopk(value) {
+  const parsed = Number.parseInt(value, 10);
+  const safe = Number.isFinite(parsed) && parsed > 0 ? parsed : 100;
+  return Math.min(safe, MAX_TEMPORAL_TOPK);
+}
+
+/**
+ * Build the temporal request body from raw query text via the shared parser.
+ * `context` is folded into every event query (it is not an event of its own),
+ * and also passed alongside for a context-aware backend.
+ */
+export function temporalRequestBody(query, topk) {
+  const parsed = parseTemporalQuery(query);
+  const folded = buildTemporalEventQueries(parsed);
+  const events = (folded.length ? folded : parsed.events).map((text) => ({ query: text }));
+  return {
+    query: events.length ? events : [{ query: String(query || "").trim() }],
+    topk: temporalTopk(topk),
+    context: parsed.context || "",
+  };
 }
 
 function endpointFor(searchType) {
@@ -152,7 +167,7 @@ function requestFor(tab, pivot) {
   if (type === "TEMPORAL") {
     return {
       endpoint,
-      body: { query: temporalEvents(query), topk, cascaded: Boolean(params.cascaded) },
+      body: { ...temporalRequestBody(query, params.topk), cascaded: Boolean(params.cascaded) },
       headers: { "Content-Type": "application/json" },
     };
   }
@@ -424,11 +439,18 @@ export async function runBackendSearch(tab, pivot, { config = getSearchConfig(),
     });
   }
 
+  const latency = Date.now() - startedAt;
+  if ((tab?.searchType || "TEXT") === "TEMPORAL") {
+    const normalized = normalizeTemporalResponse(payload, { latency });
+    // Keep the flat-result contract populated so generic callers stay safe.
+    return { ...normalized, items: [], mode: "FASTAPI LIVE", source: "live" };
+  }
+
   return normalizeBackendResponse(
     payload,
     {
       type: tab?.searchType || "TEXT",
-      latency: Date.now() - startedAt,
+      latency,
     },
     config.baseUrl
   );

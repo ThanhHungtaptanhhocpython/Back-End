@@ -14,6 +14,9 @@ import ShortcutOverlay from "./ShortcutOverlay";
 import QueryTabs from "../search/QueryTabs";
 import SearchBar from "../search/SearchBar";
 import ResultGrid from "../results/ResultGrid";
+import TemporalStoryboard from "../results/TemporalStoryboard";
+import { reindexTemporalSequences } from "../../shared/temporalNormalize";
+import { isRunnableTemporalQuery, parseTemporalQuery } from "../../shared/temporalQuery";
 import SelectionTray from "../selection/SelectionTray";
 import ReviewOverlay from "../review/ReviewOverlay";
 import ChatPanel, { ChatFocus } from "../chat/ChatPanel";
@@ -30,6 +33,7 @@ function makeTab() {
     status: "idle",
     latency: 0,
     results: [],
+    sequences: [],
     total: 0,
   };
 }
@@ -47,6 +51,7 @@ export default function Workstation() {
   const [kept, setKept] = useState(() => new Map());
   const [reviewItem, setReviewItem] = useState(null);
   const [reviewTabKey, setReviewTabKey] = useState(null);
+  const [reviewReplaceCtx, setReviewReplaceCtx] = useState(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportItems, setExportItems] = useState([]);
   const [exportDefaultSource, setExportDefaultSource] = useState("results");
@@ -105,7 +110,12 @@ export default function Workstation() {
     const query = String(tab?.query || "").trim();
     if (tab?.searchType !== "IMAGE" && !query) {
       searchSeqRef.current.set(tab.key, (searchSeqRef.current.get(tab.key) || 0) + 1);
-      setTabs((prev) => prev.map((t) => (t.key === tab.key ? { ...t, status: "idle", results: [], total: 0, latency: 0 } : t)));
+      setTabs((prev) => prev.map((t) => (t.key === tab.key ? { ...t, status: "idle", results: [], sequences: [], total: 0, latency: 0 } : t)));
+      return;
+    }
+    if (tab?.searchType === "TEMPORAL" && !isRunnableTemporalQuery(parseTemporalQuery(query))) {
+      searchSeqRef.current.set(tab.key, (searchSeqRef.current.get(tab.key) || 0) + 1);
+      setTabs((prev) => prev.map((t) => (t.key === tab.key ? { ...t, status: "idle", results: [], sequences: [], total: 0, latency: 0 } : t)));
       return;
     }
 
@@ -116,15 +126,27 @@ export default function Workstation() {
     const effectivePivot = pivotFrame || tab?.pivotItem;
 
     if (tabKey === activeKey) setFocusedId(null);
-    setTabs((prev) => prev.map((t) => (t.key === tabKey ? { ...t, status: "running", results: [], total: 0, latency: 0 } : t)));
+    setTabs((prev) => prev.map((t) => (t.key === tabKey ? { ...t, status: "running", results: [], sequences: [], total: 0, latency: 0 } : t)));
     try {
       const res = await runSearchQuery(tab, effectivePivot);
       if (!isLatestSearch()) return;
 
+      const isTemporal = res.type === "TEMPORAL" || Array.isArray(res.sequences);
       setTabs((prev) =>
-        prev.map((t) => (t.key === tabKey ? { ...t, status: "done", results: res.items, total: res.totalItems, latency: res.latency } : t))
+        prev.map((t) =>
+          t.key === tabKey
+            ? {
+                ...t,
+                status: "done",
+                results: isTemporal ? [] : res.items,
+                sequences: isTemporal ? res.sequences || [] : [],
+                total: isTemporal ? res.totalItems || (res.sequences || []).length : res.totalItems,
+                latency: res.latency,
+              }
+            : t,
+        ),
       );
-      if (tabKey === activeKey) setFocusedId(res.items?.[0]?.id || null);
+      if (tabKey === activeKey) setFocusedId(isTemporal ? null : res.items?.[0]?.id || null);
       setBackend({
         backend: res.source === "live" ? "online" : "offline",
         demo: res.source !== "live",
@@ -141,7 +163,7 @@ export default function Workstation() {
 
   /* debounced auto-run on query/type/param changes (IMAGE is explicit - requires a seed) */
   useEffect(() => {
-    if (!activeTab || editingKey || activeTab.searchType === "IMAGE" || activeTab.searchType === "AGENT") return;
+    if (!activeTab || editingKey || activeTab.searchType === "IMAGE" || activeTab.searchType === "AGENT" || activeTab.searchType === "TEMPORAL") return;
     if (!String(activeTab.query || "").trim()) return;
     const id = setTimeout(() => {
       runSearch(activeTab, null);
@@ -298,11 +320,89 @@ export default function Workstation() {
   const openReview = (item) => {
     rememberFocusTarget();
     setReviewTabKey(activeKey);
+    setReviewReplaceCtx(null);
     setReviewItem(item);
+  };
+
+  /* Open one storyboard event in the Review player/timeline, carrying the
+     bounds a replacement frame must stay inside (same video, between the
+     neighbouring events' timestamps). */
+  const openTemporalEvent = (sequence, frame) => {
+    rememberFocusTarget();
+    setReviewTabKey(activeKey);
+    const eventIndex = frame.eventIndex;
+    const prev = sequence.frames[eventIndex - 2];
+    const next = sequence.frames[eventIndex];
+    setReviewReplaceCtx({
+      tabKey: activeKey,
+      sequenceId: sequence.id,
+      eventIndex,
+      videoKey: sequence.videoKey,
+      minTs: prev ? prev.timestamp : Number.NEGATIVE_INFINITY,
+      maxTs: next ? next.timestamp : Number.POSITIVE_INFINITY,
+    });
+    setReviewItem({ ...frame, real: true });
+  };
+
+  const handleReplaceEventFrame = (newFrame) => {
+    const ctx = reviewReplaceCtx;
+    if (!ctx) return;
+    const nextId = Number(newFrame?.submissionFrameId ?? newFrame?.backend?.frame_idx);
+    if (!Number.isFinite(nextId)) {
+      toast.error("That frame has no resolvable frame index — pick another keyframe.");
+      return;
+    }
+    setTabs((prev) =>
+      prev.map((t) => {
+        if (t.key !== ctx.tabKey) return t;
+        const updated = (t.sequences || []).map((seq) => {
+          if (seq.id !== ctx.sequenceId) return { ...seq, chosen: false };
+          const frames = seq.frames.map((fr) =>
+            fr.eventIndex === ctx.eventIndex
+              ? {
+                  ...fr,
+                  submissionFrameId: nextId,
+                  globalFrameId: nextId,
+                  frameKey: String(newFrame.frameKey ?? nextId),
+                  frameName: newFrame.frameName || fr.frameName,
+                  timestamp: Number(newFrame.timestamp) || fr.timestamp,
+                  timecode: newFrame.timecode || fr.timecode,
+                  image: newFrame.image || fr.image,
+                  folderKey: newFrame.folderKey || fr.folderKey,
+                  unresolved: false,
+                }
+              : fr,
+          );
+          const timestamps = frames.map((f) => f.timestamp);
+          const orderOk = timestamps.every((v, i) => i === 0 || v >= timestamps[i - 1]);
+          const resolved = frames.every((f) => !f.unresolved);
+          return { ...seq, frames, timestamps, edited: true, chosen: true, orderOk, sameVideo: true, resolved, valid: orderOk && resolved };
+        });
+        return { ...t, sequences: reindexTemporalSequences(updated) };
+      }),
+    );
+    toast.success(`Event ${ctx.eventIndex} frame replaced - sequence moved to rank 1`);
+  };
+
+  /* "Use this" on a storyboard row: pin exactly one sequence to rank 1 so the
+     jittered export wiggles it across the 100-row budget. No frame edit needed. */
+  const chooseTemporalSequence = (sequence, chosen) => {
+    setTabs((prev) =>
+      prev.map((t) => {
+        if (t.key !== activeKey) return t;
+        const updated = (t.sequences || []).map((seq) => ({
+          ...seq,
+          chosen: seq.id === sequence.id ? chosen : false,
+        }));
+        return { ...t, sequences: reindexTemporalSequences(updated) };
+      }),
+    );
+    toast.info(chosen ? `Sequence pinned - Export will wiggle it` : "Sequence unpinned");
   };
 
   const closeReview = () => {
     setReviewItem(null);
+    setReviewReplaceCtx(null);
     restoreFocusTarget();
   };
 
@@ -745,17 +845,26 @@ export default function Workstation() {
                 </span>
               </div>
             </div>
-            <ResultGrid
-              tab={activeTab}
-              keptMap={kept}
-              focusedId={focusedId}
-              onFocusItem={setFocusedId}
-              onOpen={openReview}
-              onToggleKeep={toggleKeep}
-              onExclude={removeWithUndo}
-              onPivot={pivot}
-              registerRef={registerRef}
-            />
+            {activeTab?.searchType === "TEMPORAL" ? (
+              <TemporalStoryboard
+                sequences={activeTab?.sequences || []}
+                status={activeTab?.status}
+                onOpenEvent={openTemporalEvent}
+                onChooseSequence={chooseTemporalSequence}
+              />
+            ) : (
+              <ResultGrid
+                tab={activeTab}
+                keptMap={kept}
+                focusedId={focusedId}
+                onFocusItem={setFocusedId}
+                onOpen={openReview}
+                onToggleKeep={toggleKeep}
+                onExclude={removeWithUndo}
+                onPivot={pivot}
+                registerRef={registerRef}
+              />
+            )}
           </div>
 
           <ChatPanel
@@ -815,7 +924,11 @@ export default function Workstation() {
       {reviewItem ? (
         <ReviewOverlay
           item={reviewItem}
-          results={tabs.find((t) => t.key === reviewTabKey)?.results || []}
+          results={
+            reviewReplaceCtx
+              ? (tabs.find((t) => t.key === reviewTabKey)?.sequences || []).find((s) => s.id === reviewReplaceCtx.sequenceId)?.frames || []
+              : tabs.find((t) => t.key === reviewTabKey)?.results || []
+          }
           isKept={kept.has(reviewItem.id)}
           onClose={closeReview}
           onNavigate={reviewNav}
@@ -826,6 +939,8 @@ export default function Workstation() {
           onAsk={askAboutFrame}
           onExportThis={openExportFromReview}
           onCapture={captureToTray}
+          replaceCtx={reviewReplaceCtx}
+          onReplaceEventFrame={handleReplaceEventFrame}
         />
       ) : null}
 
@@ -833,6 +948,7 @@ export default function Workstation() {
         open={exportOpen}
         items={exportItems}
         searchItems={activeTab?.results || []}
+        sequences={activeTab?.sequences || []}
         keptItems={keptArray}
         tabs={tabs}
         searchType={activeTab?.searchType || "TEXT"}

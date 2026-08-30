@@ -18,7 +18,7 @@ import { buildCaptureCandidate, captureFrame, fetchPlayback } from "../../servic
 import useDialogFocus from "../../hooks/useDialogFocus";
 import useVideoPlayer from "../../hooks/useVideoPlayer";
 
-export default function ReviewOverlay({ item, results, isKept, onClose, onNavigate, onSelect, onToggleKeep, onRemove, onPivot, onAsk, onExportThis, onCapture }) {
+export default function ReviewOverlay({ item, results, isKept, onClose, onNavigate, onSelect, onToggleKeep, onRemove, onPivot, onAsk, onExportThis, onCapture, replaceCtx, onReplaceEventFrame }) {
   const [compareId, setCompareId] = useState(null);
   const [stripMode, setStripMode] = useState("timeline"); // "timeline" | "results"
   const [timeline, setTimeline] = useState([]);
@@ -125,7 +125,7 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
   }, [item?.videoKey, item?.submissionFrameId, item?.frameKey, item?.real]);
 
   const canCapture = Boolean(
-    onCapture && videoPlayback && showVideo && player.ready && playback && !playbackError && !capturing,
+    (onCapture || onReplaceEventFrame) && videoPlayback && showVideo && player.ready && playback && !playbackError && !capturing,
   );
 
   const handleCapture = async () => {
@@ -141,9 +141,31 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
     try {
       const result = await captureFrame(videoItem.videoKey, currentTime);
       const candidate = buildCaptureCandidate(videoItem, result);
+      const previewSuffix = candidate.hasPreview ? "" : " - preview unavailable";
+
+      // Storyboard "replace event" flow: the captured frame becomes event N,
+      // subject to the same window as a timeline pick (same video is implied,
+      // timestamp must sit between the neighbouring events).
+      if (replaceCtx) {
+        const ts = Number(result.sourceTimeSeconds);
+        if (!(ts > replaceCtx.minTs && ts < replaceCtx.maxTs) || !Number.isFinite(Number(result.frameIdx))) {
+          setCaptureNote({
+            type: "error",
+            text: `Captured ${toTimecode(ts, result.fps || captureFps)} is outside event ${replaceCtx.eventIndex}'s window - scrub between the neighbouring events, then capture.`,
+          });
+          return;
+        }
+        onReplaceEventFrame?.(candidate);
+        setCaptureNote({
+          type: "ok",
+          text: `Captured frame ${result.frameIdx} -> event ${replaceCtx.eventIndex}${previewSuffix}`,
+        });
+        onClose();
+        return;
+      }
+
       const outcome = onCapture?.(candidate, result);
       const added = outcome === undefined ? true : Boolean(outcome);
-      const previewSuffix = candidate.hasPreview ? "" : " - preview unavailable";
       setCaptureNote({
         type: added ? "ok" : "dupe",
         text: added
@@ -168,6 +190,27 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
   const compareItem = compareId ? (results || []).find((r) => r.id === compareId) : null;
   const atStart = curIdx <= 0;
   const atEnd = curIdx === -1 || curIdx >= seq.length - 1;
+
+  // "Replace event frame": the frame currently under review becomes event N of
+  // an edited temporal sequence, but only if it stays in the same video and
+  // between the neighbouring events' timestamps.
+  const replaceCandidate = hydratedItem || item;
+  const replaceFrameId = Number(replaceCandidate?.submissionFrameId ?? replaceCandidate?.backend?.frame_idx);
+  const replaceSameVideo = Boolean(replaceCtx) && replaceCandidate?.videoKey === replaceCtx?.videoKey;
+  const replaceInWindow =
+    Boolean(replaceCtx) &&
+    Number(replaceCandidate?.timestamp) > replaceCtx.minTs &&
+    Number(replaceCandidate?.timestamp) < replaceCtx.maxTs;
+  const canReplace = Boolean(replaceCtx) && replaceSameVideo && replaceInWindow && Number.isFinite(replaceFrameId);
+  const replaceHint = !replaceCtx
+    ? ""
+    : !replaceSameVideo
+      ? `Replacement must stay in ${replaceCtx.videoKey}`
+      : !Number.isFinite(replaceFrameId)
+        ? "This frame has no resolvable frame index"
+        : !replaceInWindow
+          ? "Replacement must sit between the neighbouring events' timestamps"
+          : `Use this frame for event ${replaceCtx.eventIndex}`;
   const filmstripLabel = loadingTimeline
     ? `Loading timeline - ${item.videoKey}`
     : stripMode === "timeline"
@@ -210,9 +253,11 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
           <button className={`ws-btn small ${isKept ? "" : "primary"}`} onClick={() => onToggleKeep(item)} title="Keep / unkeep (Space)">
             {isKept ? "Kept" : "Keep"}
           </button>
-          <button className="ws-btn small" onClick={() => onPivot(item)} title="Similar-image pivot">
-            <PlusSquareOutlined /> Similar
-          </button>
+          {replaceCtx ? null : (
+            <button className="ws-btn small" onClick={() => onPivot(item)} title="Similar-image pivot">
+              <PlusSquareOutlined /> Similar
+            </button>
+          )}
           <button className="ws-btn small" onClick={() => onAsk(item)} title="Ask the copilot about this frame">
             <MessageOutlined /> Ask
           </button>
@@ -221,9 +266,23 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
               <VideoCameraOutlined /> {showVideo ? "Show frame" : "Play video"}
             </button>
           ) : null}
-          <button className="ws-btn small" onClick={() => onRemove(item)} title="Remove from results (Delete)">
-            <DeleteOutlined /> Remove
-          </button>
+          {replaceCtx ? (
+            <button
+              className="ws-btn small primary"
+              onClick={() => {
+                onReplaceEventFrame?.(replaceCandidate);
+                onClose();
+              }}
+              disabled={!canReplace}
+              title={replaceHint}
+            >
+              <OrderedListOutlined /> Replace event {replaceCtx.eventIndex}
+            </button>
+          ) : (
+            <button className="ws-btn small" onClick={() => onRemove(item)} title="Remove from results (Delete)">
+              <DeleteOutlined /> Remove
+            </button>
+          )}
         </div>
       </header>
 
@@ -276,7 +335,12 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
                           : "Capture the frame at the current playback position"
                     }
                   >
-                    <VideoCameraOutlined /> {capturing ? "Capturing..." : "Capture frame"}
+                    <VideoCameraOutlined />{" "}
+                    {capturing
+                      ? "Capturing..."
+                      : replaceCtx
+                        ? `Capture -> event ${replaceCtx.eventIndex}`
+                        : "Capture frame"}
                   </button>
                   <span className="ws-review-capture-hint">
                     {playbackError

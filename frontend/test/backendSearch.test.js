@@ -8,6 +8,7 @@ import {
   probeBackend,
   runAgentChat,
   runBackendSearch,
+  temporalRequestBody,
 } from "../src/services/backendSearch.js";
 
 const successPayload = {
@@ -70,6 +71,58 @@ test("routes a text query to FastAPI's users endpoint", async () => {
 
   assert.equal(call.url, "http://localhost:3000/users/singletextsearch");
   assert.deepEqual(JSON.parse(call.init.body), { query: "forklift", topk: 3 });
+});
+
+test("temporalRequestBody folds context into every event and caps topk at 100", () => {
+  const body = temporalRequestBody(
+    ["Bối cảnh: video nấu ăn về nấm", "E1: cắt nấm", "E2: bắc chảo lên bếp"].join("\n"),
+    250,
+  );
+  assert.equal(body.topk, 100);
+  assert.equal(body.context, "video nấu ăn về nấm");
+  assert.equal(body.query.length, 2);
+  assert.ok(body.query[0].query.includes("video nấu ăn về nấm"));
+  assert.ok(body.query[0].query.includes("cắt nấm"));
+});
+
+test("routes a temporal query to /users/temporalsearch with event objects", async () => {
+  let call;
+  const seqPayload = {
+    success: true,
+    data: {
+      total_items: 1,
+      items: [
+        {
+          video_id: "L21_V001",
+          timestamps: [1, 2],
+          frames: [
+            { event_index: 1, video_key: "L21_V001", frame_key: "000010", submission_frame_id: 10, timestamp: 1 },
+            { event_index: 2, video_key: "L21_V001", frame_key: "000040", submission_frame_id: 40, timestamp: 2 },
+          ],
+        },
+      ],
+    },
+  };
+  const result = await runBackendSearch(
+    { searchType: "TEMPORAL", query: "E1: a\nE2: b", params: { topk: 50 } },
+    null,
+    {
+      config: { baseUrl: "http://localhost:3000", mode: "live" },
+      fetchImpl: async (url, init) => {
+        call = { url, init };
+        return { ok: true, json: async () => seqPayload };
+      },
+    },
+  );
+
+  assert.equal(call.url, "http://localhost:3000/users/temporalsearch");
+  const sent = JSON.parse(call.init.body);
+  assert.deepEqual(sent.query, [{ query: "a" }, { query: "b" }]);
+  assert.equal(sent.topk, 50);
+  assert.equal(result.type, "TEMPORAL");
+  assert.equal(result.sequences.length, 1);
+  assert.deepEqual(result.sequences[0].frames.map((f) => f.submissionFrameId), [10, 40]);
+  assert.deepEqual(result.items, []);
 });
 
 test("routes an image pivot as multipart data", async () => {

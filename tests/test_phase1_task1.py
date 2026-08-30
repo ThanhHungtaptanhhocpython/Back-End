@@ -3,7 +3,7 @@
 Tests that the Settings class loads defaults correctly, that environment
 variable overrides work, and that path resolver methods return expected values.
 
-Heavy ML dependencies (faiss, open_clip, torch, transformers) are mocked
+Heavy ML dependencies (faiss, torch, transformers) are mocked
 at sys.modules level before any app code is imported.
 
 Run with:
@@ -32,11 +32,6 @@ _mock_faiss = MagicMock()
 _mock_faiss.read_index.return_value = MagicMock(ntotal=100)
 sys.modules.setdefault("faiss", _mock_faiss)
 
-_mock_open_clip = MagicMock()
-_mock_open_clip.create_model_and_transforms.return_value = (MagicMock(), None, MagicMock())
-_mock_open_clip.get_tokenizer.return_value = MagicMock()
-sys.modules.setdefault("open_clip", _mock_open_clip)
-
 _mock_torch = MagicMock()
 _mock_torch.cuda.is_available.return_value = False
 sys.modules.setdefault("torch", _mock_torch)
@@ -57,7 +52,7 @@ class TestSettingsDefaults(unittest.TestCase):
     """Verify that default values are sensible without any .env file."""
 
     def setUp(self) -> None:
-        self.settings = Settings(_env_file=None, debug=False, faiss_index_path=None, metadata_path=None, keyframes_root=None, features_root=None)
+        self.settings = Settings(_env_file=None, debug=False, keyframes_root=None, features_root=None)
 
     def test_default_env(self) -> None:
         self.assertEqual(self.settings.env, "development")
@@ -71,12 +66,6 @@ class TestSettingsDefaults(unittest.TestCase):
     def test_default_port(self) -> None:
         self.assertEqual(self.settings.port, 3000)
 
-    def test_default_clip_model(self) -> None:
-        self.assertEqual(self.settings.clip_model_name, "ViT-H-14-quickgelu")
-
-    def test_default_clip_pretrained(self) -> None:
-        self.assertEqual(self.settings.clip_pretrained, "dfn5b")
-
     def test_default_log_level(self) -> None:
         self.assertEqual(self.settings.log_level, "INFO")
 
@@ -85,17 +74,7 @@ class TestSettingsPathResolvers(unittest.TestCase):
     """Verify that path resolver methods return correct defaults."""
 
     def setUp(self) -> None:
-        self.settings = Settings(_env_file=None, debug=False, faiss_index_path=None, metadata_path=None, keyframes_root=None, features_root=None)
-
-    def test_faiss_index_default_path(self) -> None:
-        path = self.settings.get_faiss_index_path()
-        self.assertTrue(str(path).endswith("faiss_index.bin"))
-        self.assertIn("dict", str(path))
-
-    def test_metadata_default_path(self) -> None:
-        path = self.settings.get_metadata_path()
-        self.assertTrue(str(path).endswith("metadata_clip.json"))
-        self.assertIn("dict", str(path))
+        self.settings = Settings(_env_file=None, debug=False, keyframes_root=None, features_root=None)
 
     def test_keyframes_default_path(self) -> None:
         path = self.settings.get_keyframes_root()
@@ -122,24 +101,6 @@ class TestSettingsEnvOverride(unittest.TestCase):
     def test_override_log_level(self) -> None:
         settings = Settings(_env_file=None)
         self.assertEqual(settings.log_level, "DEBUG")
-
-    @patch.dict(os.environ, {"CLIP_MODEL_NAME": "ViT-B-32", "CLIP_PRETRAINED": "openai"})
-    def test_override_model_config(self) -> None:
-        settings = Settings(_env_file=None)
-        self.assertEqual(settings.clip_model_name, "ViT-B-32")
-        self.assertEqual(settings.clip_pretrained, "openai")
-
-    @patch.dict(os.environ, {"FAISS_INDEX_PATH": "/custom/path/index.bin"})
-    def test_override_faiss_path(self) -> None:
-        settings = Settings(_env_file=None)
-        path = settings.get_faiss_index_path()
-        self.assertEqual(path.as_posix(), "/custom/path/index.bin")
-
-    @patch.dict(os.environ, {"METADATA_PATH": "/custom/metadata.json"})
-    def test_override_metadata_path(self) -> None:
-        settings = Settings(_env_file=None)
-        path = settings.get_metadata_path()
-        self.assertEqual(path.as_posix(), "/custom/metadata.json")
 
 
 class TestGetSettingsSingleton(unittest.TestCase):

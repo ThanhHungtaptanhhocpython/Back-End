@@ -81,14 +81,6 @@ export default function SearchBar({ tab, onPatch, onRun, onAgentRun, searchRef, 
             onChange={(e) => onPatch({ params: { ...tab.params, topk: Number(e.target.value) } })}
           />
         </div>
-        <div className="ws-param">
-          <label className="ws-param-label">Clip</label>
-          <button className={`ws-switch ${tab.params.clip ? "on" : ""}`} onClick={() => onPatch({ params: { ...tab.params, clip: !tab.params.clip } })} />
-        </div>
-        <div className="ws-param">
-          <label className="ws-param-label">CLIPv2</label>
-          <button className={`ws-switch ${tab.params.clipv2 ? "on" : ""}`} onClick={() => onPatch({ params: { ...tab.params, clipv2: !tab.params.clipv2 } })} />
-        </div>
       </div>
 
       <div className="ws-runbar">

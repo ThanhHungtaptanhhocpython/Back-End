@@ -4,8 +4,6 @@ from pydantic import BaseModel, Field
 class TextSearchRequest(BaseModel):
     query: str = Field(default="")
     topk: int = Field(..., gt=0)
-    clip: Optional[bool] = None
-    clipv2: Optional[bool] = None
 
 class CaptureSimilarRequest(BaseModel):
     """Body for the captured-frame "Similar" search.

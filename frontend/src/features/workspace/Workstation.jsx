@@ -26,7 +26,7 @@ function makeTab() {
     label: `Query ${String(tabSeq).padStart(2, "0")}`,
     searchType: "TEXT",
     query: "",
-    params: { topk: 100, clip: true, clipv2: false, imageFile: null },
+    params: { topk: 100, imageFile: null },
     status: "idle",
     latency: 0,
     results: [],
@@ -36,7 +36,7 @@ function makeTab() {
 
 let chatSeq = 0;
 
-export default function Workstation({ view, onSwitchView }) {
+export default function Workstation() {
   const { message } = AntApp.useApp();
   const toast = message;
 
@@ -147,7 +147,7 @@ export default function Workstation({ view, onSwitchView }) {
       runSearch(activeTab, null);
     }, 420);
     return () => clearTimeout(id);
-  }, [activeTab?.query, activeTab?.searchType, activeTab?.params?.topk, activeTab?.params?.clip, activeTab?.params?.clipv2, activeKey]);
+  }, [activeTab?.query, activeTab?.searchType, activeTab?.params?.topk, activeKey]);
 
   const runActive = () => {
     const tab = tabs.find((t) => t.key === activeKey);
@@ -456,7 +456,7 @@ export default function Workstation({ view, onSwitchView }) {
   const sendAgentSearch = async () => {
     const text = agentSearchInput.trim();
     if (!text || agentSearchStatus === "thinking") return;
-    const params = activeTab?.params || { topk: 100, clip: true, clipv2: false };
+    const params = activeTab?.params || { topk: 100 };
     const userMsg = { id: `a${++chatSeq}`, role: "user", text, demo: false };
     setAgentSearchMsgs((prev) => [...prev, userMsg]);
     setAgentSearchInput("");
@@ -700,8 +700,6 @@ export default function Workstation({ view, onSwitchView }) {
   return (
     <div className="ws-root">
       <StatusBar
-        view={view}
-        onSwitchView={onSwitchView}
         clock={clock}
         backend={backend}
         onPing={ping}

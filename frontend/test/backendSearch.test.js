@@ -57,7 +57,7 @@ test("normalizes submission frame id separately from FAISS vector id", () => {
 test("routes a text query to FastAPI's users endpoint", async () => {
   let call;
   await runBackendSearch(
-    { searchType: "TEXT", query: "forklift", params: { topk: 3, clip: true, clipv2: false } },
+    { searchType: "TEXT", query: "forklift", params: { topk: 3 } },
     null,
     {
       config: { baseUrl: "http://localhost:3000", mode: "live" },
@@ -69,13 +69,13 @@ test("routes a text query to FastAPI's users endpoint", async () => {
   );
 
   assert.equal(call.url, "http://localhost:3000/users/singletextsearch");
-  assert.deepEqual(JSON.parse(call.init.body), { query: "forklift", topk: 3, clip: true, clipv2: false });
+  assert.deepEqual(JSON.parse(call.init.body), { query: "forklift", topk: 3 });
 });
 
 test("routes an image pivot as multipart data", async () => {
   let body;
   await runBackendSearch(
-    { searchType: "IMAGE", params: { topk: 2, clip: true, clipv2: false, imageFile: null } },
+    { searchType: "IMAGE", params: { topk: 2, imageFile: null } },
     { faissIndex: 7 },
     {
       config: { baseUrl: "http://localhost:3000/users", mode: "live" },

@@ -119,7 +119,7 @@ def _temporal_queries(query: str) -> List[Dict[str, str]]:
 @tool
 def vector_search_tool(query: str, top_k: int = 20) -> List[Dict[str, Any]]:
     """
-    Tim kiem semantic vector (Faiss + CLIP) dua tren text query.
+    Tim kiem semantic vector (Faiss + BEiT-3) dua tren text query.
     Su dung tool nay khi cau hoi yeu cau tim kiem noi dung hinh anh, mau sac, hanh dong chung chung trong video.
     Vi du: 'nguoi dan ong mac ao do dang chay', 'chiec xe mau xanh'.
     """

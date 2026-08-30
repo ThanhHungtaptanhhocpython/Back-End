@@ -30,7 +30,7 @@ logging.basicConfig(
 
 app = FastAPI(
     title="AIC Search API",
-    description="Multimodal video keyframe retrieval backend powered by OpenCLIP and Faiss.",
+    description="Multimodal video keyframe retrieval backend powered by BEiT-3 and Faiss.",
     version="1.0.0",
 )
 

@@ -60,11 +60,15 @@ def handle_qna_search(request: TextSearchRequest):
 def handle_image_search(
     response: Response,
     topk: Optional[str] = Form("100"),
-    clip: Optional[str] = Form(None),
-    clipv2: Optional[str] = Form(None),
     faiss_index: Optional[str] = Form("default"),
     image: Optional[UploadFile] = File(None)
 ):
+    """Image pivot search, entirely on the BEiT-3 1024-d index.
+
+    An uploaded ``image`` is encoded with BEiT-3's vision tower; a
+    ``faiss_index`` is an existing BEiT-3 vector id. Either way the results
+    carry real FAISS vector ids.
+    """
     try:
         topk_int = int(topk) if topk is not None else 100
         if topk_int <= 0:

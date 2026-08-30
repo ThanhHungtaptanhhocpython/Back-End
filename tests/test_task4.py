@@ -4,7 +4,6 @@ from fastapi.testclient import TestClient
 import sys
 import types
 import os
-import numpy as np
 
 backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 src_dir = os.path.join(backend_dir, 'src')
@@ -16,9 +15,6 @@ sys.path.insert(0, src_dir)
 sys.modules.setdefault('faiss', MagicMock())
 sys.modules.setdefault('torch', MagicMock())
 sys.modules.setdefault('transformers', MagicMock())
-_open_clip = sys.modules.setdefault('open_clip', MagicMock())
-if isinstance(_open_clip, MagicMock):
-    _open_clip.create_model_and_transforms.return_value = (MagicMock(), MagicMock(), MagicMock())
 sys.modules.setdefault('PIL', MagicMock())
 
 # test_task2.py stubs sys.modules['src.services.user_service'] with a MagicMock;
@@ -32,28 +28,11 @@ class Task4ErrorHandlingTests(unittest.TestCase):
         # Drop cached modules so each test starts from a clean import state
         modules_to_reload = [
             'src.services.user_service',
-            'utils.faiss_processing',
             'utils.vlm_processing',
             'utils.trake_processing'
         ]
         for m in modules_to_reload:
             sys.modules.pop(m, None)
-
-    def test_faiss_missing_index_fallback(self):
-        """Verify that MyFaiss doesn't crash on init if files are missing"""
-        from utils.faiss_processing import MyFaiss
-        import sys
-        sys.modules['faiss'].read_index.side_effect = Exception("Mocked FileNotFoundError")
-        
-        # Test loading missing bin file
-        faiss_instance = MyFaiss("dummy_missing.bin", "dummy_missing.json")
-        self.assertIsNone(faiss_instance.index_clip)
-        self.assertEqual(faiss_instance.id2img_fps, {})
-        
-        # Test search with None index doesn't crash but returns empty arrays
-        scores, ids = faiss_instance._search_faiss_index(np.array([[1.0]]), k=5, index_subset=None)
-        self.assertEqual(scores.size, 0)
-        self.assertEqual(ids.size, 0)
 
     def _fake_beit3_module(self, retriever):
         """Return a stub module for src.services.beit3_retriever whose factory

@@ -3,9 +3,7 @@ import os
 import numpy as np
 import random
 import json
-import base64
 import logging
-from PIL import Image
 
 SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if SRC_DIR not in sys.path:
@@ -15,28 +13,15 @@ from src.config.settings import get_settings
 
 # Heavy legacy model factories are imported only by the endpoint that needs
 # them. Keeping patchable placeholders also preserves test injection.
-MyFaiss = None
 VLMProcessor = None
 TRAKE = None
 ElasticProcessor = None
 
 settings = get_settings()
-bin_clip_file = str(settings.get_faiss_index_path())
-meta_data = str(settings.get_metadata_path())
 
-_cosine_faiss = None
 _trake_search = None
 _vlm_processor = None
 _elastic_processor = None
-
-def get_cosine_faiss():
-    global _cosine_faiss
-    if _cosine_faiss is None:
-        factory = MyFaiss
-        if factory is None:
-            from utils.faiss_processing import MyFaiss as factory
-        _cosine_faiss = factory(bin_clip_file, meta_data)
-    return _cosine_faiss
 
 def get_trake_search():
     global _trake_search
@@ -123,11 +108,8 @@ def generate_random_answer():
 def getImageDataSingleTextSearch(query, k):
     """Real visual text search: BEiT3 text encoder -> exact FAISS IP search.
 
-    This is the production `/singletextsearch` path. It intentionally does
-    NOT use the legacy OpenCLIP `MyFaiss` index (`get_cosine_faiss()`),
-    which lives in a different embedding space than the BEiT3 corpus
-    vectors. Returned scores are the real FAISS inner-product similarity,
-    never a rank-derived placeholder.
+    This is the production `/singletextsearch` path. Returned scores are the
+    real FAISS inner-product similarity, never a rank-derived placeholder.
     """
     from src.services.beit3_retriever import get_beit3_retriever
 
@@ -160,13 +142,6 @@ def getImageSearchById(image_id, k):
 
 
 
-# res = getImageDataSingleTextSearch("Cycling race, overhead flycam angle: rider in blue-white overtakes three riders and leads until the finish.", 5)
-# for item in res:
-#     print(item['faiss_id_clip'])
-
-# res2 = getImageSearchById(36244, 5)
-# for item in res2:
-#     print(item['frame_key'])
 def getCaptureSimilarSearch(image_path, k):
     """Similar-frame search seeded by a captured frame's exact preview still.
 
@@ -182,37 +157,18 @@ def getCaptureSimilarSearch(image_path, k):
 
 
 def getImageSearchByFile(image_file, k):
-    result = []
+    """Search similar keyframes from an uploaded image via BEiT-3's vision tower.
+
+    The uploaded image is encoded the same way indexed keyframes were and
+    searched against the shared 1024-d FAISS index, so results carry real
+    FAISS vector ids (a follow-up pivot on them is well defined).
+    """
+    from src.services.beit3_retriever import get_beit3_retriever
+
     try:
-        img = Image.open(image_file).convert("RGB")
-        scores, image_ids, infos_query, image_paths = get_cosine_faiss().image_search_by_file(img, k)
-        id = 0
-        for info, image_path in zip(infos_query, image_paths):
-            if not info:
-                continue
-
-            frame_name = info['global_frame_id']
-            video_id = info['video_id']
-            folder_key = info['split'].split('-')[1].upper()
-            full_image_path = os.path.join(SRC_DIR, 'data', 'Keyframes', image_path)
-            try:
-                with open(full_image_path, "rb") as img_file_read:
-                    encoded_string = base64.b64encode(img_file_read.read()).decode('utf-8')
-            except Exception as e:
-                logging.error(f"Failed to load image {full_image_path}: {e}")
-                continue
-
-            result.append({
-                'id': id,
-                'folder_key': folder_key,
-                'video_key': video_id,
-                'frame_key': frame_name,
-                'image': encoded_string
-            })
-            id += 1 
-        return result
+        return get_beit3_retriever().search_by_image(image_file, top_k=k)
     except Exception as e:
-        logging.error(f"Error during image file search: {e}")
+        logging.error(f"Error during BEiT-3 image file search: {e}")
         return []
 
 def GetImageDataTrakeSearch(query, top_results=100): 

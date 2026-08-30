@@ -5,7 +5,6 @@ pyarrow
 faiss-cpu
 sentencepiece
 torchscale
-open-clip-torch
 deep-translator>=1.11.4
 transformers
 torch

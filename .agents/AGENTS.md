@@ -10,20 +10,18 @@ The **AI Challenge 2025 Backend** is a multimodal image/video keyframe retrieval
 
 ### Core Tech Stack & AI Models
 - **AI Models:**
-  - **OpenCLIP:** Uses the `ViT-H-14-quickgelu` model with `dfn5b` pretrained weights for embedding visual keyframes.
-  - **SigLIP & BEiT-3:** Dual-embedding models for advanced visual reasoning and multilingual queries.
+  - **BEiT-3:** `beit3_large_patch16_384_retrieval` is the sole visual-retrieval backbone. Text and image queries are encoded into the shared 1024-d space and searched against one FAISS index (see `src/services/beit3_retriever.py`). OpenCLIP has been fully removed.
   - **BLIP-VQA:** Uses `Salesforce/blip-vqa-base` for local visual question answering and reranking.
 - **Search Technologies:**
-  - **Faiss:** Performs cosine similarity indexing and search (fusing vectors via Reciprocal Rank Fusion - RRF).
+  - **Faiss:** `IndexIDMap2(IndexFlatIP)` over the BEiT-3 vectors; inner-product scores are returned as-is.
   - **Elasticsearch:** Actively used for text-based OCR and ASR multimodal search.
-  - **Qdrant (Planned Backup):** Schema designed for multi-vector migration if Faiss causes OOM.
 - **Frameworks:**
   - **FastAPI:** The sole API framework for all routing and Pydantic validation (Flask has been retired).
 - **Data Schemas:**
-  - Keyframes are stored at: `src/data/Keyframes/{split}/{video_id}/{frame_name}`
-  - Video features (.npy) are stored at: `src/data/features/{split}/{video_id}.npy`
-  - Metadata is stored at: `src/dict/metadata_clip.json`
-  - Index is stored at: `src/dict/nw/faiss_index_clip.bin`
+  - Keyframes are served from `KEYFRAMES_ROOT` as `{split}/{video_id}/{frame_name}`
+  - BEiT-3 runtime artifacts are machine-specific and set via the environment:
+    `BEIT3_FAISS_INDEX_PATH`, `BEIT3_GLOBAL_IDS_PATH` (`global_ids.parquet`),
+    `BEIT3_CHECKPOINT_PATH`, `BEIT3_TOKENIZER_PATH`.
 
 ---
 
@@ -48,7 +46,7 @@ The **AI Challenge 2025 Backend** is a multimodal image/video keyframe retrieval
 - **Separation of Concerns:** Keep code strictly within its designated boundary layer:
   - **Controllers/Routers (`src/api/routers/` or `src/controllers/`):** Handle HTTP protocol logic (requests, routing, validation, responses). No database queries, heavy computations, or index logic here.
   - **Services (`src/services/`):** House core business logic, orchestrating calls between database models, search utilities, and external services.
-  - **Utilities (`src/utils/`):** Pure stateless helpers, ML models wrappers (Faiss, CLIP, VLM, Translation), and format converters. They must not contain route logic or direct domain state.
+  - **Utilities (`src/utils/`):** Pure stateless helpers, ML model wrappers (BEiT-3 backbone, VLM, Translation), and format converters. They must not contain route logic or direct domain state.
 - **Configuration over Hardcoding:**
   - Never hardcode local file paths, API URLs, or environment secrets.
   - Always use `config.py` (Flask) or Pydantic Settings class (FastAPI) to parse environment variables.
@@ -87,10 +85,10 @@ The **AI Challenge 2025 Backend** is a multimodal image/video keyframe retrieval
 
 - **Non-destructive Keyframe Operations:**
   - Do **not** resize source images when saving them to disk (keep original resolution). 
-  - If a model (like CLIP) requires image resizing, handle it *only* in-memory within the preprocessing function of the model wrapper, never overwrite the stored keyframe.
+  - If a model (like BEiT-3) requires image resizing, handle it *only* in-memory within the preprocessing function of the model wrapper, never overwrite the stored keyframe.
   - Save keyframes as lossless WebP (`lossless=True`, `quality=100`) or high-quality JPG.
 - **Faiss ID Mapping:**
-  - Maintain the consistency of the `faiss_id` matching keys in `metadata_clip.json`.
+  - Maintain the consistency of the `vector_id` matching keys in `global_ids.parquet`.
   - Use `IndexIDMap2` in Faiss to add items with their corresponding metadata integer keys.
 - **Per-Video Features (.npy):**
   - Ensure the ordering of rows in the `.npy` matrices matches exactly with the `frame_index` field of the metadata elements.
@@ -100,5 +98,5 @@ The **AI Challenge 2025 Backend** is a multimodal image/video keyframe retrieval
 ## 5. Repository Safety
 
 - **No Secrets in Source:** Never commit passwords, tokens, API keys, or ngrok tunnels.
-- **Gitignore Safety:** Do not bypass `.gitignore` to upload bulky items like `.mp4` videos, `faiss_index_clip.bin`, or `.npy` numpy features. Only scripts to generate them should be pushed to Git.
+- **Gitignore Safety:** Do not bypass `.gitignore` to upload bulky items like `.mp4` videos, the BEiT-3 FAISS index / checkpoint, `global_ids.parquet`, or `.npy` numpy features. Only scripts to generate them should be pushed to Git.
 - **Clean Diff Rules:** When modifying code, preserve unrelated functions, docstrings, and formatting. Do not introduce refactors in unrelated modules.

@@ -26,3 +26,10 @@ class TranslateResponse(BaseModel):
     to_lang: str
     translated: Optional[bool] = None
     provider: Optional[str] = None
+    # Structured outcome so clients can tell a real translation from a kept
+    # original: "ok" | "invalid_input" | "provider_unavailable".
+    status: Optional[str] = None
+    # ``None`` on success; a stable reason code on failure (mirrors ``status``).
+    error_code: Optional[str] = None
+    # Short, non-sensitive explanation (never carries user text or secrets).
+    detail: Optional[str] = None

@@ -281,6 +281,7 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
   const [translated, setTranslated] = useState("");
   const [translating, setTranslating] = useState(false);
   const [translationLive, setTranslationLive] = useState(false);
+  const [translationStatus, setTranslationStatus] = useState("");
   const [editing, setEditing] = useState(false);
   const [editBuf, setEditBuf] = useState("");
 
@@ -288,11 +289,29 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
   const showOut = src.trim() !== "";
   const canUseAsQuery = Boolean(out.trim()) && (translationLive || override !== null);
 
+  const translationBadge = translating
+    ? "LIVE..."
+    : override !== null
+      ? "EDITED"
+      : translationLive
+        ? "LIVE"
+        : translationStatus === "backend_unreachable"
+          ? "OFFLINE"
+          : "UNAVAILABLE";
+
+  const translationNote =
+    translationLive || override !== null
+      ? "Original text is always preserved."
+      : translationStatus === "backend_unreachable"
+        ? "Translation service could not be reached. The original text was kept and cannot be used as a translated search query."
+        : "Translation is unavailable. The original text was kept and cannot be used as a translated search query.";
+
   useEffect(() => {
     const text = src.trim();
     if (!text || override !== null) {
       setTranslated("");
       setTranslationLive(false);
+      setTranslationStatus("");
       setTranslating(false);
       return;
     }
@@ -305,9 +324,13 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
         if (!cancelled) {
           setTranslated(result?.text || "");
           setTranslationLive(Boolean(result?.live));
+          setTranslationStatus(result?.status || "");
         }
       } catch {
-        if (!cancelled) setTranslated("");
+        if (!cancelled) {
+          setTranslated("");
+          setTranslationStatus("backend_unreachable");
+        }
       } finally {
         if (!cancelled) setTranslating(false);
       }
@@ -366,7 +389,7 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
           <div className="ws-tr-trans">
             <div className="ws-tr-head">
               <span>Translated - {dir === "en-vi" ? "Vietnamese" : "English"}</span>
-              <span className="ws-demo-badge">{translating ? "LIVE..." : translationLive ? "LIVE" : override !== null ? "EDITED" : "UNAVAILABLE"}</span>
+              <span className="ws-demo-badge">{translationBadge}</span>
             </div>
             {editing ? (
               <textarea
@@ -405,7 +428,7 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
               <MessageOutlined /> Use as prompt
             </button>
           </div>
-          <p className="ws-tr-note">{translationLive || override !== null ? "Original text is always preserved." : "Translation is unavailable. The original text was kept and cannot be used as a translated search query."}</p>
+          <p className="ws-tr-note">{translationNote}</p>
         </div>
       ) : (
         <div className="ws-tr-empty">Enter text above to see a clearly-labelled live translation preview. The original text is never silently replaced.</div>

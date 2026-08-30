@@ -5,8 +5,9 @@ Provides query parsing and dynamic weight calculation for Multimodal Fusion.
 
 import logging
 import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
 
@@ -19,15 +20,53 @@ load_dotenv(dotenv_path=Path(__file__).resolve().parents[2] / ".env", override=T
 
 logger = logging.getLogger(__name__)
 
+# Structured outcome codes shared with the API layer and the frontend.
+TRANSLATION_OK = "ok"
+TRANSLATION_INVALID_INPUT = "invalid_input"
+TRANSLATION_PROVIDER_UNAVAILABLE = "provider_unavailable"
+
+
+@dataclass
+class TranslationResult:
+    """Outcome of a single translation attempt.
+
+    ``text`` is always safe to show the user: the real translation on success,
+    the trimmed original text on a provider failure, and ``""`` only when the
+    input was blank. ``translated`` is True only when a provider actually
+    produced a different string. ``status`` is one of the ``TRANSLATION_*``
+    codes above; ``error_code`` mirrors it on failure and is ``None`` on
+    success.
+    """
+
+    text: str
+    translated: bool
+    provider: str  # "google" | "openrouter" | "cache" | "identity" | "none"
+    status: str
+    error_code: Optional[str] = None
+    detail: Optional[str] = None
+
+
+def _normalize_lang(value: Optional[str]) -> str:
+    return (value or "").strip().lower()
+
+
 class Translation():
+    # Only ever holds successful, provider-produced translations that differ
+    # from their input. Identity results, failures and exceptions are never
+    # stored, so a transient provider outage cannot "freeze" a query to its
+    # original text until the backend restarts.
     _cache: Dict[tuple[str, str, str], str] = {}
 
     def __init__(self, from_lang='vi', to_lang='en'):
-        self.__to_lang = to_lang
-        self.__from_lang = from_lang
+        self.__from_lang = _normalize_lang(from_lang) or "auto"
+        self.__to_lang = _normalize_lang(to_lang) or "en"
         self.translator = None
         self.last_provider = "none"
         self.last_translated = False
+        self.last_status = TRANSLATION_OK
+        self.last_error_code: Optional[str] = None
+        self.last_detail: Optional[str] = None
+        self.last_result: Optional[TranslationResult] = None
         self._init_translator()
 
     def _init_translator(self):
@@ -36,19 +75,36 @@ class Translation():
                 self.translator = GoogleTranslator(source=self.__from_lang, target=self.__to_lang)
             else:
                 self.translator = None
-        except Exception as e:
-            logger.warning(f"Failed to initialize GoogleTranslator: {e}")
+        except Exception as exc:
+            logger.warning(
+                "Failed to initialize translation provider (provider=google, error=%s)",
+                type(exc).__name__,
+            )
             self.translator = None
 
     def preprocessing(self, text):
         return text.strip() if text else ""
 
-    def _looks_english(self, text: str) -> bool:
-        if not text or self.__to_lang != "en":
-            return False
-        has_latin = bool(re.search(r"[A-Za-z]", text))
-        has_vietnamese = bool(re.search("[\u00e0-\u1ef9\u00c0-\u1ef8\u0111\u0110]", text))
-        return has_latin and not has_vietnamese
+    @staticmethod
+    def _is_real_translation(candidate: str, source: str) -> bool:
+        """True when ``candidate`` is a non-empty string that differs from the input."""
+        cleaned = (candidate or "").strip()
+        return bool(cleaned) and cleaned.casefold() != source.strip().casefold()
+
+    def _translate_with_google(self, text: str) -> str:
+        if self.translator is None:
+            self._init_translator()
+        if self.translator is None:
+            return ""
+        try:
+            return (self.translator.translate(text) or "").strip()
+        except Exception as exc:
+            # Never log the user's text or provider payloads -- provider + type only.
+            logger.warning(
+                "Translation provider call failed (provider=google, error=%s)",
+                type(exc).__name__,
+            )
+            return ""
 
     def _translate_with_openrouter(self, text: str) -> str:
         from src.config.settings import get_settings
@@ -83,53 +139,102 @@ class Translation():
                 ),
             ])
             return str(getattr(response, "content", "") or "").strip()
-        except Exception as e:
-            logger.warning(f"OpenRouter translation fallback failed: {e}")
+        except Exception as exc:
+            logger.warning(
+                "Translation fallback failed (provider=openrouter, error=%s)",
+                type(exc).__name__,
+            )
             return ""
 
-    def __call__(self, text):
+    def translate_detailed(self, text) -> TranslationResult:
+        """Translate ``text`` and return a structured, honest outcome.
+
+        ``from_lang`` / ``to_lang`` supplied by the caller are the source of
+        truth. Translation is only skipped when the two languages are actually
+        the same or the input is blank -- never because the text happens to be
+        Latin script or unaccented Vietnamese.
+        """
         cleaned = self.preprocessing(text)
-        self.last_provider = "none"
-        self.last_translated = False
         if not cleaned:
-            return ""
+            return TranslationResult(
+                text="",
+                translated=False,
+                provider="none",
+                status=TRANSLATION_INVALID_INPUT,
+                error_code=TRANSLATION_INVALID_INPUT,
+                detail="Input text is empty after trimming.",
+            )
+
+        # The only legitimate identity: source and target really are the same.
+        if self.__from_lang == self.__to_lang:
+            return TranslationResult(
+                text=cleaned,
+                translated=False,
+                provider="identity",
+                status=TRANSLATION_OK,
+            )
 
         cache_key = (self.__from_lang, self.__to_lang, cleaned)
-        if cache_key in self._cache:
-            self.last_provider = "cache"
-            cached = self._cache[cache_key]
-            self.last_translated = cached != cleaned
-            return cached
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            # The cache only ever holds successful, different-from-input results.
+            return TranslationResult(
+                text=cached,
+                translated=True,
+                provider="cache",
+                status=TRANSLATION_OK,
+            )
 
-        if self._looks_english(cleaned):
-            self.last_provider = "identity"
-            self._cache[cache_key] = cleaned
-            return cleaned
+        # 1) Primary provider.
+        google_text = self._translate_with_google(cleaned)
+        if self._is_real_translation(google_text, cleaned):
+            self._cache[cache_key] = google_text
+            return TranslationResult(google_text, True, "google", TRANSLATION_OK)
 
-        result = ""
-        if self.translator is None:
-            self._init_translator()
-        if self.translator is not None:
-            try:
-                result = (self.translator.translate(cleaned) or "").strip()
-                if result and result != cleaned:
-                    self.last_provider = "google"
-                    self.last_translated = True
-                    self._cache[cache_key] = result
-                    return result
-            except Exception as e:
-                logger.warning(f"Translation call failed: {e}")
-
-        fallback = self._translate_with_openrouter(cleaned)
-        if fallback and fallback != cleaned:
-            self.last_provider = "openrouter"
-            self.last_translated = True
+        # 2) Optional fallback provider -- only if configured.
+        try:
+            fallback = (self._translate_with_openrouter(cleaned) or "").strip()
+        except Exception as exc:
+            logger.warning(
+                "Translation fallback error (provider=openrouter, error=%s)",
+                type(exc).__name__,
+            )
+            fallback = ""
+        if self._is_real_translation(fallback, cleaned):
             self._cache[cache_key] = fallback
-            return fallback
+            return TranslationResult(fallback, True, "openrouter", TRANSLATION_OK)
 
-        self.last_provider = "identity"
-        self._cache[cache_key] = cleaned
-        return cleaned
+        # 3) Nothing produced a usable translation. Report a structured failure:
+        # never cache it, never claim success, keep the original text for the UI.
+        logger.warning(
+            "Translation unavailable (providers tried: google=%s, openrouter=%s)",
+            "returned" if google_text else "empty/failed",
+            "returned" if fallback else "empty/failed/not-configured",
+        )
+        return TranslationResult(
+            text=cleaned,
+            translated=False,
+            provider="none",
+            status=TRANSLATION_PROVIDER_UNAVAILABLE,
+            error_code=TRANSLATION_PROVIDER_UNAVAILABLE,
+            detail="No translation provider returned a usable translation.",
+        )
+
+    def __call__(self, text):
+        """Backward-compatible entry point: returns a plain string.
+
+        The string is the live translation on success, or the trimmed original
+        text on failure (``""`` for blank input). Structured details are on
+        ``last_result`` / ``last_status`` / ``last_error_code``.
+        """
+        result = self.translate_detailed(text)
+        self.last_result = result
+        self.last_provider = result.provider
+        self.last_translated = result.translated
+        self.last_status = result.status
+        self.last_error_code = result.error_code
+        self.last_detail = result.detail
+        return result.text
 
 class QueryPlanner:
     """Parses natural language queries to route them to appropriate modalities."""

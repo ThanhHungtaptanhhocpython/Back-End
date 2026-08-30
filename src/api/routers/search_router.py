@@ -16,17 +16,40 @@ def _empty_query_response() -> BaseResponse:
     return BaseResponse(success=True, message="Empty query ignored.", data=DataResponse(items=[], total_items=0))
 
 @router.post("/translate", response_model=TranslateResponse)
-def handle_translate(request: TranslateRequest):
+def handle_translate(request: TranslateRequest, response: Response):
+    """Translate ``text`` from ``from_lang`` to ``to_lang``.
+
+    The HTTP status and body together make the outcome unambiguous:
+    - 200 + ``status="ok"``: a real translation (or a same-language identity).
+    - 400 + ``status="invalid_input"``: the text was blank.
+    - 503 + ``status="provider_unavailable"``: no provider produced a
+      translation. The original text is echoed back in ``translated_text`` so
+      the UI can keep the query, but ``success`` is ``False`` -- it is never
+      disguised as a successful translation.
+    """
     from src.utils.nlp_processing import Translation
+
     translator = Translation(from_lang=request.from_lang, to_lang=request.to_lang)
     translated_text = translator(request.text)
+    result = translator.last_result
+
+    status_by_outcome = {
+        "invalid_input": status.HTTP_400_BAD_REQUEST,
+        "provider_unavailable": status.HTTP_503_SERVICE_UNAVAILABLE,
+    }
+    if result.status in status_by_outcome:
+        response.status_code = status_by_outcome[result.status]
+
     return TranslateResponse(
-        success=True,
+        success=result.status == "ok",
         translated_text=translated_text,
         from_lang=request.from_lang,
         to_lang=request.to_lang,
-        translated=translator.last_translated,
-        provider=translator.last_provider
+        translated=result.translated,
+        provider=result.provider,
+        status=result.status,
+        error_code=result.error_code,
+        detail=result.detail,
     )
 
 

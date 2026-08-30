@@ -7,6 +7,16 @@ Start with:
 
 import logging
 import os
+import sys
+
+# Vietnamese query text is logged/printed all over the search path. On Windows a
+# cp1252 stdout/stderr raises UnicodeEncodeError on those characters, which would
+# turn a normal log line into an unhandled 500. Force UTF-8 with a safe fallback.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+    except Exception:
+        pass
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware

@@ -10,6 +10,11 @@ import {
 import useDialogFocus from "../../hooks/useDialogFocus";
 import { makeSubmissionZip, buildSubmissionCsv, sanitizeQueryFileName } from "../../shared/submissionExport";
 import { runSearch } from "../../shared/adapters";
+import { isRunnableTemporalQuery, parseTemporalQuery } from "../../shared/temporalQuery";
+
+// `query-p<phase>-<id>-<type>` for any phase, or `1.` / `Q1:` list markers.
+const HEADER_RE =
+  /^(?:query-p(\d+)-(\d+)-(kis|qa|trake)|query-(\d+)-(kis|qa|trake)|(\d+)[.:)]|Q(\d+)[.:)])\s*:?\s*(.*)$/i;
 
 export default function BatchQueryModal({ open, onClose, toast }) {
   const [inputText, setInputText] = useState("");
@@ -39,28 +44,27 @@ export default function BatchQueryModal({ open, onClose, toast }) {
     let currentQuery = null;
 
     lines.forEach((line) => {
-      // Check if line is a header like 'query-p1-1-kis:' or '1.' or 'Q1:'
-      const matchHeader = line.match(/^(?:query-p1-(\d+)-(kis|qa|trake)|query-(\d+)-(kis|qa|trake)|(\d+)[.:)]|Q(\d+)[.:)])\s*:?\s*(.*)$/i);
-      
+      const matchHeader = line.match(HEADER_RE);
+
       if (matchHeader) {
-        const qNum = matchHeader[1] || matchHeader[3] || matchHeader[5] || matchHeader[6] || String(queries.length + 1);
-        const qType = (matchHeader[2] || matchHeader[4] || "kis").toLowerCase();
-        const qContent = matchHeader[7] || "";
-        
+        const phase = matchHeader[1] || "1";
+        const qNum = matchHeader[2] || matchHeader[4] || matchHeader[6] || matchHeader[7] || String(queries.length + 1);
+        const qType = (matchHeader[3] || matchHeader[5] || "kis").toLowerCase();
+        const qContent = matchHeader[8] || "";
+
         currentQuery = {
-          name: `query-p1-${qNum}-${qType}.csv`,
+          name: `query-p${phase}-${qNum}-${qType}.csv`,
           type: qType,
           text: qContent,
         };
         queries.push(currentQuery);
-      } else if (currentQuery && currentQuery.text) {
-        // Append multi-line query
-        currentQuery.text += " " + line;
+      } else if (currentQuery) {
+        // Continuation line. TRAKE keeps line breaks so E1/E2... stay separable.
+        const sep = currentQuery.type === "trake" ? "\n" : " ";
+        currentQuery.text = currentQuery.text ? `${currentQuery.text}${sep}${line}` : line;
       } else {
-        // Line without specific header
-        const qNum = queries.length + 1;
         currentQuery = {
-          name: `query-p1-${qNum}-kis.csv`,
+          name: `query-p1-${queries.length + 1}-kis.csv`,
           type: "kis",
           text: line,
         };
@@ -130,29 +134,42 @@ export default function BatchQueryModal({ open, onClose, toast }) {
       });
 
       try {
+        const isTrake = q.type === "trake";
+        if (isTrake && !isRunnableTemporalQuery(parseTemporalQuery(q.text))) {
+          throw new Error("TRAKE query needs at least 2 ordered events (E1:, E2: ...).");
+        }
+
         const searchTab = {
           key: `batch_${i}`,
-          searchType: q.type.toUpperCase() === "QA" ? "QA" : "TEXT",
+          searchType: isTrake ? "TEMPORAL" : q.type.toUpperCase() === "QA" ? "QA" : "TEXT",
           query: q.text,
-          params: { topk },
+          params: { topk: isTrake ? Math.min(topk, 100) : topk },
         };
 
         const res = await runSearch(searchTab);
-        const items = (res?.items || []).slice(0, topk);
-        const csvContent = buildSubmissionCsv(items, q.type);
-        
+
+        let csvContent;
+        let count;
+        let preview;
+        if (isTrake) {
+          const seqs = res?.sequences || [];
+          csvContent = buildSubmissionCsv(seqs, "trake");
+          count = csvContent ? csvContent.split("\n").filter(Boolean).length : 0;
+          preview = csvContent.split("\n").slice(0, 2).join(" | ");
+        } else {
+          const items = (res?.items || []).slice(0, topk);
+          csvContent = buildSubmissionCsv(items, q.type);
+          count = items.length;
+          preview = buildSubmissionCsv(items.slice(0, 2), q.type).split("\n").join(" | ");
+        }
+
         generatedFiles.push({
           name: sanitizeQueryFileName(q.name, q.type),
           content: csvContent,
           queryType: q.type,
         });
 
-        summaryItems.push({
-          name: q.name,
-          type: q.type,
-          count: items.length,
-          preview: buildSubmissionCsv(items.slice(0, 2), q.type).split("\n").join(" | "),
-        });
+        summaryItems.push({ name: q.name, type: q.type, count, preview });
       } catch (err) {
         console.error(`Error on query ${q.name}:`, err);
         // Fallback empty CSV
@@ -198,7 +215,7 @@ export default function BatchQueryModal({ open, onClose, toast }) {
         tabIndex={-1}
       >
         <div className="ws-modal-head">
-          <div className="ws-modal-title" style={{ color: "#58a6ff" }}>
+          <div className="ws-modal-title cyan">
             <ThunderboltOutlined /> Batch Query Submitter (Multi-Query ZIP Engine)
           </div>
           <button ref={closeRef} className="ws-modal-close" onClick={onClose} disabled={running}>
@@ -207,7 +224,7 @@ export default function BatchQueryModal({ open, onClose, toast }) {
         </div>
 
         <div className="ws-modal-body" style={{ maxHeight: "78vh", overflowY: "auto" }}>
-          <p style={{ color: "#8b949e", fontSize: 13, margin: "0 0 12px 0" }}>Paste the query list or upload files from <b style={{ color: "#58a6ff" }}>THUNGHIEM-bo-de-thi</b>. The app searches top keyframes for every query and packs one BTC-ready <b>submission.zip</b>.</p>
+          <p className="ws-dim" style={{ fontSize: 13, margin: "0 0 12px 0" }}>Paste the query list or upload files from <b className="ws-cyan">THUNGHIEM-bo-de-thi</b>. The app searches top keyframes for every query and packs one BTC-ready <b>submission.zip</b>.</p>
 
           <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
             <button 
@@ -232,7 +249,7 @@ export default function BatchQueryModal({ open, onClose, toast }) {
           <div className="ws-field">
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
               <label className="ws-field-label">Query content</label>
-              <span style={{ fontSize: 12, color: parsedQueries.length ? "#3fb950" : "#8b949e" }}>
+              <span style={{ fontSize: 12, color: parsedQueries.length ? "var(--ws-green)" : "var(--ws-muted)" }}>
                 {parsedQueries.length > 0 ? `${parsedQueries.length} queries detected` : "No queries"}
               </span>
             </div>
@@ -240,13 +257,13 @@ export default function BatchQueryModal({ open, onClose, toast }) {
               style={{
                 width: "100%",
                 height: 160,
-                background: "#0d1117",
-                color: "#c9d1d9",
-                border: "1px solid #30363d",
-                borderRadius: 6,
+                background: "var(--ws-surface)",
+                color: "var(--ws-text)",
+                border: "1px solid var(--ws-border-strong)",
+                borderRadius: 8,
                 padding: "8px 12px",
                 fontSize: 12,
-                fontFamily: "monospace",
+                fontFamily: "\"JetBrains Mono\", ui-monospace, Menlo, Consolas, monospace",
                 resize: "vertical"
               }}
               placeholder={`Example:\nquery-p1-1-kis: private spacecraft launch intro...\nquery-p1-2-kis: ambulance passing an intersection...\n...`}
@@ -280,33 +297,33 @@ export default function BatchQueryModal({ open, onClose, toast }) {
           </div>
 
           {running && (
-            <div style={{ background: "#161b22", padding: 12, borderRadius: 6, marginBottom: 16, border: "1px solid #30363d" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, color: "#58a6ff" }}>
+            <div style={{ background: "var(--ws-surface-2)", padding: 12, borderRadius: 8, marginBottom: 16, border: "1px solid var(--ws-border)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, color: "var(--ws-primary)" }}>
                 <LoadingOutlined spin /> <b>{progress.status}</b>
               </div>
-              <div style={{ background: "#21262d", height: 8, borderRadius: 4, overflow: "hidden" }}>
-                <div 
-                  style={{ 
-                    background: "#238636", 
-                    height: "100%", 
+              <div style={{ background: "var(--ws-border)", height: 8, borderRadius: 4, overflow: "hidden" }}>
+                <div
+                  style={{
+                    background: "var(--ws-primary)",
+                    height: "100%",
                     width: `${progress.total > 0 ? (progress.current / progress.total) * 100 : 0}%`,
                     transition: "width 0.3s ease"
-                  }} 
+                  }}
                 />
               </div>
             </div>
           )}
 
           {resultsSummary && (
-            <div style={{ background: "#0d1117", padding: 10, borderRadius: 6, marginBottom: 16, border: "1px solid #238636" }}>
-              <div style={{ color: "#3fb950", fontWeight: "bold", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
+            <div style={{ background: "var(--ws-surface-2)", padding: 10, borderRadius: 8, marginBottom: 16, border: "1px solid var(--ws-green)" }}>
+              <div style={{ color: "var(--ws-green)", fontWeight: "bold", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
                 <CheckCircleOutlined /> Finished {resultsSummary.length} queries and exported {zipName}.
               </div>
-              <div style={{ maxHeight: 120, overflowY: "auto", fontSize: 11, color: "#8b949e" }}>
+              <div style={{ maxHeight: 120, overflowY: "auto", fontSize: 11, color: "var(--ws-muted)" }}>
                 {resultsSummary.map((s, idx) => (
-                  <div key={idx} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0", borderBottom: "1px solid #21262d" }}>
+                  <div key={idx} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0", borderBottom: "1px solid var(--ws-border)" }}>
                     <span><b>{s.name}</b> ({s.type.toUpperCase()}): {s.count} frames</span>
-                    <span style={{ color: "#58a6ff" }}>{s.preview}</span>
+                    <span className="ws-cyan">{s.preview}</span>
                   </div>
                 ))}
               </div>
@@ -314,10 +331,9 @@ export default function BatchQueryModal({ open, onClose, toast }) {
           )}
 
           <div className="ws-runbar">
-            <button 
-              className="ws-btn primary" 
-              style={{ background: "#238636", borderColor: "#2ea043" }}
-              onClick={handleRunBatch} 
+            <button
+              className="ws-btn primary"
+              onClick={handleRunBatch}
               disabled={running || !parsedQueries.length}
             >
               {running ? <><LoadingOutlined spin /> Searching...</> : <><DownloadOutlined /> Run All & Export ZIP ({parsedQueries.length} Queries)</>}

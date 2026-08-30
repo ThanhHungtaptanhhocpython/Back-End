@@ -2,10 +2,12 @@ import { useRef } from "react";
 import { SearchOutlined, UploadOutlined, VideoCameraOutlined } from "@ant-design/icons";
 import { SEARCH_TYPES } from "../../shared/constants";
 import Keycap from "../../components/Keycap";
+import TemporalEditor from "./TemporalEditor";
 
 export default function SearchBar({ tab, onPatch, onRun, onAgentRun, searchRef, toast }) {
   const fileRef = useRef(null);
   const isImage = tab.searchType === "IMAGE";
+  const isTemporal = tab.searchType === "TEMPORAL";
   return (
     <div className="ws-searchbar">
       <div className="ws-panel-tag">
@@ -24,6 +26,17 @@ export default function SearchBar({ tab, onPatch, onRun, onAgentRun, searchRef, 
         ))}
       </div>
 
+      {isTemporal ? (
+        <>
+          <TemporalEditor tab={tab} onPatch={onPatch} onRun={onRun} />
+          <div className="ws-runbar">
+            <button className="ws-btn" onClick={onAgentRun} disabled={tab.status === "running" || !String(tab.query || "").trim()} title="Run AI Query Coordinator">
+              <SearchOutlined /> Agent Search
+            </button>
+          </div>
+        </>
+      ) : (
+      <>
       <div className="ws-query-wrap">
         <input
           ref={searchRef}
@@ -91,6 +104,8 @@ export default function SearchBar({ tab, onPatch, onRun, onAgentRun, searchRef, 
           <SearchOutlined /> Agent Search
         </button>
       </div>
+      </>
+      )}
     </div>
   );
 }

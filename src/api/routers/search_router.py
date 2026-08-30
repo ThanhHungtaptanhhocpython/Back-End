@@ -155,9 +155,17 @@ def handle_capture_similar_search(
 @router.post("/temporalsearch", response_model=BaseResponse)
 def handle_trake_search(request: TemporalSearchRequest):
     from src.services.user_service import GetImageDataTrakeSearch
-    
-    query_dicts = [{"query": ev.query} for ev in request.query]
-    
+
+    context = (request.context or "").strip()
+
+    def _fold(event_query: str) -> str:
+        text = (event_query or "").strip()
+        if not context or context.lower() in text.lower():
+            return text
+        return f"{context}\n{text}"
+
+    query_dicts = [{"query": _fold(ev.query)} for ev in request.query]
+
     res = GetImageDataTrakeSearch(query_dicts, top_results=request.topk)
     return BaseResponse(
         success=True,

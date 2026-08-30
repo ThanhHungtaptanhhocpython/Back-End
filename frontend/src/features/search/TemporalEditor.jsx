@@ -25,6 +25,7 @@ export default function TemporalEditor({ tab, onPatch, onRun }) {
   const [context, setContext] = useState("");
   const [events, setEvents] = useState([""]);
   const lastSerialized = useRef(null);
+  const eventRefs = useRef([]);
 
   // Re-hydrate from `tab.query` only when it changed outside this editor
   // (tab switch, "Split into events", programmatic set).
@@ -36,6 +37,23 @@ export default function TemporalEditor({ tab, onPatch, onRun }) {
     setEvents(parsed.events.length ? parsed.events : [""]);
     lastSerialized.current = incoming;
   }, [tab?.query]);
+
+  // A tab opened from the Translate panel with a single event: make sure an
+  // empty Event 2 box exists and focus it so the user can finish the pair.
+  // No request is sent until they add a second event.
+  useEffect(() => {
+    if (!tab?.needsSecondEvent) return;
+    setEvents((prev) =>
+      prev.filter((event) => String(event || "").trim()).length >= MIN_TEMPORAL_EVENTS ? prev : [...prev, ""],
+    );
+    // Focus Event 2, then clear the one-shot flag (clearing it re-renders, so it
+    // must happen after the focus, not synchronously in this effect).
+    const timer = setTimeout(() => {
+      eventRefs.current[1]?.focus?.();
+      onPatch({ needsSecondEvent: false });
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [tab?.needsSecondEvent, tab?.key]);
 
   const push = (nextContext, nextEvents) => {
     const serialized = serializeTemporalQuery({ context: nextContext, events: nextEvents });
@@ -112,6 +130,9 @@ export default function TemporalEditor({ tab, onPatch, onRun }) {
           <div className="ws-temporal-event" key={index}>
             <span className="ws-temporal-badge">E{index + 1}</span>
             <textarea
+              ref={(el) => {
+                eventRefs.current[index] = el;
+              }}
               rows={2}
               value={event}
               placeholder={`Khoảnh khắc sự kiện ${index + 1}`}

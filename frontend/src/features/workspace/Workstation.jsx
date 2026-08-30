@@ -17,6 +17,7 @@ import ResultGrid from "../results/ResultGrid";
 import TemporalStoryboard from "../results/TemporalStoryboard";
 import { reindexTemporalSequences } from "../../shared/temporalNormalize";
 import { isRunnableTemporalQuery, parseTemporalQuery } from "../../shared/temporalQuery";
+import { planTranslationTarget } from "../../shared/translationTarget";
 import SelectionTray from "../selection/SelectionTray";
 import ReviewOverlay from "../review/ReviewOverlay";
 import ChatPanel, { ChatFocus } from "../chat/ChatPanel";
@@ -621,15 +622,27 @@ export default function Workstation() {
     }
   };
 
-  const useTranslatedInSearch = (text) => {
-    const query = text.trim();
-    if (!query) return;
-    const tab = tabs.find((t) => t.key === activeKey);
-    if (!tab) return;
-    const nextTab = { ...tab, query };
-    setTabs((prev) => prev.map((t) => (t.key === activeKey ? nextTab : t)));
-    runSearch(nextTab, nextTab.pivotItem);
-    toast.info("Query updated from translated text");
+  /* Translate panel -> "Use as query" menu. Every destination opens a NEW tab;
+     the tab currently on screen and its results are left untouched. */
+  const openTranslatedQueryTab = (text, destination) => {
+    const plan = planTranslationTarget(text, destination);
+    if (!plan) {
+      toast.error("Translate a query first, then pick a destination.");
+      return;
+    }
+    const fresh = makeTab();
+    fresh.searchType = plan.searchType;
+    fresh.query = plan.query;
+    fresh.label = `${plan.tabLabel} ${String(tabSeq).padStart(2, "0")}`;
+    if (plan.needsSecondEvent) fresh.needsSecondEvent = true;
+    setTabs((prev) => [...prev, fresh]);
+    setActiveKey(fresh.key);
+    setFocusedId(null);
+    if (plan.run) {
+      runSearch(fresh, null);
+    } else {
+      toast.info(plan.note);
+    }
   };
 
   const useTranslatedInChat = (text) => {
@@ -883,7 +896,7 @@ export default function Workstation() {
             onToggleOpen={() => setChatOpen(false)}
             onExpand={expandChat}
             onStartResize={startChatResize}
-            onUseInSearch={useTranslatedInSearch}
+            onUseInSearch={openTranslatedQueryTab}
             onUseInChat={useTranslatedInChat}
             agentMessages={agentSearchMsgs}
             agentStatus={agentSearchStatus}

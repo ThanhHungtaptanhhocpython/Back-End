@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { Dropdown } from "antd";
 import {
   CloseOutlined,
   CopyOutlined,
+  DownOutlined,
   EditOutlined,
   ExpandOutlined,
   MessageOutlined,
@@ -12,6 +14,7 @@ import {
   VideoCameraOutlined,
 } from "@ant-design/icons";
 import { translateTextDetailed } from "../../services/translateService";
+import { canTargetTranslation, TRANSLATION_TARGETS } from "../../shared/translationTarget";
 import useDialogFocus from "../../hooks/useDialogFocus";
 
 async function copyText(text) {
@@ -287,7 +290,7 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
 
   const out = override !== null ? override : translated;
   const showOut = src.trim() !== "";
-  const canUseAsQuery = Boolean(out.trim()) && (translationLive || override !== null);
+  const canUseAsQuery = canTargetTranslation({ text: out, live: translationLive, edited: override !== null });
 
   const translationBadge = translating
     ? "LIVE..."
@@ -416,14 +419,22 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
             <button className="ws-btn small" onClick={() => copy(editing ? editBuf : out)} title="Copy translated text">
               <CopyOutlined /> Copy
             </button>
-            <button
-              className="ws-btn small"
-              onClick={() => onUseInSearch(editing ? editBuf : out)}
+            <Dropdown
+              trigger={["click"]}
               disabled={!canUseAsQuery}
-              title={canUseAsQuery ? "Use translated text as search query" : "Translation is unavailable. Edit it into the target language before searching."}
+              menu={{
+                items: TRANSLATION_TARGETS.map((t) => ({ key: t.value, label: t.label })),
+                onClick: ({ key }) => onUseInSearch(editing ? editBuf : out, key),
+              }}
             >
-              <SearchOutlined /> Use as query
-            </button>
+              <button
+                className="ws-btn small"
+                disabled={!canUseAsQuery}
+                title={canUseAsQuery ? "Open the translated text in a new Text, Q&A, or Temporal tab" : "Translation is unavailable. Edit it into the target language before searching."}
+              >
+                <SearchOutlined /> Use as query <DownOutlined />
+              </button>
+            </Dropdown>
             <button className="ws-btn small" onClick={() => onUseInChat(editing ? editBuf : out)} title="Send translated text to the copilot">
               <MessageOutlined /> Use as prompt
             </button>

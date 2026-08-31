@@ -158,6 +158,28 @@
   color: #dc2626;
 }
 
+.set-explainer {
+  margin-bottom: 16px;
+  background: #fff;
+}
+.set-explainer-body :is(p, li) {
+  font-size: 13px;
+}
+.set-explainer-list {
+  margin: 0 0 12px;
+  padding-left: 20px;
+}
+.set-explainer-list li {
+  margin-bottom: 6px;
+  color: #475569;
+}
+.set-explainer code {
+  background: #f1f5f9;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
 .set-picker-list {
   border: 1px solid #e2e8f0;
   border-radius: 8px;

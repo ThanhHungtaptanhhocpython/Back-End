@@ -1,9 +1,84 @@
 import { useEffect, useState } from "react";
-import { Alert, Button, Space, Spin, Table, Tag, Typography, message } from "antd";
+import { Alert, Button, Collapse, Space, Spin, Table, Tag, Typography, message } from "antd";
 
 import { discoverModels, fetchProviders, testProvider } from "../../services/settingsApi.js";
 
-const { Text } = Typography;
+const { Text, Paragraph } = Typography;
+
+function ProviderExplainer({ gatewayEnabled }) {
+  return (
+    <Collapse
+      className="set-explainer"
+      defaultActiveKey={gatewayEnabled ? [] : ["what"]}
+      items={[
+        {
+          key: "what",
+          label: "What do AI providers do for this app?",
+          children: (
+            <div className="set-explainer-body">
+              <Paragraph>
+                The app runs <b>fully without any AI provider</b>: visual search (BEiT3),
+                keyframe browsing, OCR/ASR (Elasticsearch), TRAKE and CSV export all work
+                locally. Providers are optional and only power the language / vision steps
+                below. When the gateway is off, or every provider in a chain fails, the app
+                falls back to local behaviour — never a hard error.
+              </Paragraph>
+
+              <Paragraph>
+                <b>Text chain</b> — <code>AI_TEXT_PRIORITY</code>. Tried in order for:
+              </Paragraph>
+              <ul className="set-explainer-list">
+                <li>
+                  <b>Query translation</b> (<code>/users/translate</code>): Vietnamese → English
+                  for the search box. Order: Google Translate → Text chain → keep your original
+                  text (honest failure, never a silent echo).
+                </li>
+                <li>
+                  <b>Agent Search planner</b>: turns a vague description into rich English scene
+                  queries + a visual checklist before retrieval. Failure → the deterministic
+                  local planner.
+                </li>
+              </ul>
+
+              <Paragraph>
+                <b>Vision chain</b> — <code>AI_VISION_PRIORITY</code>. Tried in order for:
+              </Paragraph>
+              <ul className="set-explainer-list">
+                <li>
+                  <b>Grounded video Q&amp;A</b>: reads the retrieved keyframes to answer a
+                  question with a confidence score. Failure → a non-VLM “uncertain” result
+                  with a clear status.
+                </li>
+                <li>
+                  <b>Agent Search VLM verifier</b>: looks at the top candidate frames and
+                  re-scores / reranks them for visual match. Failure → retrieval order kept.
+                </li>
+                <li>
+                  <b>TRAKE verifier</b>: checks ordered-event sequences frame by frame.
+                </li>
+              </ul>
+
+              <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                Fallover triggers on timeout, rate limit / quota, unknown model, or upstream
+                error. API keys stay entirely server-side — this screen only shows
+                configured / not-configured. Model IDs are never hard-coded: set them per
+                provider and confirm with <b>Test</b>. Free tiers (e.g. NVIDIA NIM) are fine
+                for prototyping but rate-limited.
+              </Paragraph>
+
+              <Paragraph style={{ marginTop: 12, marginBottom: 0 }}>
+                <b>To enable:</b> in <i>Configuration → AI</i>, turn on a provider, add its API
+                key + text/vision model, put its id in <code>AI_TEXT_PRIORITY</code> /
+                <code> AI_VISION_PRIORITY</code>, set <code>AI_GATEWAY_ENABLED = true</code>,
+                then Save &amp; Restart.
+              </Paragraph>
+            </div>
+          ),
+        },
+      ]}
+    />
+  );
+}
 
 export default function ProvidersTab({ active }) {
   const [data, setData] = useState(null);
@@ -117,6 +192,7 @@ export default function ProvidersTab({ active }) {
 
   return (
     <div>
+      <ProviderExplainer gatewayEnabled={data.gateway_enabled} />
       <Alert
         type={data.gateway_enabled ? "success" : "info"}
         showIcon

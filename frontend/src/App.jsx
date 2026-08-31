@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
-import { App as AntApp, Button, ConfigProvider, theme } from "antd";
-import { SettingOutlined } from "@ant-design/icons";
+import { App as AntApp, ConfigProvider, theme } from "antd";
 import Workstation from "./features/workspace/Workstation";
 import SettingsPage from "./features/settings/SettingsPage";
 import "./styles/tokens.css";
@@ -37,35 +36,18 @@ function useSettingsRoute() {
   return [
     open,
     () => {
-      window.location.hash = SETTINGS_HASH;
-    },
-    () => {
       if (window.location.hash.startsWith(SETTINGS_HASH)) window.location.hash = "";
     },
   ];
 }
 
 export default function App() {
-  const [settingsOpen, openSettings, closeSettings] = useSettingsRoute();
+  const [settingsOpen, closeSettings] = useSettingsRoute();
 
   return (
     <ConfigProvider theme={lightTheme}>
       <AntApp>
-        {settingsOpen ? (
-          <SettingsPage onClose={closeSettings} />
-        ) : (
-          <>
-            <Workstation />
-            <Button
-              className="app-settings-fab"
-              icon={<SettingOutlined />}
-              onClick={openSettings}
-              title="Settings"
-            >
-              Settings
-            </Button>
-          </>
-        )}
+        {settingsOpen ? <SettingsPage onClose={closeSettings} /> : <Workstation />}
       </AntApp>
     </ConfigProvider>
   );

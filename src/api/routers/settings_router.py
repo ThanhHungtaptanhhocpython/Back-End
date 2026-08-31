@@ -22,11 +22,18 @@ from src.schemas.settings import (
     ConfigUpdateRequest,
     ConfigUpdateResponse,
     GenericResponse,
+    ProviderTestRequest,
     RestartRequest,
     ValidateRequest,
     ValidateResponse,
 )
 from src.services import launcher_control
+
+# 1x1 red pixel, used only to exercise a provider's vision path during Test.
+_TEST_IMAGE_DATA_URL = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
 
 logger = logging.getLogger(__name__)
 
@@ -250,3 +257,89 @@ def trigger_restart(payload: RestartRequest | None = None) -> GenericResponse:
         detail="Restart requested." if running else "launcher_not_running",
         data={"launcher_running": running},
     )
+
+
+# ---------------------------------------------------------------------------
+# AI provider gateway
+# ---------------------------------------------------------------------------
+@router.get("/providers")
+def list_providers() -> dict:
+    from src.services.ai import registry
+
+    settings = get_settings()
+    return {
+        "gateway_enabled": bool(settings.ai_gateway_enabled),
+        "local_fallback_enabled": bool(settings.ai_local_fallback_enabled),
+        "text_priority": settings.get_ai_text_priority(),
+        "vision_priority": settings.get_ai_vision_priority(),
+        "text_chain": [p.id for p in registry.text_chain(settings)],
+        "vision_chain": [p.id for p in registry.vision_chain(settings)],
+        "providers": registry.provider_status(settings),
+    }
+
+
+@router.get("/providers/{provider_id}/models")
+def discover_models(provider_id: str) -> dict:
+    from src.services.ai import registry
+    from src.services.ai.base import ProviderError
+
+    provider = registry.build_provider(provider_id, get_settings())
+    if provider is None:
+        raise HTTPException(status_code=404, detail=f"Unknown provider '{provider_id}'.")
+    try:
+        models = provider.list_models()
+        return {"ok": True, "provider": provider_id, "models": models}
+    except ProviderError as exc:
+        return {"ok": False, "provider": provider_id, "models": [],
+                "category": exc.category, "detail": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "provider": provider_id, "models": [],
+                "category": "network", "detail": type(exc).__name__}
+
+
+@router.post("/providers/{provider_id}/test")
+def test_provider(provider_id: str, payload: ProviderTestRequest | None = None) -> dict:
+    from src.services.ai import registry
+    from src.services.ai.base import ProviderError
+
+    payload = payload or ProviderTestRequest()
+    vision = (payload.mode or "text").lower() == "vision"
+    provider = registry.build_provider(provider_id, get_settings())
+    if provider is None:
+        raise HTTPException(status_code=404, detail=f"Unknown provider '{provider_id}'.")
+    if not provider.is_configured():
+        return {"ok": False, "provider": provider_id, "category": "not_configured",
+                "detail": "Missing API key" + (
+                    " / " + ", ".join(provider.missing_requirements)
+                    if provider.missing_requirements else ""),
+                "missing_requirements": list(provider.missing_requirements)}
+    model = provider.model_for(vision)
+    if not model:
+        return {"ok": False, "provider": provider_id, "category": "model_unavailable",
+                "detail": f"No {'vision' if vision else 'text'} model configured."}
+
+    prompt = (payload.prompt or "").strip() or "Reply with the single word: pong"
+    if vision:
+        content = [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": _TEST_IMAGE_DATA_URL}},
+        ]
+        messages = [{"role": "user", "content": content}]
+    else:
+        messages = [{"role": "user", "content": prompt}]
+
+    try:
+        result = provider.chat_text(messages, vision=vision, max_tokens=24, temperature=0.0)
+    except ProviderError as exc:
+        return {"ok": False, "provider": provider_id, "model": model,
+                "category": exc.category, "detail": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "provider": provider_id, "model": model,
+                "category": "network", "detail": type(exc).__name__}
+    return {
+        "ok": True,
+        "provider": provider_id,
+        "model": result.model,
+        "latency_ms": result.latency_ms,
+        "sample": result.text[:200],
+    }

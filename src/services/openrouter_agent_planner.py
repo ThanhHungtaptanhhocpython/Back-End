@@ -235,37 +235,69 @@ def _normalise_llm_plan(payload: Dict[str, Any], prompt: str, local_plan: Dict[s
     }
 
 
+def _plan_with_gateway(settings, user_prompt: str) -> str:
+    """Run the planner prompt through the multi-provider Text chain.
+
+    Returns the raw model text, or ``""`` when the gateway is disabled, has no
+    usable Text provider, or every provider failed.
+    """
+    if not settings.ai_gateway_enabled:
+        return ""
+    try:
+        from src.services.ai import gateway as ai_gateway
+    except Exception:
+        return ""
+    if not ai_gateway.text_available(settings):
+        return ""
+    try:
+        result, _attempts = ai_gateway.text_completion(
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            settings=settings,
+            max_tokens=settings.agent_llm_max_tokens,
+            response_format={"type": "json_object"},
+        )
+    except Exception as exc:
+        logger.warning("Agent LLM planner gateway exhausted; using local fallback: %s", exc)
+        return ""
+    return result.text or ""
+
+
 def plan_agent_query_with_openrouter(prompt: str, local_plan: Dict[str, Any]) -> Dict[str, Any]:
     settings = get_settings()
-    if not settings.agent_llm_enabled or not settings.openrouter_api_key:
+    if not settings.agent_llm_enabled:
         return {}
 
-    try:
-        from langchain_openai import ChatOpenAI
-    except Exception as exc:
-        logger.warning("Agent LLM planner unavailable: %s", exc)
-        return {}
-
-    model_name = settings.agent_llm_model or settings.openrouter_model
     user_prompt = USER_TEMPLATE.format(prompt=_clean(prompt), local_summary=_local_summary(local_plan))
 
     try:
-        llm = ChatOpenAI(
-            model=model_name,
-            temperature=0,
-            api_key=settings.openrouter_api_key,
-            max_tokens=settings.agent_llm_max_tokens,
-            base_url=settings.openrouter_base_url,
-            default_headers={
-                "HTTP-Referer": settings.openrouter_site_url,
-                "X-Title": settings.openrouter_app_name,
-            },
-        )
-        response = llm.invoke([
-            ("system", SYSTEM_PROMPT),
-            ("user", user_prompt),
-        ])
-        payload = _extract_json_object(getattr(response, "content", response))
+        raw_text = _plan_with_gateway(settings, user_prompt)
+        if not raw_text:
+            if not settings.openrouter_api_key:
+                return {}
+            from langchain_openai import ChatOpenAI
+
+            model_name = settings.agent_llm_model or settings.openrouter_model
+            llm = ChatOpenAI(
+                model=model_name,
+                temperature=0,
+                api_key=settings.openrouter_api_key,
+                max_tokens=settings.agent_llm_max_tokens,
+                base_url=settings.openrouter_base_url,
+                default_headers={
+                    "HTTP-Referer": settings.openrouter_site_url,
+                    "X-Title": settings.openrouter_app_name,
+                },
+            )
+            response = llm.invoke([
+                ("system", SYSTEM_PROMPT),
+                ("user", user_prompt),
+            ])
+            raw_text = getattr(response, "content", response)
+
+        payload = _extract_json_object(raw_text)
         plan = _normalise_llm_plan(payload, prompt, local_plan)
         if plan:
             return plan

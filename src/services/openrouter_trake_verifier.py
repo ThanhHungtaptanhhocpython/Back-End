@@ -70,8 +70,30 @@ def _clean(value: Any) -> str:
     return " ".join(str(value or "").strip().split())
 
 
+def _request_via_gateway(messages: List[Dict[str, Any]], max_tokens: int) -> Dict[str, Any]:
+    from src.services.ai import gateway as ai_gateway
+    from src.services.ai.base import AllProvidersFailed
+
+    try:
+        payload, _attempts, _provider = ai_gateway.vision_completion(
+            messages,
+            max_tokens=max_tokens,
+            response_format={"type": "json_schema", "json_schema": JSON_SCHEMA},
+        )
+    except AllProvidersFailed as exc:
+        raise urllib.error.URLError(f"vision chain exhausted: {exc}") from exc
+    content = (((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
+    if isinstance(content, list):
+        content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+    return _extract_json_object(content)
+
+
 def _request(messages: List[Dict[str, Any]], model: str, timeout: float, max_tokens: int) -> Dict[str, Any]:
     settings = get_settings()
+    from src.services.openrouter_vlm_verifier import vision_gateway_available
+
+    if vision_gateway_available(settings):
+        return _request_via_gateway(messages, max_tokens)
     body = {
         "model": model,
         "temperature": 0,
@@ -164,10 +186,13 @@ def verify_trake_sequences(
     resolve_image_path: Callable[[Dict], str],
 ) -> Tuple[List[Dict], Dict[str, Any]]:
     settings = get_settings()
+    from src.services.openrouter_vlm_verifier import vision_gateway_available
+
+    _vlm_ready = bool(settings.openrouter_api_key) or vision_gateway_available(settings)
     if (
         not settings.trake_vlm_enabled
         or not settings.agent_vlm_enabled
-        or not settings.openrouter_api_key
+        or not _vlm_ready
         or not sequences
         or not events
     ):

@@ -161,3 +161,67 @@ class TestConfigWrites:
 
     def test_restore_missing_revision_404(self, enabled_store) -> None:
         assert _client().post("/settings/revisions/99999/restore").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# AI provider endpoints
+# ---------------------------------------------------------------------------
+class TestProviderEndpoints:
+    @pytest.fixture()
+    def gateway_settings(self, monkeypatch: pytest.MonkeyPatch):
+        from src.api.routers import settings_router
+        from src.config.settings import Settings
+        from src.services.ai import openai_compatible
+
+        s = Settings(
+            _env_file=None,
+            ai_gateway_enabled=True,
+            groq_enabled=True, groq_api_key="k-groq", groq_text_model="groq-t", groq_vision_model="groq-v",
+            nim_enabled=True, nim_api_key="k-nim", nim_text_model="nim-t",
+            cloudflare_enabled=True, cloudflare_api_key="k-cf", cloudflare_text_model="cf-t",
+            ai_text_priority="groq,nim", ai_vision_priority="groq",
+        )
+        monkeypatch.setattr(settings_router, "get_settings", lambda: s)
+
+        class _T:
+            def __init__(self):
+                self.calls = []
+
+            def request(self, method, url, headers, body, timeout):
+                self.calls.append((method, url))
+                import json as _j
+                if url.endswith("/models"):
+                    return 200, _j.dumps({"data": [{"id": "z"}, {"id": "a"}]})
+                return 200, _j.dumps({"choices": [{"message": {"content": "pong"}}]})
+
+        prev = openai_compatible._TRANSPORT
+        openai_compatible.set_transport(_T())
+        yield s
+        openai_compatible.set_transport(prev)
+
+    def test_list_providers_reports_chains(self, gateway_settings) -> None:
+        body = _client().get("/settings/providers").json()
+        assert body["gateway_enabled"] is True
+        assert body["text_chain"] == ["groq", "nim"]
+        assert body["vision_chain"] == ["groq"]
+        cf = next(p for p in body["providers"] if p["id"] == "cloudflare")
+        assert cf["configured"] is False and cf["missing_requirements"] == ["CLOUDFLARE_ACCOUNT_ID"]
+
+    def test_provider_test_text_ok(self, gateway_settings) -> None:
+        body = _client().post("/settings/providers/groq/test", json={"mode": "text"}).json()
+        assert body["ok"] is True and body["model"] == "groq-t" and body["sample"] == "pong"
+
+    def test_provider_test_vision_without_model(self, gateway_settings) -> None:
+        body = _client().post("/settings/providers/nim/test", json={"mode": "vision"}).json()
+        assert body["ok"] is False and body["category"] == "model_unavailable"
+
+    def test_provider_test_unconfigured(self, gateway_settings) -> None:
+        body = _client().post("/settings/providers/cloudflare/test", json={"mode": "text"}).json()
+        assert body["ok"] is False and body["category"] == "not_configured"
+
+    def test_models_discovery(self, gateway_settings) -> None:
+        body = _client().get("/settings/providers/groq/models").json()
+        assert body["ok"] is True and body["models"] == ["a", "z"]
+
+    def test_unknown_provider_404(self, gateway_settings) -> None:
+        assert _client().post("/settings/providers/nope/test").status_code == 404

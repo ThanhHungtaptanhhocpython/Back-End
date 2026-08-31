@@ -106,6 +106,49 @@ class Translation():
             )
             return ""
 
+    _TRANSLATE_SYSTEM_PROMPT = (
+        "You are a translation engine for video retrieval. Return only a complete "
+        "translation, with no notes, quotes, markdown, or explanations. Preserve "
+        "event order, subjects, actions, time references, and spatial relations. "
+        "Translate Vietnamese 'dung duoi nuoc' as 'standing in the water' unless the "
+        "source explicitly says the person is submerged or diving."
+    )
+
+    def _translate_with_gateway(self, text: str) -> tuple[str, str]:
+        """Multi-provider Text chain. Returns (translation, provider_id).
+
+        ``("", "")`` when the gateway is disabled, has no usable Text provider,
+        or every provider failed.
+        """
+        from src.config.settings import get_settings
+
+        settings = get_settings()
+        if not settings.ai_gateway_enabled:
+            return "", ""
+        try:
+            from src.services.ai import gateway as ai_gateway
+        except Exception:
+            return "", ""
+        if not ai_gateway.text_available(settings):
+            return "", ""
+        messages = [
+            {"role": "system", "content": self._TRANSLATE_SYSTEM_PROMPT},
+            {"role": "user", "content": f"Translate from {self.__from_lang} to {self.__to_lang}:\n{text}"},
+        ]
+        try:
+            result, _attempts = ai_gateway.text_completion(
+                messages,
+                settings=settings,
+                max_tokens=settings.openrouter_translate_max_tokens,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Translation gateway exhausted (provider chain, error=%s)",
+                type(exc).__name__,
+            )
+            return "", ""
+        return (result.text or "").strip(), result.provider
+
     def _translate_with_openrouter(self, text: str) -> str:
         from src.config.settings import get_settings
 
@@ -191,7 +234,22 @@ class Translation():
             self._cache[cache_key] = google_text
             return TranslationResult(google_text, True, "google", TRANSLATION_OK)
 
-        # 2) Optional fallback provider -- only if configured.
+        # 2a) Multi-provider Text chain (translation + Agent planner), when the
+        #     AI gateway is enabled. Reports the provider that actually answered.
+        gateway_text, gateway_provider = "", ""
+        try:
+            gateway_text, gateway_provider = self._translate_with_gateway(cleaned)
+        except Exception as exc:
+            logger.warning(
+                "Translation gateway error (error=%s)", type(exc).__name__
+            )
+        if self._is_real_translation(gateway_text, cleaned):
+            self._cache[cache_key] = gateway_text
+            return TranslationResult(
+                gateway_text, True, gateway_provider or "gateway", TRANSLATION_OK
+            )
+
+        # 2b) Single-provider OpenRouter fallback -- only if configured.
         try:
             fallback = (self._translate_with_openrouter(cleaned) or "").strip()
         except Exception as exc:
@@ -207,8 +265,9 @@ class Translation():
         # 3) Nothing produced a usable translation. Report a structured failure:
         # never cache it, never claim success, keep the original text for the UI.
         logger.warning(
-            "Translation unavailable (providers tried: google=%s, openrouter=%s)",
+            "Translation unavailable (providers tried: google=%s, gateway=%s, openrouter=%s)",
             "returned" if google_text else "empty/failed",
+            "returned" if gateway_text else "empty/failed/not-configured",
             "returned" if fallback else "empty/failed/not-configured",
         )
         return TranslationResult(

@@ -209,8 +209,30 @@ def _select_frames(candidates: List[Dict[str, Any]], limit: int, per_video_limit
     return selected
 
 
+def _request_answer_via_gateway(messages: List[Dict[str, Any]], max_tokens: int) -> Dict[str, Any]:
+    from src.services.ai import gateway as ai_gateway
+    from src.services.ai.base import AllProvidersFailed
+
+    try:
+        payload, _attempts, _provider = ai_gateway.vision_completion(
+            messages,
+            max_tokens=max_tokens,
+            response_format={"type": "json_schema", "json_schema": ANSWER_SCHEMA},
+        )
+    except AllProvidersFailed as exc:
+        raise urllib.error.URLError(f"vision chain exhausted: {exc}") from exc
+    content = (((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
+    if isinstance(content, list):
+        content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+    return _extract_json_object(content)
+
+
 def _request_answer(messages: List[Dict[str, Any]], model: str, timeout: float, max_tokens: int) -> Dict[str, Any]:
     settings = get_settings()
+    from src.services.openrouter_vlm_verifier import vision_gateway_available
+
+    if vision_gateway_available(settings):
+        return _request_answer_via_gateway(messages, max_tokens)
     body = {
         "model": model,
         "temperature": 0,
@@ -330,7 +352,10 @@ def grounded_video_qa(question: str, top_k: int) -> Tuple[List[Dict[str, Any]], 
     errors: List[str] = []
     retries = 0
 
-    if settings.qa_vlm_enabled and settings.agent_vlm_enabled and settings.openrouter_api_key and selected:
+    from src.services.openrouter_vlm_verifier import vision_gateway_available
+
+    _qa_vlm_ready = bool(settings.openrouter_api_key) or vision_gateway_available(settings)
+    if settings.qa_vlm_enabled and settings.agent_vlm_enabled and _qa_vlm_ready and selected:
         evidence_lines = []
         for modality in ("ocr", "asr"):
             for row in text_evidence[modality][: int(settings.qa_text_evidence_top_k)]:

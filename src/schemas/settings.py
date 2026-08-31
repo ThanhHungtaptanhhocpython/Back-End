@@ -44,6 +44,11 @@ class RestartRequest(BaseModel):
     reason: str = "manual"
 
 
+class ProviderTestRequest(BaseModel):
+    mode: str = "text"  # "text" | "vision"
+    prompt: str = ""
+
+
 class GenericResponse(BaseModel):
     ok: bool
     detail: str = ""

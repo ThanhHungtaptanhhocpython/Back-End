@@ -179,6 +179,19 @@ class TestConfigWrites:
         assert "sk-or-topsecret" not in detail.text
         assert detail.json()["secrets"]["OPENROUTER_API_KEY"] is True
 
+    def test_secret_pasted_with_env_quotes_is_stored_unquoted(self, enabled_store) -> None:
+        client = _client()
+        r = client.post(
+            "/settings/config",
+            json={"values": {}, "secret_set": {"AZURE_STORAGE_CONNECTION_STRING": '"Endp=1;X=2"'}},
+        )
+        assert r.status_code == 200, r.text
+        rev = r.json()["revision_id"]
+        stored = enabled_store.effective_values()["AZURE_STORAGE_CONNECTION_STRING"]
+        assert stored == "Endp=1;X=2"  # leading/trailing quotes stripped
+        assert "Endp=1;X=2" not in client.get(f"/settings/revisions/{rev}").text  # not leaked
+        assert client.get("/settings/config").json()["secrets"]["AZURE_STORAGE_CONNECTION_STRING"] is True
+
     def test_invalid_update_is_rejected_with_400(self, enabled_store) -> None:
         r = _client().post("/settings/config", json={"values": {"PORT": "-5"}})
         assert r.status_code == 400

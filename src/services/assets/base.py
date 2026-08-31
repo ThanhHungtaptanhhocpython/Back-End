@@ -85,6 +85,16 @@ class Manifest:
         }
 
 
+def err_detail(exc: BaseException, limit: int = 320) -> str:
+    """A short, human string for an SDK exception -- the type plus its message
+    (which for network errors usually names the host / underlying errno)."""
+    name = type(exc).__name__
+    msg = " ".join(str(exc).split())
+    if len(msg) > limit:
+        msg = msg[:limit] + "…"
+    return f"{name}: {msg}" if msg and msg != name else name
+
+
 @dataclass
 class ProbeResult:
     ok: bool

@@ -19,8 +19,24 @@ from src.services.assets.base import (
     AssetStoreError,
     Manifest,
     ProbeResult,
+    err_detail,
 )
 from src.services.assets.manifest import parse_manifest
+
+
+def _hint(detail: str) -> str:
+    low = detail.lower()
+    if '"' in detail or "'" in detail:
+        return " — the value may have been pasted with surrounding quotes; paste it without quotes."
+    if "getaddrinfo" in low or "name or service not known" in low or "nodename" in low or "resolve" in low:
+        return " — DNS could not resolve the storage host (check the account name and your network)."
+    if "certificate" in low or "ssl" in low or "tls" in low:
+        return " — TLS/certificate failure (a proxy or antivirus may be intercepting HTTPS)."
+    if "timed out" in low or "timeout" in low:
+        return " — the connection timed out (network / firewall)."
+    if "authenticationfailed" in low or "signature" in low or "403" in detail:
+        return " — the account key was rejected (wrong or rotated key)."
+    return ""
 
 
 class AzureBlobAssetStore(AssetStore):
@@ -70,10 +86,16 @@ class AzureBlobAssetStore(AssetStore):
         except AssetStoreError as exc:
             sdk = "not installed" not in str(exc)
             return ProbeResult(False, self.provider_id, detail=str(exc), sdk_available=sdk)
+        except Exception as exc:  # noqa: BLE001 - malformed connection string, etc.
+            detail = err_detail(exc)
+            return ProbeResult(False, self.provider_id, detail=f"client init failed: {detail}{_hint(detail)}")
         try:
             names = [c.name for c in service.list_containers()]
         except Exception as exc:  # noqa: BLE001
-            return ProbeResult(False, self.provider_id, detail=f"list_containers failed: {type(exc).__name__}")
+            detail = err_detail(exc)
+            return ProbeResult(
+                False, self.provider_id, detail=f"list_containers failed: {detail}{_hint(detail)}"
+            )
         manifest_present = False
         manifest_version = None
         try:
@@ -98,7 +120,9 @@ class AzureBlobAssetStore(AssetStore):
             blob = service.get_blob_client(container=self._real_container(container), blob=key)
             downloader = blob.download_blob()
         except Exception as exc:  # noqa: BLE001
-            raise AssetStoreError(f"azure download failed for {container}/{key}: {type(exc).__name__}") from exc
+            raise AssetStoreError(
+                f"azure download failed for {container}/{key}: {err_detail(exc)}"
+            ) from exc
         for chunk in downloader.chunks():
             yield chunk
 

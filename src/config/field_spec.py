@@ -512,6 +512,18 @@ class ValidationError(ValueError):
     pass
 
 
+def strip_wrapping_quotes(value: str) -> str:
+    """Drop one matching pair of leading/trailing quotes.
+
+    People paste values straight out of ``.env`` snippets (``KEY="value"``);
+    the quotes are shell/dotenv syntax, not part of the value.
+    """
+    v = value.strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in ("\"", "'"):
+        return v[1:-1]
+    return value
+
+
 def validate_value(spec: FieldSpec, raw: Any) -> str:
     """Return the normalised string form of ``raw`` for ``spec``.
 
@@ -521,6 +533,8 @@ def validate_value(spec: FieldSpec, raw: Any) -> str:
     if raw is None:
         return ""
     text = str(raw).strip()
+    if spec.kind not in (JSON, JSON_OBJECT):
+        text = strip_wrapping_quotes(text).strip()
     if text == "":
         return ""
 

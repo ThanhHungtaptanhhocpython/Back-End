@@ -19,6 +19,7 @@ from src.services.assets.base import (
     AssetStoreError,
     Manifest,
     ProbeResult,
+    err_detail,
 )
 from src.services.assets.manifest import parse_manifest
 
@@ -73,7 +74,7 @@ class S3AssetStore(AssetStore):
         try:
             s3.head_bucket(Bucket=self._bucket)
         except Exception as exc:  # noqa: BLE001
-            return ProbeResult(False, self.provider_id, detail=f"head_bucket failed: {type(exc).__name__}")
+            return ProbeResult(False, self.provider_id, detail=f"head_bucket failed: {err_detail(exc)}")
         manifest_present = False
         manifest_version = None
         try:

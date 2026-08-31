@@ -94,6 +94,18 @@ class TestFieldSpecValidation:
         spec = field_spec.by_key("PORT")
         assert field_spec.validate_value(spec, "") == ""
 
+    def test_wrapping_quotes_are_stripped(self) -> None:
+        assert field_spec.strip_wrapping_quotes('"core.windows.net"') == "core.windows.net"
+        assert field_spec.strip_wrapping_quotes("'x'") == "x"
+        assert field_spec.strip_wrapping_quotes('no quotes') == "no quotes"
+        assert field_spec.strip_wrapping_quotes('"mismatched') == '"mismatched'
+        # a pasted quoted URL / str normalises cleanly
+        assert field_spec.validate_value(field_spec.by_key("ELASTICSEARCH_URL"),
+                                         '"http://localhost:9200"') == "http://localhost:9200"
+        # JSON is left alone
+        assert field_spec.validate_value(field_spec.by_key("PLAYBACK_OFFSETS_JSON"),
+                                         '{"a": 1}') == '{"a":1}'
+
     def test_src_dir_is_locked(self) -> None:
         assert "SRC_DIR" in field_spec.locked_keys()
 

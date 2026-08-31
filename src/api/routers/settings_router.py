@@ -107,7 +107,8 @@ def _classify(values: dict[str, str], secrets: dict[str, str]):
         if spec is None or not spec.secret:
             errors[key] = f"{key} is not a known secret field."
             continue
-        secret_values[key] = "" if raw_val is None else str(raw_val)
+        # Tolerate values pasted from a .env snippet (KEY="value").
+        secret_values[key] = "" if raw_val is None else field_spec.strip_wrapping_quotes(str(raw_val))
 
     return normalized, secret_values, errors, unknown
 

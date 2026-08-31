@@ -27,6 +27,7 @@ from src.api.routers.health_router import router as health_router
 from src.api.routers.search_router import router as search_router
 from src.api.routers.chat_router import router as chat_router
 from src.api.routers.video_router import router as video_router
+from src.api.routers.settings_router import router as settings_router
 from src.api.middleware import RequestLoggingMiddleware, global_exception_handler
 from src.config.settings import get_settings
 
@@ -66,7 +67,9 @@ async def validation_exception_handler(
 ) -> JSONResponse:
     """Return a standard error response for Pydantic validation failures."""
     print(f"Validation Error: {exc.errors()}")
-    print(f"Request body: {await request.body()}")
+    # Never echo the body of a management-API request: it may carry secrets.
+    if not request.url.path.startswith(("/settings", "/users/settings")):
+        print(f"Request body: {await request.body()}")
     return JSONResponse(
         status_code=400,
         content={
@@ -95,6 +98,10 @@ app.include_router(search_router, prefix="")
 app.include_router(video_router, prefix="/users")
 app.include_router(video_router, prefix="")
 app.include_router(chat_router)
+# Local management API (loopback-only). Dual-prefixed like the search router so
+# it works whether or not the frontend API base URL ends in "/users".
+app.include_router(settings_router, prefix="/users")
+app.include_router(settings_router, prefix="")
 
 
 keyframes_root = settings.get_keyframes_root()

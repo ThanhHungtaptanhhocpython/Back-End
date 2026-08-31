@@ -73,6 +73,13 @@ def get_assets_cache_dir() -> Path:
     return path
 
 
+def get_control_dir() -> Path:
+    """Directory the launcher and the API use to exchange restart signals."""
+    path = get_app_data_dir() / "control"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def reset_cache() -> None:
     """Clear the memoised directory (tests that swap ``HCMAI_APP_DATA_DIR``)."""
     get_app_data_dir.cache_clear()

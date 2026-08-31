@@ -154,6 +154,16 @@ def resolve_keyframe_path(item: Dict[str, Any]) -> Path | None:
                 return candidate
         except OSError:
             continue
+
+    # Cloud-assets mode: fetch + LRU-cache the keyframe on demand.
+    try:
+        from src.services.assets import resolve_keyframe_file
+
+        cloud_file = resolve_keyframe_file(item)
+        if cloud_file is not None and cloud_file.is_file():
+            return cloud_file
+    except Exception:  # noqa: BLE001
+        pass
     return None
 
 

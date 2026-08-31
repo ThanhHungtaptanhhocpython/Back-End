@@ -267,6 +267,17 @@ async def serve_keyframe(image_path: str):
                 if all_frames:
                     return FileResponse(str(all_frames[0]))
 
+    # Last resort before the placeholder: if cloud assets are configured, fetch
+    # this keyframe on demand and LRU-cache it locally.
+    try:
+        from src.services.assets import resolve_keyframe_file
+
+        cloud_file = resolve_keyframe_file(image_path)
+        if cloud_file is not None and cloud_file.is_file():
+            return FileResponse(str(cloud_file))
+    except Exception:  # noqa: BLE001 - never let this break image serving
+        pass
+
     svg_content = _make_svg_placeholder(video_id, f"Frame {stem}")
     return Response(content=svg_content, media_type="image/svg+xml")
 

@@ -19,6 +19,8 @@ from src.config import field_spec
 from src.config.runtime_store import get_store, store_enabled
 from src.config.settings import get_settings
 from src.schemas.settings import (
+    CloudCacheClearRequest,
+    CloudSyncRequest,
     ConfigUpdateRequest,
     ConfigUpdateResponse,
     GenericResponse,
@@ -343,3 +345,135 @@ def test_provider(provider_id: str, payload: ProviderTestRequest | None = None) 
         "latency_ms": result.latency_ms,
         "sample": result.text[:200],
     }
+
+
+# ---------------------------------------------------------------------------
+# Cloud asset storage
+# ---------------------------------------------------------------------------
+def _importable(module: str) -> bool:
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec(module) is not None
+    except ModuleNotFoundError:
+        return False
+
+
+@router.get("/cloud/status")
+def cloud_status() -> dict:
+    from src.services import assets
+
+    settings = get_settings()
+    art = assets.get_artifact_cache(settings)
+    kf = assets.get_keyframe_cache(settings)
+    return {
+        "enabled": bool(settings.cloud_assets_enabled),
+        "provider": settings.cloud_assets_provider,
+        "active": assets.cloud_enabled(settings),
+        "manifest_key": settings.cloud_assets_manifest_key,
+        "sdk": {
+            "azure_blob": _importable("azure.storage.blob"),
+            "s3_compatible": _importable("boto3"),
+        },
+        "artifact_cache": art.stats(),
+        "keyframe_cache": kf.stats(),
+    }
+
+
+@router.post("/cloud/test")
+def cloud_test() -> dict:
+    from src.services import assets
+
+    settings = get_settings()
+    store = assets.build_asset_store(settings)
+    if store is None:
+        return {"ok": False, "detail": "Cloud assets are set to 'local' / disabled.",
+                "provider": settings.cloud_assets_provider}
+    try:
+        return store.probe().to_dict()
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "provider": store.provider_id, "detail": type(exc).__name__}
+
+
+@router.get("/cloud/manifest")
+def cloud_manifest(refresh: bool = False) -> dict:
+    from src.services import assets
+
+    settings = get_settings()
+    store = assets.build_asset_store(settings)
+    if store is None:
+        raise HTTPException(status_code=409, detail="Cloud assets are set to 'local' / disabled.")
+    try:
+        manifest = store.fetch_manifest() if refresh else (assets.get_manifest(store, force=refresh) or store.fetch_manifest())
+    except assets.ManifestError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid manifest: {exc}")
+    except assets.AssetStoreError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    cache = assets.get_artifact_cache(settings)
+    artifacts = []
+    for art in manifest.artifacts:
+        slot = cache.slot(manifest.version, art.name, expected_sha=art.sha256, expected_size=art.size)
+        artifacts.append(
+            {
+                **art.to_dict(),
+                "cached": slot.present,
+                "verified": slot.verified,
+                "local_path": str(slot.path) if slot.present else None,
+            }
+        )
+    return {
+        "version": manifest.version,
+        "generated_at": manifest.generated_at,
+        "keyframes": manifest.keyframes,
+        "current_version": cache.get_current(),
+        "artifacts": artifacts,
+    }
+
+
+@router.post("/cloud/sync")
+def cloud_sync(payload: CloudSyncRequest | None = None) -> dict:
+    from src.services import assets
+
+    payload = payload or CloudSyncRequest()
+    settings = get_settings()
+    store = assets.build_asset_store(settings)
+    if store is None:
+        raise HTTPException(status_code=409, detail="Cloud assets are set to 'local' / disabled.")
+    cache = assets.get_artifact_cache(settings)
+    try:
+        manifest = store.fetch_manifest()
+    except assets.ManifestError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid manifest: {exc}")
+    except assets.AssetStoreError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    report = assets.sync_artifacts(
+        store, cache, names=payload.names or None, manifest=manifest
+    )
+    return report.to_dict()
+
+
+@router.get("/cloud/cache")
+def cloud_cache() -> dict:
+    from src.services import assets
+
+    settings = get_settings()
+    return {
+        "artifact_cache": assets.get_artifact_cache(settings).stats(),
+        "keyframe_cache": assets.get_keyframe_cache(settings).stats(),
+    }
+
+
+@router.post("/cloud/cache/clear", response_model=GenericResponse)
+def cloud_cache_clear(payload: CloudCacheClearRequest | None = None) -> GenericResponse:
+    from src.services import assets
+
+    payload = payload or CloudCacheClearRequest()
+    scope = (payload.scope or "all").lower()
+    settings = get_settings()
+    freed = 0
+    if scope in ("artifacts", "all"):
+        freed += assets.get_artifact_cache(settings).clear()
+    if scope in ("keyframes", "all"):
+        freed += assets.get_keyframe_cache(settings).clear()
+    return GenericResponse(ok=True, detail=f"Cleared {scope} cache.", data={"freed_bytes": freed})

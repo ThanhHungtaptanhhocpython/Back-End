@@ -49,6 +49,15 @@ class ProviderTestRequest(BaseModel):
     prompt: str = ""
 
 
+class CloudSyncRequest(BaseModel):
+    names: list[str] = Field(default_factory=list)
+    refresh_manifest: bool = True
+
+
+class CloudCacheClearRequest(BaseModel):
+    scope: str = "all"  # "artifacts" | "keyframes" | "all"
+
+
 class GenericResponse(BaseModel):
     ok: bool
     detail: str = ""

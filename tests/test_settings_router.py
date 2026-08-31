@@ -225,3 +225,58 @@ class TestProviderEndpoints:
 
     def test_unknown_provider_404(self, gateway_settings) -> None:
         assert _client().post("/settings/providers/nope/test").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Cloud asset endpoints
+# ---------------------------------------------------------------------------
+class TestCloudEndpoints:
+    def test_status_reports_disabled_by_default(self) -> None:
+        body = _client().get("/settings/cloud/status").json()
+        assert body["enabled"] is False and body["active"] is False
+        assert "azure_blob" in body["sdk"] and "s3_compatible" in body["sdk"]
+
+    def test_test_and_manifest_conflict_when_local(self) -> None:
+        assert _client().post("/settings/cloud/test").json()["ok"] is False
+        assert _client().get("/settings/cloud/manifest").status_code == 409
+
+    def test_sync_and_manifest_with_fake_store(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import hashlib
+        import json as _json
+
+        from src.api.routers import settings_router
+        from src.config.settings import Settings
+        from src.services import assets as assets_mod
+        from tests.test_cloud_assets import InMemoryStore
+
+        faiss = b"FAISS-BYTES-XYZ"
+        arts = [{
+            "name": "faiss_index", "container": "embeddings", "key": "beit3/f.index",
+            "size": len(faiss), "sha256": hashlib.sha256(faiss).hexdigest(),
+        }]
+        objs = {
+            ("metadata", "hcmai-assets.json"): _json.dumps({"version": "vX", "artifacts": arts}).encode(),
+            ("embeddings", "beit3/f.index"): faiss,
+        }
+        store = InMemoryStore(objs)
+        s = Settings(_env_file=None, cloud_assets_enabled=True, cloud_assets_provider="s3_compatible",
+                     cloud_assets_cache_path=str(tmp_path))
+        monkeypatch.setattr(settings_router, "get_settings", lambda: s)
+        monkeypatch.setattr(assets_mod, "build_asset_store", lambda settings=None: store)
+        assets_mod.reset_caches()
+
+        client = _client()
+        manifest = client.get("/settings/cloud/manifest").json()
+        assert manifest["version"] == "vX"
+        assert manifest["artifacts"][0]["cached"] is False
+
+        report = client.post("/settings/cloud/sync", json={}).json()
+        assert report["ok"] is True and report["promoted"] is True
+        assert report["current_version"] == "vX"
+
+        after = client.get("/settings/cloud/manifest").json()
+        assert after["artifacts"][0]["cached"] is True and after["artifacts"][0]["verified"] is True
+
+        cleared = client.post("/settings/cloud/cache/clear", json={"scope": "all"}).json()
+        assert cleared["ok"] is True
+        assets_mod.reset_caches()

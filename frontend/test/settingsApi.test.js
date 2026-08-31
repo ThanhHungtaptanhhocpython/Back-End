@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   SettingsApiError,
+  browseFs,
   fetchSchema,
   saveConfig,
   settingsBase,
@@ -110,6 +111,18 @@ test("syncCloud posts the requested artifact names", async () => {
     },
   });
   assert.deepEqual(body, { names: ["faiss_index"] });
+});
+
+test("browseFs builds the fs query string", async () => {
+  const seen = [];
+  const fetchImpl = async (url) => {
+    seen.push(url);
+    return jsonResponse({ entries: [] });
+  };
+  await browseFs("", { env: ENV, fetchImpl });
+  await browseFs("D:/AI Challenge", { env: ENV, fetchImpl, dirsOnly: true });
+  assert.equal(seen[0], "http://127.0.0.1:3000/settings/fs");
+  assert.equal(seen[1], "http://127.0.0.1:3000/settings/fs?path=D%3A%2FAI+Challenge&dirs_only=1");
 });
 
 test("triggerRestart posts a reason", async () => {

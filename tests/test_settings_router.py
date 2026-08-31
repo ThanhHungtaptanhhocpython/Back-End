@@ -94,6 +94,38 @@ class TestSchemaAndConfig:
         r = _client().post("/settings/config", json={"values": {"PORT": "3001"}})
         assert r.status_code == 409
 
+    def test_fs_browser_roots_and_listing(self, tmp_path: Path) -> None:
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "a.txt").write_text("hi", encoding="utf-8")
+        (tmp_path / "b.zip").write_bytes(b"PK\x03\x04")
+        client = _client()
+
+        roots = client.get("/settings/fs").json()
+        assert roots["roots"] and roots["path"] == ""
+        assert roots["home"] and "sep" in roots
+
+        listing = client.get("/settings/fs", params={"path": str(tmp_path)}).json()
+        names = [e["name"] for e in listing["entries"]]
+        assert names[0] == "sub"  # dirs sorted first
+        assert {"a.txt", "b.zip"} <= set(names)
+        assert listing["parent"] == str(tmp_path.parent)
+
+    def test_fs_browser_dirs_only_and_file_to_parent(self, tmp_path: Path) -> None:
+        (tmp_path / "sub").mkdir()
+        f = tmp_path / "a.txt"
+        f.write_text("x", encoding="utf-8")
+        client = _client()
+
+        only = client.get("/settings/fs", params={"path": str(tmp_path), "dirs_only": "1"}).json()
+        assert [e["name"] for e in only["entries"]] == ["sub"]
+
+        # a file path resolves to its parent directory listing
+        viafile = client.get("/settings/fs", params={"path": str(f)}).json()
+        assert viafile["path"] == str(tmp_path)
+
+    def test_fs_browser_missing_path_404(self) -> None:
+        assert _client().get("/settings/fs", params={"path": "/no/such/dir/xyz123"}).status_code == 404
+
     def test_restart_status_without_launcher(self) -> None:
         body = _client().get("/settings/restart/status").json()
         assert body["launcher_running"] is False

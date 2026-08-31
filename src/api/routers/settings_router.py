@@ -11,6 +11,9 @@ router by their own modules (later phases).
 from __future__ import annotations
 
 import logging
+import os
+import string
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 
@@ -175,6 +178,91 @@ def get_config() -> dict:
         "store": _store_info(),
         "restart": launcher_control.read_status(),
     }
+
+
+@router.get("/fs")
+def browse_fs(path: str = "", dirs_only: bool = False, show_hidden: bool = False) -> dict:
+    """Directory browser for the location fields.
+
+    Loopback-only (router dependency). With no ``path`` it returns the roots
+    (drive letters on Windows, ``/`` on POSIX) plus quick jumps. With a ``path``
+    it lists that directory; a file path resolves to its parent listing.
+    """
+    settings = get_settings()
+    home = str(Path.home())
+    repo_root = str(Path(settings.src_dir).parent)
+    sep = os.sep
+
+    if "\x00" in path:
+        raise HTTPException(status_code=400, detail="invalid path")
+
+    if not path.strip():
+        return {
+            "sep": sep, "home": home, "repo_root": repo_root,
+            "roots": _fs_roots(), "path": "", "parent": None, "entries": [],
+        }
+
+    target = Path(path).expanduser()
+    try:
+        target = target.resolve()
+    except (OSError, RuntimeError):
+        pass
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"path not found: {target}")
+    if target.is_file():
+        target = target.parent
+    if not target.is_dir():
+        raise HTTPException(status_code=400, detail=f"not a directory: {target}")
+
+    entries: list[dict] = []
+    error = ""
+    try:
+        with os.scandir(target) as scan:
+            for entry in scan:
+                name = entry.name
+                if not show_hidden and name.startswith("."):
+                    continue
+                try:
+                    is_dir = entry.is_dir()
+                except OSError:
+                    is_dir = False
+                if dirs_only and not is_dir:
+                    continue
+                size = None
+                if not is_dir:
+                    try:
+                        size = entry.stat().st_size
+                    except OSError:
+                        size = None
+                entries.append(
+                    {"name": name, "path": str(target / name), "is_dir": is_dir, "size": size}
+                )
+                if len(entries) >= 5000:
+                    error = "listing truncated at 5000 entries"
+                    break
+    except PermissionError:
+        error = "permission denied"
+    except OSError as exc:
+        error = f"cannot read directory: {type(exc).__name__}"
+
+    entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
+    parent = str(target.parent) if str(target.parent) != str(target) else None
+    return {
+        "sep": sep, "home": home, "repo_root": repo_root,
+        "path": str(target), "parent": parent, "entries": entries, "error": error,
+    }
+
+
+def _fs_roots() -> list[dict]:
+    roots: list[dict] = []
+    if os.name == "nt":
+        for letter in string.ascii_uppercase:
+            drive = f"{letter}:\\"
+            if os.path.exists(drive):
+                roots.append({"name": drive, "path": drive})
+    else:
+        roots.append({"name": "/", "path": "/"})
+    return roots
 
 
 @router.post("/validate", response_model=ValidateResponse)

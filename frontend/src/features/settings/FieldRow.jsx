@@ -1,12 +1,20 @@
-import { Checkbox, Input, InputNumber, Select, Switch, Tag, Tooltip } from "antd";
+import { useState } from "react";
+import { Button, Checkbox, Input, InputNumber, Select, Space, Switch, Tag, Tooltip } from "antd";
+import { FolderOpenOutlined } from "@ant-design/icons";
+
+import FilePickerModal from "./FilePickerModal.jsx";
 
 const { TextArea, Password } = Input;
 
 /** One configuration field: label + help + the widget for its kind. */
 export default function FieldRow({ spec, value, error, secretEntry, resolved, onChange, onSecret }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+
   const widget = spec.secret
     ? renderSecret(spec, secretEntry, onSecret)
-    : renderValue(spec, value, onChange);
+    : spec.browsable
+      ? renderBrowsable(spec, value, onChange, () => setPickerOpen(true))
+      : renderValue(spec, value, onChange);
 
   const showResolved =
     spec.kind === "path" && !spec.locked && resolved && String(value ?? "").trim() === "";
@@ -41,7 +49,36 @@ export default function FieldRow({ spec, value, error, secretEntry, resolved, on
         </div>
       )}
       {error && <div className="set-field-msg">{error}</div>}
+
+      {spec.browsable && (
+        <FilePickerModal
+          open={pickerOpen}
+          title={`Choose a location for ${spec.label}`}
+          initialPath={String(value ?? "").trim() || resolved?.path || ""}
+          pathKind={spec.path_kind || "any"}
+          onClose={() => setPickerOpen(false)}
+          onPick={(picked) => {
+            onChange(picked);
+            setPickerOpen(false);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function renderBrowsable(spec, value, onChange, openPicker) {
+  return (
+    <Space.Compact style={{ width: "100%" }}>
+      <Input
+        value={value}
+        placeholder={spec.placeholder || "blank = auto-detect"}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <Button icon={<FolderOpenOutlined />} onClick={openPicker}>
+        Browse
+      </Button>
+    </Space.Compact>
   );
 }
 

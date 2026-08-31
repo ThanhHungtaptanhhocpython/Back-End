@@ -122,6 +122,9 @@ class FieldSpec:
     # Hide this field in the UI while another field currently equals a value,
     # e.g. {"AI_GATEWAY_ENABLED": "true"} for legacy single-provider knobs.
     hide_when: dict[str, str] | None = None
+    # For location fields: what the Browse picker should select.
+    #   "dir" -> a folder, "file" -> a single file, "any" -> either.
+    path_kind: str = ""
     field_overrides: dict[str, Any] = _dc_field(default_factory=dict)
 
     @property
@@ -144,6 +147,8 @@ class FieldSpec:
             "secret": self.secret,
             "locked": self.locked,
             "advanced": self.advanced,
+            "browsable": (self.kind == PATH or bool(self.path_kind)) and not self.locked,
+            "path_kind": self.path_kind or ("any" if self.kind == PATH else ""),
             "has_runtime_flow": self.has_runtime_flow,
             "choices": list(self.choices) if self.choices else None,
             "minimum": self.minimum,
@@ -179,19 +184,19 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
             "install location and cannot be edited."),
 
     # -- Data / Media -----------------------------------------------------------
-    _f("KEYFRAMES_ROOT", G_DATA, PATH,
+    _f("KEYFRAMES_ROOT", G_DATA, PATH, path_kind="dir",
        help="Root directory of keyframe images. In cloud-assets mode this is "
             "the local LRU cache that resolve-keyframe fills on demand."),
-    _f("MEDIA_INFO_PATH", G_DATA, PATH,
+    _f("MEDIA_INFO_PATH", G_DATA, PATH, path_kind="any",
        help="ZIP or directory of per-video media-info JSON (watch_url + length)."),
-    _f("MAP_KEYFRAMES_PATH", G_DATA, PATH,
+    _f("MAP_KEYFRAMES_PATH", G_DATA, PATH, path_kind="any",
        help="ZIP or directory of per-video map-keyframes CSV (authoritative FPS)."),
     _f("PLAYBACK_OFFSETS_JSON", G_DATA, JSON_OBJECT,
        placeholder='{"L21_V029": -172}',
        help="Optional video_id -> playback offset seconds. Default offset is 0."),
-    _f("VIDEO_CAPTURE_CACHE_PATH", G_DATA, PATH,
+    _f("VIDEO_CAPTURE_CACHE_PATH", G_DATA, PATH, path_kind="dir",
        help="Directory for generated WebP stills. Blank -> .cache/video-captures."),
-    _f("VIDEO_CAPTURE_FFMPEG_BIN", G_DATA, STR, placeholder="ffmpeg",
+    _f("VIDEO_CAPTURE_FFMPEG_BIN", G_DATA, STR, placeholder="ffmpeg", path_kind="file",
        help="FFmpeg binary name or absolute path."),
     _f("VIDEO_CAPTURE_EXTRACT_TIMEOUT_SECONDS", G_DATA, FLOAT, minimum=1, maximum=600,
        help="Wall-clock limit for one yt-dlp + FFmpeg extraction."),
@@ -203,13 +208,13 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
        help="Base URL of the Elasticsearch cluster used for OCR/ASR search."),
 
     # -- Retrieval (BEiT3) --------------------------------------------------
-    _f("BEIT3_FAISS_INDEX_PATH", G_RETRIEVAL, PATH,
+    _f("BEIT3_FAISS_INDEX_PATH", G_RETRIEVAL, PATH, path_kind="file",
        help="FAISS index file for the BEiT3 visual-search path."),
-    _f("BEIT3_GLOBAL_IDS_PATH", G_RETRIEVAL, PATH, help="global_ids.parquet."),
-    _f("BEIT3_VIDEO_METADATA_PATH", G_RETRIEVAL, PATH, help="video_metadata.parquet."),
-    _f("BEIT3_INDEX_META_PATH", G_RETRIEVAL, PATH, help="index_meta.json."),
-    _f("BEIT3_CHECKPOINT_PATH", G_RETRIEVAL, PATH, help="BEiT3 model checkpoint (.pth)."),
-    _f("BEIT3_TOKENIZER_PATH", G_RETRIEVAL, PATH, help="BEiT3 SentencePiece model (.spm)."),
+    _f("BEIT3_GLOBAL_IDS_PATH", G_RETRIEVAL, PATH, path_kind="file", help="global_ids.parquet."),
+    _f("BEIT3_VIDEO_METADATA_PATH", G_RETRIEVAL, PATH, path_kind="file", help="video_metadata.parquet."),
+    _f("BEIT3_INDEX_META_PATH", G_RETRIEVAL, PATH, path_kind="file", help="index_meta.json."),
+    _f("BEIT3_CHECKPOINT_PATH", G_RETRIEVAL, PATH, path_kind="file", help="BEiT3 model checkpoint (.pth)."),
+    _f("BEIT3_TOKENIZER_PATH", G_RETRIEVAL, PATH, path_kind="file", help="BEiT3 SentencePiece model (.spm)."),
     _f("BEIT3_DEVICE", G_RETRIEVAL, CHOICE, choices=("cpu", "cuda"),
        help="Torch device for BEiT3 text encoding."),
     _f("BEIT3_MAX_SEQ_LEN", G_RETRIEVAL, INT, minimum=8, maximum=512),
@@ -368,7 +373,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     _f("AGENT_VLM_RETRY_BACKOFF_SECONDS", G_AGENT, FLOAT, minimum=0, maximum=60,
        label="Verifier: retry backoff (s)"),
     _f("AGENT_VLM_CACHE_ENABLED", G_AGENT, BOOL, label="Verifier: cache verdicts"),
-    _f("AGENT_VLM_CACHE_PATH", G_AGENT, PATH, label="Verifier: verdict cache file"),
+    _f("AGENT_VLM_CACHE_PATH", G_AGENT, PATH, path_kind="file", label="Verifier: verdict cache file"),
     _f("AGENT_VLM_CACHE_MAX_ENTRIES", G_AGENT, INT, minimum=1,
        label="Verifier: cache max entries"),
     _f("AGENT_VLM_CACHE_TTL_SECONDS", G_AGENT, INT, minimum=1,
@@ -415,7 +420,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
        choices=("local", "azure_blob", "s3_compatible")),
     _f("CLOUD_ASSETS_MANIFEST_KEY", G_CLOUD, STR, placeholder="hcmai-assets.json",
        help="Object key of the versioned manifest inside the metadata container/bucket."),
-    _f("CLOUD_ASSETS_CACHE_PATH", G_CLOUD, PATH,
+    _f("CLOUD_ASSETS_CACHE_PATH", G_CLOUD, PATH, path_kind="dir",
        help="Local cache root for synced artifacts. Blank -> <app-data>/assets-cache."),
     _f("CLOUD_ASSETS_KEYFRAME_CACHE_MAX_BYTES", G_CLOUD, INT, minimum=1_000_000,
        help="LRU cap for on-demand keyframe downloads."),
@@ -438,7 +443,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     # -- Launcher -----------------------------------------------------------
     _f("LAUNCHER_FRONTEND_ENABLED", G_LAUNCHER, BOOL,
        help="Have the launcher also start / restart the local frontend dev server."),
-    _f("LAUNCHER_FRONTEND_DIR", G_LAUNCHER, PATH, placeholder="frontend"),
+    _f("LAUNCHER_FRONTEND_DIR", G_LAUNCHER, PATH, path_kind="dir", placeholder="frontend"),
     _f("LAUNCHER_FRONTEND_PORT", G_LAUNCHER, INT, minimum=1, maximum=65535, placeholder="5173"),
     _f("LAUNCHER_HEALTH_TIMEOUT_SECONDS", G_LAUNCHER, FLOAT, minimum=1, maximum=600,
        help="If the app is not healthy within this window after a restart, the "

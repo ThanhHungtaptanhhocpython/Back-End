@@ -70,6 +70,16 @@ export const validateConfig = (payload, o = {}) =>
 export const saveConfig = (payload, o = {}) =>
   request("POST", "/settings/config", { ...o, body: payload });
 
+// -- filesystem browser (loopback-only) --------------------------------
+export function browseFs(path = "", { dirsOnly = false, showHidden = false, ...o } = {}) {
+  const qs = new URLSearchParams();
+  if (path) qs.set("path", path);
+  if (dirsOnly) qs.set("dirs_only", "1");
+  if (showHidden) qs.set("show_hidden", "1");
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return request("GET", `/settings/fs${suffix}`, o);
+}
+
 // -- revisions ------------------------------------------------------------
 export const fetchRevisions = (o) => request("GET", "/settings/revisions", o);
 export const fetchRevision = (id, o) => request("GET", `/settings/revisions/${id}`, o);

@@ -135,18 +135,33 @@ export function fieldMatches(spec, query) {
   );
 }
 
+/** True when `spec.hide_when` matches the current form values (field N/A right now). */
+export function isHiddenByCondition(spec, values = {}) {
+  const cond = spec.hide_when;
+  if (!cond) return false;
+  return Object.entries(cond).every(
+    ([key, val]) => String(values[key] ?? "").toLowerCase() === String(val).toLowerCase(),
+  );
+}
+
 /**
  * Groups with their fields filtered by the toolbar controls.
- * `{ query, showAdvanced, modifiedOnly, changedKeys }` -> `[{ group, help, fields, hiddenCount }]`
+ * `{ query, showAdvanced, modifiedOnly, changedKeys, values }`
+ *   -> `[{ group, help, fields, hiddenCount }]`
  * (only groups with at least one visible field are returned).
  */
-export function visibleGroups(schema, { query = "", showAdvanced = false, modifiedOnly = false, changedKeys = [] } = {}) {
+export function visibleGroups(
+  schema,
+  { query = "", showAdvanced = false, modifiedOnly = false, changedKeys = [], values = {} } = {},
+) {
   const changed = new Set(changedKeys);
   const searching = String(query || "").trim() !== "";
   const out = [];
   for (const group of schema?.groups || []) {
     let hidden = 0;
     const fields = (group.fields || []).filter((spec) => {
+      // A field made irrelevant by another toggle is always hidden.
+      if (isHiddenByCondition(spec, values)) return false;
       if (modifiedOnly && !changed.has(spec.key)) return false;
       if (!fieldMatches(spec, query)) return false;
       // A search or "modified only" reveals advanced fields too.

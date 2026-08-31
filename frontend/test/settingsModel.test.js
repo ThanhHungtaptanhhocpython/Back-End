@@ -8,6 +8,7 @@ import {
   formatBytes,
   indexFields,
   initialFormState,
+  isHiddenByCondition,
   validateAll,
   validateField,
   visibleGroups,
@@ -166,4 +167,36 @@ test("modifiedOnly limits to changed keys and shows advanced ones", () => {
   const groups = visibleGroups(SCHEMA, { modifiedOnly: true, changedKeys: ["OPENROUTER_BASE_URL"] });
   assert.equal(groups.length, 1);
   assert.deepEqual(groups[0].fields.map((f) => f.key), ["OPENROUTER_BASE_URL"]);
+});
+
+test("isHiddenByCondition matches hide_when against current values", () => {
+  const spec = { key: "AGENT_LLM_MODEL", hide_when: { AI_GATEWAY_ENABLED: "true" } };
+  assert.equal(isHiddenByCondition(spec, { AI_GATEWAY_ENABLED: "true" }), true);
+  assert.equal(isHiddenByCondition(spec, { AI_GATEWAY_ENABLED: "false" }), false);
+  assert.equal(isHiddenByCondition({ key: "X" }, {}), false);
+});
+
+test("visibleGroups drops fields whose hide_when currently matches, even under search", () => {
+  const schema = {
+    groups: [
+      {
+        group: "AI",
+        fields: [
+          { key: "AGENT_LLM_ENABLED", label: "planner", kind: "bool", advanced: false },
+          {
+            key: "AGENT_LLM_MODEL",
+            label: "planner model",
+            kind: "str",
+            advanced: false,
+            hide_when: { AI_GATEWAY_ENABLED: "true" },
+          },
+        ],
+      },
+    ],
+  };
+  const gatewayOn = visibleGroups(schema, { values: { AI_GATEWAY_ENABLED: "true" }, query: "planner" });
+  assert.deepEqual(gatewayOn[0].fields.map((f) => f.key), ["AGENT_LLM_ENABLED"]);
+
+  const gatewayOff = visibleGroups(schema, { values: { AI_GATEWAY_ENABLED: "false" } });
+  assert.deepEqual(gatewayOff[0].fields.map((f) => f.key), ["AGENT_LLM_ENABLED", "AGENT_LLM_MODEL"]);
 });

@@ -119,6 +119,9 @@ class FieldSpec:
     maximum: float | None = None
     placeholder: str = ""
     restart_required: bool = True
+    # Hide this field in the UI while another field currently equals a value,
+    # e.g. {"AI_GATEWAY_ENABLED": "true"} for legacy single-provider knobs.
+    hide_when: dict[str, str] | None = None
     field_overrides: dict[str, Any] = _dc_field(default_factory=dict)
 
     @property
@@ -147,6 +150,7 @@ class FieldSpec:
             "maximum": self.maximum,
             "placeholder": self.placeholder,
             "restart_required": self.restart_required,
+            "hide_when": dict(self.hide_when) if self.hide_when else None,
         }
 
 
@@ -219,29 +223,52 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     _f("BEIT3_COL_TIMESTAMP", G_RETRIEVAL, STR, help="Optional parquet column override."),
     _f("BEIT3_COL_NAMESPACE", G_RETRIEVAL, STR, help="Optional parquet column override."),
 
-    # -- AI: legacy single-provider LLM knobs -----------------------------
-    _f("LLM_PROVIDER", G_AI, CHOICE,
+    # -- AI: legacy single-provider LLM knobs (used only when the gateway is OFF) --
+    _f("LLM_PROVIDER", G_AI, CHOICE, label="Legacy LLM provider",
        choices=("auto", "openai", "openrouter", "anthropic", "nvidia", "google"),
-       help="Legacy chat planner provider selector (used when the gateway is off)."),
-    _f("OPENAI_API_KEY", G_AI, SECRET, secret=True),
-    _f("OPENAI_MODEL", G_AI, STR, placeholder="gpt-4o-mini"),
-    _f("OPENROUTER_API_KEY", G_AI, SECRET, secret=True),
-    _f("OPENROUTER_MODEL", G_AI, STR, placeholder="openai/gpt-4o-mini"),
-    _f("OPENROUTER_BASE_URL", G_AI, URL, placeholder="https://openrouter.ai/api/v1"),
-    _f("OPENROUTER_MAX_TOKENS", G_AI, INT, minimum=1, maximum=32768),
-    _f("OPENROUTER_SITE_URL", G_AI, URL),
-    _f("OPENROUTER_APP_NAME", G_AI, STR),
-    _f("OPENROUTER_TRANSLATE_MODEL", G_AI, STR, help="Optional model for /translate."),
-    _f("OPENROUTER_TRANSLATE_MAX_TOKENS", G_AI, INT, minimum=1, maximum=8192),
-    _f("ANTHROPIC_API_KEY", G_AI, SECRET, secret=True),
-    _f("ANTHROPIC_MODEL", G_AI, STR),
-    _f("ANTHROPIC_MAX_TOKENS", G_AI, INT, minimum=1, maximum=32768),
-    _f("NVIDIA_API_KEY", G_AI, SECRET, secret=True),
-    _f("NVIDIA_MODEL", G_AI, STR),
-    _f("NVIDIA_MAX_TOKENS", G_AI, INT, minimum=1, maximum=32768),
-    _f("NVIDIA_TOP_P", G_AI, FLOAT, minimum=0.0, maximum=1.0),
-    _f("GOOGLE_API_KEY", G_AI, SECRET, secret=True),
-    _f("GOOGLE_MODEL", G_AI, STR),
+       hide_when={"AI_GATEWAY_ENABLED": "true"},
+       help="Chat planner provider selector for the pre-gateway path. Ignored "
+            "when AI_GATEWAY_ENABLED is on."),
+    _f("OPENAI_API_KEY", G_AI, SECRET, secret=True, label="OpenAI API key",
+       hide_when={"AI_GATEWAY_ENABLED": "true"}),
+    _f("OPENAI_MODEL", G_AI, STR, placeholder="gpt-4o-mini", label="OpenAI model",
+       hide_when={"AI_GATEWAY_ENABLED": "true"}),
+    _f("OPENROUTER_API_KEY", G_AI, SECRET, secret=True, label="OpenRouter API key",
+       help="Used by both the legacy path and the gateway's OpenRouter provider."),
+    _f("OPENROUTER_MODEL", G_AI, STR, placeholder="openai/gpt-4o-mini",
+       label="OpenRouter text model",
+       help="Text model for OpenRouter (legacy path and the gateway's OpenRouter provider)."),
+    _f("OPENROUTER_BASE_URL", G_AI, URL, placeholder="https://openrouter.ai/api/v1",
+       label="OpenRouter base URL"),
+    _f("OPENROUTER_MAX_TOKENS", G_AI, INT, minimum=1, maximum=32768,
+       label="OpenRouter max tokens", hide_when={"AI_GATEWAY_ENABLED": "true"}),
+    _f("OPENROUTER_SITE_URL", G_AI, URL, label="OpenRouter HTTP-Referer"),
+    _f("OPENROUTER_APP_NAME", G_AI, STR, label="OpenRouter X-Title"),
+    _f("OPENROUTER_TRANSLATE_MODEL", G_AI, STR, label="OpenRouter /translate model",
+       help="Optional dedicated model for the /translate fallback (legacy path)."),
+    _f("OPENROUTER_TRANSLATE_MAX_TOKENS", G_AI, INT, minimum=1, maximum=8192,
+       label="OpenRouter /translate max tokens"),
+    _f("ANTHROPIC_API_KEY", G_AI, SECRET, secret=True, label="Anthropic API key (legacy)",
+       hide_when={"AI_GATEWAY_ENABLED": "true"}),
+    _f("ANTHROPIC_MODEL", G_AI, STR, label="Anthropic model (legacy)",
+       hide_when={"AI_GATEWAY_ENABLED": "true"}),
+    _f("ANTHROPIC_MAX_TOKENS", G_AI, INT, minimum=1, maximum=32768,
+       label="Anthropic max tokens (legacy)", hide_when={"AI_GATEWAY_ENABLED": "true"}),
+    _f("NVIDIA_API_KEY", G_AI, SECRET, secret=True, label="NVIDIA API key (legacy)",
+       help="Pre-gateway NVIDIA path. The gateway's NVIDIA NIM provider uses "
+            "NIM_API_KEY instead.",
+       hide_when={"AI_GATEWAY_ENABLED": "true"}),
+    _f("NVIDIA_MODEL", G_AI, STR, label="NVIDIA model (legacy)",
+       hide_when={"AI_GATEWAY_ENABLED": "true"}),
+    _f("NVIDIA_MAX_TOKENS", G_AI, INT, minimum=1, maximum=32768,
+       label="NVIDIA max tokens (legacy)", hide_when={"AI_GATEWAY_ENABLED": "true"}),
+    _f("NVIDIA_TOP_P", G_AI, FLOAT, minimum=0.0, maximum=1.0,
+       label="NVIDIA top_p (legacy)", hide_when={"AI_GATEWAY_ENABLED": "true"}),
+    _f("GOOGLE_API_KEY", G_AI, SECRET, secret=True, label="Google API key",
+       help="Legacy Google path; also the fallback key for the gateway's Gemini "
+            "provider when GEMINI_API_KEY is blank."),
+    _f("GOOGLE_MODEL", G_AI, STR, label="Google model (legacy)",
+       hide_when={"AI_GATEWAY_ENABLED": "true"}),
 
     # -- AI: multi-provider gateway -------------------------------------------
     _f("AI_GATEWAY_ENABLED", G_AI, BOOL,
@@ -301,25 +328,54 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     _f("CLOUDFLARE_TIMEOUT_SECONDS", G_AI, FLOAT, minimum=1, maximum=600),
 
     # -- Agent / VLM ---------------------------------------------------------
-    _f("AGENT_LLM_ENABLED", G_AGENT, BOOL),
-    _f("AGENT_LLM_MODEL", G_AGENT, STR),
-    _f("AGENT_LLM_MAX_TOKENS", G_AGENT, INT, minimum=1, maximum=32768),
-    _f("AGENT_VISUAL_QUERY_LIMIT", G_AGENT, INT, minimum=1, maximum=8),
-    _f("AGENT_VLM_ENABLED", G_AGENT, BOOL),
-    _f("AGENT_VLM_MODEL", G_AGENT, STR),
-    _f("AGENT_VLM_MAX_CANDIDATES", G_AGENT, INT, minimum=1, maximum=100),
-    _f("AGENT_VLM_CANDIDATE_POOL", G_AGENT, INT, minimum=1, maximum=400),
-    _f("AGENT_VLM_PER_VIDEO_LIMIT", G_AGENT, INT, minimum=1, maximum=50),
-    _f("AGENT_VLM_BATCH_SIZE", G_AGENT, INT, minimum=1, maximum=32),
-    _f("AGENT_VLM_MAX_TOKENS", G_AGENT, INT, minimum=1, maximum=32768),
-    _f("AGENT_VLM_TIMEOUT_SECONDS", G_AGENT, FLOAT, minimum=1, maximum=600),
-    _f("AGENT_VLM_IMAGE_MAX_SIDE", G_AGENT, INT, minimum=64, maximum=4096),
-    _f("AGENT_VLM_MAX_RETRIES", G_AGENT, INT, minimum=0, maximum=10),
-    _f("AGENT_VLM_RETRY_BACKOFF_SECONDS", G_AGENT, FLOAT, minimum=0, maximum=60),
-    _f("AGENT_VLM_CACHE_ENABLED", G_AGENT, BOOL),
-    _f("AGENT_VLM_CACHE_PATH", G_AGENT, PATH),
-    _f("AGENT_VLM_CACHE_MAX_ENTRIES", G_AGENT, INT, minimum=1),
-    _f("AGENT_VLM_CACHE_TTL_SECONDS", G_AGENT, INT, minimum=1),
+    # -- Agent Search TEXT planner (LLM) --
+    _f("AGENT_LLM_ENABLED", G_AGENT, BOOL, label="Planner (LLM) — enable query enrichment",
+       help="Let an LLM rewrite the user's description into enriched English "
+            "search queries + a checklist before retrieval. Off = deterministic "
+            "local planner only."),
+    _f("AGENT_LLM_MODEL", G_AGENT, STR, label="Planner model (legacy path only)",
+       hide_when={"AI_GATEWAY_ENABLED": "true"},
+       help="Model for the planner when AI_GATEWAY_ENABLED is off. With the "
+            "gateway on, the model comes from the Text chain providers on the "
+            "AI Providers tab — this field is ignored."),
+    _f("AGENT_LLM_MAX_TOKENS", G_AGENT, INT, minimum=1, maximum=32768,
+       label="Planner response max tokens"),
+    _f("AGENT_VISUAL_QUERY_LIMIT", G_AGENT, INT, minimum=1, maximum=8,
+       label="Planner visual-query limit",
+       help="How many holistic visual queries the planner may emit."),
+    # -- Agent Search VISION verifier (VLM) --
+    _f("AGENT_VLM_ENABLED", G_AGENT, BOOL, label="Verifier (VLM) — enable frame check",
+       help="Score/rerank the top Agent Search candidates with a vision model. "
+            "Off = retrieval order is kept as-is."),
+    _f("AGENT_VLM_MODEL", G_AGENT, STR, label="Verifier model (legacy path only)",
+       hide_when={"AI_GATEWAY_ENABLED": "true"},
+       help="Vision model for the verifier when AI_GATEWAY_ENABLED is off. With "
+            "the gateway on, the model comes from the Vision chain providers on "
+            "the AI Providers tab — this field is ignored."),
+    _f("AGENT_VLM_MAX_CANDIDATES", G_AGENT, INT, minimum=1, maximum=100,
+       label="Verifier: frames scored per query"),
+    _f("AGENT_VLM_CANDIDATE_POOL", G_AGENT, INT, minimum=1, maximum=400,
+       label="Verifier: candidate pool size"),
+    _f("AGENT_VLM_PER_VIDEO_LIMIT", G_AGENT, INT, minimum=1, maximum=50,
+       label="Verifier: max frames per video"),
+    _f("AGENT_VLM_BATCH_SIZE", G_AGENT, INT, minimum=1, maximum=32,
+       label="Verifier: images per model call"),
+    _f("AGENT_VLM_MAX_TOKENS", G_AGENT, INT, minimum=1, maximum=32768,
+       label="Verifier: response max tokens"),
+    _f("AGENT_VLM_TIMEOUT_SECONDS", G_AGENT, FLOAT, minimum=1, maximum=600,
+       label="Verifier: per-call timeout (s)"),
+    _f("AGENT_VLM_IMAGE_MAX_SIDE", G_AGENT, INT, minimum=64, maximum=4096,
+       label="Verifier: downscale images to (px)"),
+    _f("AGENT_VLM_MAX_RETRIES", G_AGENT, INT, minimum=0, maximum=10,
+       label="Verifier: retries per batch"),
+    _f("AGENT_VLM_RETRY_BACKOFF_SECONDS", G_AGENT, FLOAT, minimum=0, maximum=60,
+       label="Verifier: retry backoff (s)"),
+    _f("AGENT_VLM_CACHE_ENABLED", G_AGENT, BOOL, label="Verifier: cache verdicts"),
+    _f("AGENT_VLM_CACHE_PATH", G_AGENT, PATH, label="Verifier: verdict cache file"),
+    _f("AGENT_VLM_CACHE_MAX_ENTRIES", G_AGENT, INT, minimum=1,
+       label="Verifier: cache max entries"),
+    _f("AGENT_VLM_CACHE_TTL_SECONDS", G_AGENT, INT, minimum=1,
+       label="Verifier: cache entry TTL (s)"),
     # legacy os.getenv knobs, now first-class
     _f("KIS_VQA_RERANK", G_AGENT, BOOL, help="Validate top KIS hits with the reranker."),
     _f("KIS_VQA_RERANK_CANDIDATES", G_AGENT, INT, minimum=1, maximum=60),

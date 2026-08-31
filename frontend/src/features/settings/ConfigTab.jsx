@@ -54,8 +54,8 @@ export default function ConfigTab({ schema, config, loading, onSaved }) {
   const allErrors = { ...errors, ...serverErrors };
 
   const groups = useMemo(
-    () => visibleGroups(schema, { query, showAdvanced, modifiedOnly, changedKeys: changed }),
-    [schema, query, showAdvanced, modifiedOnly, changed],
+    () => visibleGroups(schema, { query, showAdvanced, modifiedOnly, changedKeys: changed, values }),
+    [schema, query, showAdvanced, modifiedOnly, changed, values],
   );
   const totalHidden = groups.reduce((n, g) => n + g.hiddenCount, 0);
   const openKeys = query || modifiedOnly ? groups.map((g) => g.group) : DEFAULT_OPEN;

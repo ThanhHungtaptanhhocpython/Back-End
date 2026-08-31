@@ -1,0 +1,41 @@
+{
+  "_comment": "Copy to manifest_spec.json and set every 'local' path to your built runtime artifacts, then: python scripts/cloud/build_asset_manifest.py --spec manifest_spec.json --out hcmai-assets.json [--upload]",
+  "version": "2026-09-01",
+  "artifacts": {
+    "faiss_index": {
+      "local": "E:/GitHub/HCMAI2026/beit3_runtime/beit3_faiss.index",
+      "container": "embeddings",
+      "key": "beit3/beit3_faiss.index"
+    },
+    "global_ids": {
+      "local": "E:/GitHub/HCMAI2026/beit3_runtime/global_ids.parquet",
+      "container": "embeddings",
+      "key": "beit3/global_ids.parquet"
+    },
+    "video_metadata": {
+      "local": "E:/GitHub/HCMAI2026/beit3_runtime/video_metadata.parquet",
+      "container": "embeddings",
+      "key": "beit3/video_metadata.parquet"
+    },
+    "index_meta": {
+      "local": "E:/GitHub/HCMAI2026/beit3_runtime/index_meta.json",
+      "container": "embeddings",
+      "key": "beit3/index_meta.json"
+    },
+    "checkpoint": {
+      "local": "E:/GitHub/HCMAI2026/beit3_runtime/beit3_large_patch16_384_f30k_retrieval.pth",
+      "container": "metadata",
+      "key": "beit3/beit3_large_patch16_384_f30k_retrieval.pth"
+    },
+    "tokenizer": {
+      "local": "E:/GitHub/HCMAI2026/beit3_runtime/beit3.spm",
+      "container": "metadata",
+      "key": "beit3/beit3.spm"
+    }
+  },
+  "keyframes": {
+    "container": "keyframes",
+    "prefix": "",
+    "layout": "{namespace}/{video_id}/{frame_id}.webp"
+  }
+}

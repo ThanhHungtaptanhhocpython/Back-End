@@ -37,8 +37,8 @@ class TRAKE:
         self.keyframes_base_path = str(settings.get_keyframes_root())
         self.map_keyframes_dir = os.path.join(str(settings.src_dir), "dict", "map-keyframes")
         self._keyframe_map_cache: Dict[str, Dict[int, int]] = {}
-        self.enable_vqa = os.getenv("TRAKE_ENABLE_VQA", "false").strip().lower() in {"1", "true", "yes", "on"}
-        self.vqa_max_sequences = int(os.getenv("TRAKE_VQA_MAX_SEQUENCES", "5"))
+        self.enable_vqa = bool(settings.trake_enable_vqa)
+        self.vqa_max_sequences = int(settings.trake_vqa_max_sequences)
         self.min_event_gap = max(0.0, float(settings.trake_min_event_gap_seconds))
         self.max_event_gap = max(self.min_event_gap, float(settings.trake_max_event_gap_seconds))
         self.max_sequence_span = max(self.max_event_gap, float(settings.trake_max_sequence_span_seconds))

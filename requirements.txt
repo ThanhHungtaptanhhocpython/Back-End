@@ -28,3 +28,11 @@ langchain-nvidia-ai-endpoints==0.2.2
 langchain-google-genai==1.0.10
 ffmpeg-python
 yt-dlp
+
+# Optional -- runtime config store secret key in the OS credential store
+# (falls back to a 0600 key file under the app-data dir when absent).
+keyring; platform_system != "Linux"
+# Optional -- cloud asset storage adapters (imported lazily; the app runs
+# without them and the Cloud Assets "Test connection" reports if missing).
+azure-storage-blob
+boto3

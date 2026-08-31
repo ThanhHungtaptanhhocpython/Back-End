@@ -22,3 +22,12 @@ body {
   margin: 0;
   background-color: #f8fafc;
 }
+
+/* Floating entry point to the full-page Settings view. */
+.app-settings-fab {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 1000;
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.18);
+}

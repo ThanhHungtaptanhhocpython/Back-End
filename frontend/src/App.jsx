@@ -1,5 +1,8 @@
-import { App as AntApp, ConfigProvider, theme } from "antd";
+import { useEffect, useState } from "react";
+import { App as AntApp, Button, ConfigProvider, theme } from "antd";
+import { SettingOutlined } from "@ant-design/icons";
 import Workstation from "./features/workspace/Workstation";
+import SettingsPage from "./features/settings/SettingsPage";
 import "./styles/tokens.css";
 import "./features/workspace/workspace.css";
 import "./features/search/search.css";
@@ -20,11 +23,49 @@ const lightTheme = {
   },
 };
 
+const SETTINGS_HASH = "#/settings";
+
+function useSettingsRoute() {
+  const [open, setOpen] = useState(
+    () => typeof window !== "undefined" && window.location.hash.startsWith(SETTINGS_HASH),
+  );
+  useEffect(() => {
+    const sync = () => setOpen(window.location.hash.startsWith(SETTINGS_HASH));
+    window.addEventListener("hashchange", sync);
+    return () => window.removeEventListener("hashchange", sync);
+  }, []);
+  return [
+    open,
+    () => {
+      window.location.hash = SETTINGS_HASH;
+    },
+    () => {
+      if (window.location.hash.startsWith(SETTINGS_HASH)) window.location.hash = "";
+    },
+  ];
+}
+
 export default function App() {
+  const [settingsOpen, openSettings, closeSettings] = useSettingsRoute();
+
   return (
     <ConfigProvider theme={lightTheme}>
       <AntApp>
-        <Workstation />
+        {settingsOpen ? (
+          <SettingsPage onClose={closeSettings} />
+        ) : (
+          <>
+            <Workstation />
+            <Button
+              className="app-settings-fab"
+              icon={<SettingOutlined />}
+              onClick={openSettings}
+              title="Settings"
+            >
+              Settings
+            </Button>
+          </>
+        )}
       </AntApp>
     </ConfigProvider>
   );

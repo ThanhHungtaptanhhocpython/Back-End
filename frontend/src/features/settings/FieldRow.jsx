@@ -3,10 +3,13 @@ import { Checkbox, Input, InputNumber, Select, Switch, Tag, Tooltip } from "antd
 const { TextArea, Password } = Input;
 
 /** One configuration field: label + help + the widget for its kind. */
-export default function FieldRow({ spec, value, error, secretEntry, onChange, onSecret }) {
+export default function FieldRow({ spec, value, error, secretEntry, resolved, onChange, onSecret }) {
   const widget = spec.secret
     ? renderSecret(spec, secretEntry, onSecret)
     : renderValue(spec, value, onChange);
+
+  const showResolved =
+    spec.kind === "path" && !spec.locked && resolved && String(value ?? "").trim() === "";
 
   return (
     <div className={`set-field${error ? " set-field--error" : ""}`}>
@@ -31,6 +34,12 @@ export default function FieldRow({ spec, value, error, secretEntry, onChange, on
       </div>
       {spec.help && <div className="set-field-help">{spec.help}</div>}
       <div className="set-field-widget">{widget}</div>
+      {showResolved && (
+        <div className={`set-field-resolved${resolved.exists ? "" : " missing"}`}>
+          Auto — resolves to <code>{resolved.path}</code>{" "}
+          {resolved.exists ? "· found ✓" : "· not found on disk ✗"}
+        </div>
+      )}
       {error && <div className="set-field-msg">{error}</div>}
     </div>
   );

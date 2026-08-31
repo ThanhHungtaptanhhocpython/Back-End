@@ -199,6 +199,7 @@ export default function ConfigTab({ schema, config, loading, onSaved }) {
                     spec={spec}
                     value={values[spec.key]}
                     secretEntry={secrets[spec.key]}
+                    resolved={config.resolved?.[spec.key]}
                     error={allErrors[spec.key]}
                     onChange={(next) => setValue(spec.key, next)}
                     onSecret={(entry) => setSecret(spec.key, entry)}

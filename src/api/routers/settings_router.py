@@ -121,6 +121,41 @@ def get_schema() -> dict:
     }
 
 
+# Path fields whose blank value is auto-resolved by a Settings.get_* method.
+_RESOLVED_PATHS = {
+    "KEYFRAMES_ROOT": "get_keyframes_root",
+    "MEDIA_INFO_PATH": "get_media_info_path",
+    "MAP_KEYFRAMES_PATH": "get_map_keyframes_path",
+    "VIDEO_CAPTURE_CACHE_PATH": "get_video_capture_cache_path",
+    "AGENT_VLM_CACHE_PATH": "get_agent_vlm_cache_path",
+    "CLOUD_ASSETS_CACHE_PATH": "get_cloud_assets_cache_path",
+    "LAUNCHER_FRONTEND_DIR": "get_launcher_frontend_dir",
+}
+
+
+def _resolved_paths(settings) -> dict:
+    from pathlib import Path
+
+    out: dict[str, dict] = {}
+    for key, getter in _RESOLVED_PATHS.items():
+        spec = field_spec.by_key(key)
+        raw = getattr(settings, spec.field, None) if spec else None
+        try:
+            resolved = getattr(settings, getter)()
+        except Exception:  # noqa: BLE001
+            continue
+        try:
+            exists = Path(resolved).exists()
+        except OSError:
+            exists = False
+        out[key] = {
+            "path": str(resolved),
+            "exists": exists,
+            "is_default": raw in (None, ""),
+        }
+    return out
+
+
 @router.get("/config")
 def get_config() -> dict:
     settings = get_settings()
@@ -136,6 +171,7 @@ def get_config() -> dict:
     return {
         "values": settings.redacted_runtime_values(),
         "secrets": secrets,
+        "resolved": _resolved_paths(settings),
         "store": _store_info(),
         "restart": launcher_control.read_status(),
     }

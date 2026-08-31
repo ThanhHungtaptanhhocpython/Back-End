@@ -117,6 +117,20 @@
   margin-top: 4px;
 }
 
+.set-field-resolved {
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 4px;
+}
+.set-field-resolved code {
+  background: #f1f5f9;
+  padding: 0 4px;
+  border-radius: 3px;
+}
+.set-field-resolved.missing {
+  color: #b45309;
+}
+
 .set-tag {
   transform: scale(0.85);
   transform-origin: left center;

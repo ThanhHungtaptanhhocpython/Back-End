@@ -65,6 +65,14 @@ class TestSchemaAndConfig:
         # a secret value is never returned in clear
         assert body["values"]["OPENROUTER_API_KEY"] in ("", "********")
 
+    def test_config_reports_resolved_default_paths(self) -> None:
+        body = _client().get("/settings/config").json()
+        resolved = body["resolved"]
+        assert "MEDIA_INFO_PATH" in resolved and "MAP_KEYFRAMES_PATH" in resolved
+        entry = resolved["KEYFRAMES_ROOT"]
+        assert set(entry) == {"path", "exists", "is_default"}
+        assert isinstance(entry["exists"], bool)
+
     def test_validate_flags_bad_values(self) -> None:
         r = _client().post(
             "/settings/validate",

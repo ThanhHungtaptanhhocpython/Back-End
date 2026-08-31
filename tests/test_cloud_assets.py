@@ -349,3 +349,25 @@ class TestResolveKeyframeFile:
         assert second == first
         assert len(store.reads) == 1  # served from LRU cache, no second download
         assets.reset_caches()
+
+
+class TestResolveArtifactPath:
+    def test_none_when_disabled(self):
+        s = Settings(_env_file=None, cloud_assets_enabled=False)
+        assert assets.resolve_artifact_path("faiss_index", settings=s) is None
+
+    def test_returns_synced_path_for_current_version(self, tmp_path: Path):
+        s = Settings(_env_file=None, cloud_assets_enabled=True,
+                     cloud_assets_provider="s3_compatible", cloud_assets_cache_path=str(tmp_path))
+        assets.reset_caches()
+        cache = assets.get_artifact_cache(s)
+        staged = cache.stage_path("faiss_index")
+        staged.write_bytes(b"IDX")
+        cache.promote(staged, "vA", "faiss_index", _sha(b"IDX"))
+        # not current yet -> None
+        assert assets.resolve_artifact_path("faiss_index", settings=s) is None
+        cache.set_current("vA")
+        resolved = assets.resolve_artifact_path("faiss_index", settings=s)
+        assert resolved is not None and resolved.read_bytes() == b"IDX"
+        assert assets.resolve_artifact_path("missing", settings=s) is None
+        assets.reset_caches()

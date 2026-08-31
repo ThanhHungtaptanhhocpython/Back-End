@@ -81,22 +81,38 @@ def _first_matching_column(columns: list[str], candidates: list[str]) -> str | N
 class BEiT3Retriever:
     """Owns the BEiT3 model, tokenizer, FAISS index, and metadata tables."""
 
+    @staticmethod
+    def _artifact(name: str, configured):
+        """Prefer a synced cloud artifact for ``name`` (checksum-verified,
+        current manifest version); fall back to the configured local path."""
+        try:
+            from src.services.assets import resolve_artifact_path
+
+            synced = resolve_artifact_path(name)
+            if synced is not None and synced.is_file():
+                logger.info("BEiT3 %s: using synced cloud artifact %s", name, synced)
+                return synced
+        except Exception:  # noqa: BLE001 - cloud assets must never block local mode
+            pass
+        return configured
+
     def __init__(self, settings: Settings | None = None):
         self._settings = settings or get_settings()
         self._device = self._resolve_device(self._settings.beit3_device)
         self._max_seq_len = self._settings.beit3_max_seq_len
 
-        self._tokenizer = self._load_tokenizer(self._settings.beit3_tokenizer_path)
-        self._model = self._load_model(self._settings.beit3_checkpoint_path)
-        self._index = self._load_faiss_index(self._settings.beit3_faiss_index_path)
-        self._global_ids = self._load_global_ids(self._settings.beit3_global_ids_path)
+        self._tokenizer = self._load_tokenizer(self._artifact("tokenizer", self._settings.beit3_tokenizer_path))
+        self._model = self._load_model(self._artifact("checkpoint", self._settings.beit3_checkpoint_path))
+        self._index = self._load_faiss_index(self._artifact("faiss_index", self._settings.beit3_faiss_index_path))
+        self._global_ids = self._load_global_ids(self._artifact("global_ids", self._settings.beit3_global_ids_path))
         self._video_metadata = self._load_optional_parquet(
-            self._settings.beit3_video_metadata_path, label="video_metadata.parquet"
+            self._artifact("video_metadata", self._settings.beit3_video_metadata_path),
+            label="video_metadata.parquet",
         )
         self._media_info_by_id = self._load_media_info_dir(self._settings.src_dir / "dict" / "media-info")
         self._keyframe_time_by_video = self._load_keyframe_time_maps(self._settings.src_dir / "dict" / "map-keyframes")
         self._index_meta = self._load_optional_json(
-            self._settings.beit3_index_meta_path, label="index_meta.json"
+            self._artifact("index_meta", self._settings.beit3_index_meta_path), label="index_meta.json"
         )
 
         self._validate_consistency()

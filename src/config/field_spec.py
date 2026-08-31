@@ -48,6 +48,58 @@ GROUP_ORDER = [
     G_TRAKE, G_QA, G_CLOUD, G_LAUNCHER, G_LOGGING,
 ]
 
+# One-line orientation shown under each group heading in the UI.
+GROUP_HELP = {
+    G_SERVER: "Where the API binds and which browser origins may call it.",
+    G_DATA: "Local dataset / media paths for keyframes, playback and captures.",
+    G_ELASTIC: "Elasticsearch cluster used for OCR / ASR text search.",
+    G_RETRIEVAL: "BEiT3 visual-search runtime artifacts (checkpoint, index, parquet).",
+    G_AI: "Optional multi-provider gateway and per-provider keys / models.",
+    G_AGENT: "Agent Search planner and VLM candidate-verification tuning.",
+    G_TRAKE: "Ordered-event (TRAKE) retrieval and scoring parameters.",
+    G_QA: "Grounded video Q&A retrieval and confidence tuning.",
+    G_CLOUD: "Read the dataset from Azure Blob or S3-compatible storage.",
+    G_LAUNCHER: "Behaviour of `python -m launcher` (restart, health, frontend).",
+    G_LOGGING: "Log verbosity and (planned) file / request logging.",
+}
+
+# Fields shown by default. Everything else -- and anything with no runtime flow
+# yet -- is hidden behind the "Advanced" toggle so first-time users see a short,
+# meaningful list instead of ~160 knobs.
+_BASIC_KEYS = {
+    # Server
+    "ENV", "DEBUG", "HOST", "PORT", "CORS_ORIGINS", "SRC_DIR",
+    # Data / Media
+    "KEYFRAMES_ROOT", "MEDIA_INFO_PATH", "MAP_KEYFRAMES_PATH",
+    # Elasticsearch
+    "ELASTICSEARCH_URL",
+    # Retrieval
+    "BEIT3_FAISS_INDEX_PATH", "BEIT3_GLOBAL_IDS_PATH", "BEIT3_VIDEO_METADATA_PATH",
+    "BEIT3_INDEX_META_PATH", "BEIT3_CHECKPOINT_PATH", "BEIT3_TOKENIZER_PATH", "BEIT3_DEVICE",
+    # AI gateway essentials
+    "AI_GATEWAY_ENABLED", "AI_TEXT_PRIORITY", "AI_VISION_PRIORITY", "AI_LOCAL_FALLBACK_ENABLED",
+    "OPENROUTER_API_KEY", "OPENROUTER_MODEL",
+    "NIM_ENABLED", "NIM_API_KEY", "NIM_TEXT_MODEL", "NIM_VISION_MODEL",
+    "CEREBRAS_ENABLED", "CEREBRAS_API_KEY", "CEREBRAS_TEXT_MODEL", "CEREBRAS_VISION_MODEL",
+    "GROQ_ENABLED", "GROQ_API_KEY", "GROQ_TEXT_MODEL", "GROQ_VISION_MODEL",
+    "OPENROUTER_ENABLED", "OPENROUTER_VISION_MODEL",
+    "GEMINI_ENABLED", "GEMINI_API_KEY", "GEMINI_TEXT_MODEL", "GEMINI_VISION_MODEL",
+    "CLOUDFLARE_ENABLED", "CLOUDFLARE_API_KEY", "CLOUDFLARE_ACCOUNT_ID",
+    "CLOUDFLARE_TEXT_MODEL", "CLOUDFLARE_VISION_MODEL",
+    # Agent / VLM top-level toggles
+    "AGENT_LLM_ENABLED", "AGENT_LLM_MODEL", "AGENT_VLM_ENABLED", "AGENT_VLM_MODEL",
+    # TRAKE / Q&A top-level toggles
+    "TRAKE_OCR_ENABLED", "TRAKE_ASR_ENABLED", "TRAKE_VLM_ENABLED", "QA_VLM_ENABLED",
+    # Cloud assets
+    "CLOUD_ASSETS_ENABLED", "CLOUD_ASSETS_PROVIDER",
+    "AZURE_STORAGE_ACCOUNT_NAME", "AZURE_STORAGE_CONNECTION_STRING", "AZURE_STORAGE_PRIMARY_KEY",
+    "S3_ENDPOINT_URL", "S3_REGION", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY",
+    # Launcher
+    "LAUNCHER_FRONTEND_ENABLED",
+    # Logging
+    "LOG_LEVEL",
+}
+
 _BOOL_TRUE = {"1", "true", "yes", "on", "y", "t"}
 _BOOL_FALSE = {"0", "false", "no", "off", "n", "f", ""}
 
@@ -73,6 +125,11 @@ class FieldSpec:
     def field(self) -> str:
         return self.field_overrides.get("field", self.key.lower())
 
+    @property
+    def advanced(self) -> bool:
+        """Hidden behind the UI's 'Advanced' toggle by default."""
+        return self.key not in _BASIC_KEYS or not self.has_runtime_flow
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "key": self.key,
@@ -83,6 +140,7 @@ class FieldSpec:
             "help": self.help,
             "secret": self.secret,
             "locked": self.locked,
+            "advanced": self.advanced,
             "has_runtime_flow": self.has_runtime_flow,
             "choices": list(self.choices) if self.choices else None,
             "minimum": self.minimum,
@@ -384,7 +442,14 @@ def grouped() -> list[dict[str, Any]]:
     for group in GROUP_ORDER:
         items = [s.to_dict() for s in FIELD_SPECS if s.group == group]
         if items:
-            out.append({"group": group, "fields": items})
+            out.append(
+                {
+                    "group": group,
+                    "help": GROUP_HELP.get(group, ""),
+                    "basic_count": sum(1 for it in items if not it["advanced"]),
+                    "fields": items,
+                }
+            )
     return out
 
 

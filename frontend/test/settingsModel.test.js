@@ -4,31 +4,36 @@ import test from "node:test";
 import {
   buildSavePayload,
   dirtyKeys,
+  fieldMatches,
   formatBytes,
   indexFields,
   initialFormState,
   validateAll,
   validateField,
+  visibleGroups,
 } from "../src/features/settings/settingsModel.js";
 
 const SCHEMA = {
   groups: [
     {
       group: "Server",
+      help: "server help",
       fields: [
-        { key: "PORT", kind: "int", secret: false, minimum: 1, maximum: 65535 },
-        { key: "HOST", kind: "str", secret: false },
-        { key: "SRC_DIR", kind: "path", secret: false, locked: true },
-        { key: "ENV", kind: "choice", secret: false, choices: ["development", "production"] },
+        { key: "PORT", label: "Port", kind: "int", secret: false, minimum: 1, maximum: 65535, advanced: false },
+        { key: "HOST", label: "Host", kind: "str", secret: false, advanced: false },
+        { key: "SRC_DIR", label: "Src Dir", kind: "path", secret: false, locked: true, advanced: false },
+        { key: "ENV", label: "Env", kind: "choice", secret: false, choices: ["development", "production"], advanced: false },
+        { key: "CHAT_HISTORY_MESSAGES", label: "Chat History", kind: "int", secret: false, advanced: true },
       ],
     },
     {
       group: "AI",
+      help: "ai help",
       fields: [
-        { key: "AI_GATEWAY_ENABLED", kind: "bool", secret: false },
-        { key: "OPENROUTER_BASE_URL", kind: "url", secret: false },
-        { key: "PLAYBACK_OFFSETS_JSON", kind: "json_object", secret: false },
-        { key: "OPENROUTER_API_KEY", kind: "secret", secret: true },
+        { key: "AI_GATEWAY_ENABLED", label: "Gateway", kind: "bool", secret: false, advanced: false },
+        { key: "OPENROUTER_BASE_URL", label: "Base URL", kind: "url", secret: false, advanced: true },
+        { key: "PLAYBACK_OFFSETS_JSON", label: "Offsets", kind: "json_object", secret: false, advanced: true },
+        { key: "OPENROUTER_API_KEY", label: "Key", kind: "secret", secret: true, advanced: false },
       ],
     },
   ],
@@ -43,7 +48,7 @@ const CONFIG = {
 
 test("indexFields flattens groups", () => {
   const fields = indexFields(SCHEMA);
-  assert.equal(Object.keys(fields).length, 8);
+  assert.equal(Object.keys(fields).length, 9);
   assert.equal(fields.PORT.kind, "int");
 });
 
@@ -128,4 +133,37 @@ test("formatBytes is human readable", () => {
   assert.equal(formatBytes(512), "512 B");
   assert.equal(formatBytes(2048), "2 KB");
   assert.equal(formatBytes(5 * 1024 * 1024), "5 MB");
+});
+
+test("fieldMatches searches key, label and help", () => {
+  const spec = { key: "OPENROUTER_API_KEY", label: "Key", help: "server-side only" };
+  assert.equal(fieldMatches(spec, ""), true);
+  assert.equal(fieldMatches(spec, "openrouter"), true);
+  assert.equal(fieldMatches(spec, "server-side"), true);
+  assert.equal(fieldMatches(spec, "azure"), false);
+});
+
+test("visibleGroups hides advanced fields by default", () => {
+  const groups = visibleGroups(SCHEMA, {});
+  const server = groups.find((g) => g.group === "Server");
+  assert.deepEqual(server.fields.map((f) => f.key).sort(), ["ENV", "HOST", "PORT", "SRC_DIR"]);
+  assert.equal(server.hiddenCount, 1); // CHAT_HISTORY_MESSAGES
+  assert.equal(server.help, "server help");
+});
+
+test("visibleGroups reveals everything with showAdvanced", () => {
+  const groups = visibleGroups(SCHEMA, { showAdvanced: true });
+  assert.equal(groups.find((g) => g.group === "AI").fields.length, 4);
+});
+
+test("a search reveals advanced matches and drops non-matching groups", () => {
+  const groups = visibleGroups(SCHEMA, { query: "offsets" });
+  assert.equal(groups.length, 1);
+  assert.deepEqual(groups[0].fields.map((f) => f.key), ["PLAYBACK_OFFSETS_JSON"]);
+});
+
+test("modifiedOnly limits to changed keys and shows advanced ones", () => {
+  const groups = visibleGroups(SCHEMA, { modifiedOnly: true, changedKeys: ["OPENROUTER_BASE_URL"] });
+  assert.equal(groups.length, 1);
+  assert.deepEqual(groups[0].fields.map((f) => f.key), ["OPENROUTER_BASE_URL"]);
 });

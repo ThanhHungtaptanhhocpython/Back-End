@@ -63,6 +63,19 @@ export default function SettingsPage({ onClose }) {
         <RestartControl pendingRevision={pendingRevision} />
       </header>
 
+      {config?.store?.enabled &&
+        config.store.env_imported &&
+        (config.store.revision_count ?? 0) <= 1 && (
+          <Alert
+            type="info"
+            showIcon
+            closable
+            style={{ marginBottom: 12 }}
+            message="These values were imported from your .env on first run."
+            description="Edit them here — the SQLite store now takes precedence over .env. Save creates a revision; Restart applies it. History lets you roll back."
+          />
+        )}
+
       {error ? (
         <Result
           status={error.kind === "forbidden" ? "403" : "error"}

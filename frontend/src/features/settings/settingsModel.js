@@ -124,6 +124,43 @@ export function buildSavePayload(fields, values, secrets, note = "") {
   return { values: outValues, secret_set, secret_clear, note };
 }
 
+/** Case-insensitive match of a field against a search query (key/label/help). */
+export function fieldMatches(spec, query) {
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return true;
+  return (
+    spec.key.toLowerCase().includes(q) ||
+    String(spec.label || "").toLowerCase().includes(q) ||
+    String(spec.help || "").toLowerCase().includes(q)
+  );
+}
+
+/**
+ * Groups with their fields filtered by the toolbar controls.
+ * `{ query, showAdvanced, modifiedOnly, changedKeys }` -> `[{ group, help, fields, hiddenCount }]`
+ * (only groups with at least one visible field are returned).
+ */
+export function visibleGroups(schema, { query = "", showAdvanced = false, modifiedOnly = false, changedKeys = [] } = {}) {
+  const changed = new Set(changedKeys);
+  const searching = String(query || "").trim() !== "";
+  const out = [];
+  for (const group of schema?.groups || []) {
+    let hidden = 0;
+    const fields = (group.fields || []).filter((spec) => {
+      if (modifiedOnly && !changed.has(spec.key)) return false;
+      if (!fieldMatches(spec, query)) return false;
+      // A search or "modified only" reveals advanced fields too.
+      if (spec.advanced && !showAdvanced && !searching && !modifiedOnly) {
+        hidden += 1;
+        return false;
+      }
+      return true;
+    });
+    if (fields.length) out.push({ group: group.group, help: group.help || "", fields, hiddenCount: hidden });
+  }
+  return out;
+}
+
 export function formatBytes(bytes) {
   const n = Number(bytes) || 0;
   if (n < 1024) return `${n} B`;

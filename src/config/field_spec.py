@@ -60,7 +60,7 @@ GROUP_HELP = {
     G_QA: "Grounded video Q&A retrieval and confidence tuning.",
     G_CLOUD: "Read the dataset from Azure Blob or S3-compatible storage.",
     G_LAUNCHER: "Behaviour of `python -m launcher` (restart, health, frontend).",
-    G_LOGGING: "Log verbosity and (planned) file / request logging.",
+    G_LOGGING: "Root logger verbosity.",
 }
 
 # Fields shown by default. Everything else -- and anything with no runtime flow
@@ -182,9 +182,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     _f("KEYFRAMES_ROOT", G_DATA, PATH,
        help="Root directory of keyframe images. In cloud-assets mode this is "
             "the local LRU cache that resolve-keyframe fills on demand."),
-    _f("FEATURES_ROOT", G_DATA, PATH, has_runtime_flow=False,
-       help="Legacy per-video .npy feature root. Kept for offline scripts; "
-            "the live search path does not read it."),
     _f("MEDIA_INFO_PATH", G_DATA, PATH,
        help="ZIP or directory of per-video media-info JSON (watch_url + length)."),
     _f("MAP_KEYFRAMES_PATH", G_DATA, PATH,
@@ -420,8 +417,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
        help="Object key of the versioned manifest inside the metadata container/bucket."),
     _f("CLOUD_ASSETS_CACHE_PATH", G_CLOUD, PATH,
        help="Local cache root for synced artifacts. Blank -> <app-data>/assets-cache."),
-    _f("CLOUD_ASSETS_CACHE_MAX_BYTES", G_CLOUD, INT, minimum=0,
-       help="Soft cap for synced artifacts (0 = unbounded)."),
     _f("CLOUD_ASSETS_KEYFRAME_CACHE_MAX_BYTES", G_CLOUD, INT, minimum=1_000_000,
        help="LRU cap for on-demand keyframe downloads."),
     # Azure Blob
@@ -453,10 +448,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     # -- Logging -----------------------------------------------------------
     _f("LOG_LEVEL", G_LOGGING, CHOICE,
        choices=("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG")),
-    _f("LOG_FILE_PATH", G_LOGGING, PATH, has_runtime_flow=False,
-       help="Declared for a future file handler; not wired to the logger yet."),
-    _f("LOG_REQUEST_BODY", G_LOGGING, BOOL, has_runtime_flow=False,
-       help="Declared for future verbose request logging; not wired yet."),
 
     # -- Chat --------------------------------------------------------------
     _f("CHAT_HISTORY_MESSAGES", G_SERVER, INT, minimum=0, maximum=100,

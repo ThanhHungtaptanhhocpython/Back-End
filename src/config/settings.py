@@ -39,7 +39,6 @@ class Settings(BaseSettings):
         src_dir: Absolute path to the `src/` directory. All data paths
             are resolved relative to this.
         keyframes_root: Root directory for keyframe images.
-        features_root: Root directory for per-video .npy feature files.
         log_level: Python logging level string.
     """
 
@@ -52,7 +51,6 @@ class Settings(BaseSettings):
     # --- Data Paths (resolved relative to src_dir if not absolute) ---
     src_dir: Path = _default_src_dir()
     keyframes_root: Path | None = None
-    features_root: Path | None = None
 
     # --- Video playback / frame capture ---
     # Archive (or directory) of per-video media-info JSON files carrying the
@@ -243,7 +241,6 @@ class Settings(BaseSettings):
     cloud_assets_provider: str = "local"  # local | azure_blob | s3_compatible
     cloud_assets_manifest_key: str = "hcmai-assets.json"
     cloud_assets_cache_path: Path | None = None
-    cloud_assets_cache_max_bytes: int = 0
     cloud_assets_keyframe_cache_max_bytes: int = 5 * 1024 * 1024 * 1024
 
     azure_storage_account_name: str = ""
@@ -267,10 +264,6 @@ class Settings(BaseSettings):
     launcher_health_timeout_seconds: float = 60.0
     launcher_health_poll_interval_seconds: float = 1.0
 
-    # --- Logging (declared; not wired to the logger yet) ---
-    log_file_path: Path | None = None
-    log_request_body: bool = False
-
     # --- Chat memory ---
     chat_history_messages: int = 6
 
@@ -289,7 +282,6 @@ class Settings(BaseSettings):
         return value
     @field_validator(
         "keyframes_root",
-        "features_root",
         "media_info_path",
         "map_keyframes_path",
         "video_capture_cache_path",
@@ -302,7 +294,6 @@ class Settings(BaseSettings):
         "agent_vlm_cache_path",
         "cloud_assets_cache_path",
         "launcher_frontend_dir",
-        "log_file_path",
         mode="before",
     )
     @classmethod
@@ -348,15 +339,6 @@ class Settings(BaseSettings):
         if self.keyframes_root is not None:
             return Path(self.keyframes_root)
         return self.src_dir / "data" / "Keyframes"
-
-    def get_features_root(self) -> Path:
-        """Return the resolved features root directory.
-
-        Falls back to ``src/data/features``.
-        """
-        if self.features_root is not None:
-            return Path(self.features_root)
-        return self.src_dir / "data" / "features"
 
     def get_media_info_path(self) -> Path:
         """Return the resolved media-info archive/directory path.

@@ -163,16 +163,19 @@ export function visibleGroups(
     changedKeys = [],
     values = {},
     excludeGroups = [],
+    excludeKeys = [],
   } = {},
 ) {
   const changed = new Set(changedKeys);
   const skip = new Set(excludeGroups);
+  const skipKeys = new Set(excludeKeys);
   const searching = String(query || "").trim() !== "";
   const out = [];
   for (const group of schema?.groups || []) {
     if (skip.has(group.group)) continue;
     let hidden = 0;
     const fields = (group.fields || []).filter((spec) => {
+      if (skipKeys.has(spec.key)) return false;
       // A field made irrelevant by another toggle is always hidden.
       if (isHiddenByCondition(spec, values)) return false;
       if (modifiedOnly && !changed.has(spec.key)) return false;
@@ -219,13 +222,27 @@ const AI_PROVIDER_PREFIX = {
   kilo: "KILO_",
 };
 
+// The whole "Agent/VLM" group is LLM-planner / VLM-verifier config, plus these
+// VLM toggles that otherwise sit in TRAKE / Q&A. All of it moves to the AI
+// Providers tab as an "AI inference" section.
+export const AI_INFERENCE_GROUP = "Agent/VLM";
+export const AI_INFERENCE_EXTRA_KEYS = [
+  "TRAKE_VLM_ENABLED",
+  "TRAKE_VLM_MAX_SEQUENCES",
+  "TRAKE_ENABLE_VQA",
+  "TRAKE_VQA_MAX_SEQUENCES",
+  "QA_VLM_ENABLED",
+  "QA_MAX_TOKENS",
+];
+
 /**
- * Split the schema's "AI" group into { gateway, providers: {id: [specs]}, legacy }
- * so the AI Providers tab can render the gateway controls, one card per
- * provider, and a collapsible legacy block.
+ * Split the schema for the AI Providers tab:
+ *   { gateway, providers: {id:[specs]}, legacy,
+ *     inference: { planner:[], vlm:[], kis:[], trake:[], qa:[] } }
  */
 export function partitionAiFields(schema) {
-  const ai = (schema?.groups || []).find((g) => g.group === "AI");
+  const groups = schema?.groups || [];
+  const ai = groups.find((g) => g.group === "AI");
   const fields = ai ? ai.fields : [];
   const byKey = Object.fromEntries(fields.map((f) => [f.key, f]));
 
@@ -234,17 +251,31 @@ export function partitionAiFields(schema) {
   const providers = {};
   const claimed = new Set(AI_GATEWAY_KEYS);
   for (const [id, prefix] of Object.entries(AI_PROVIDER_PREFIX)) {
-    const specs = fields.filter(
-      (f) => f.key.startsWith(prefix) && !AI_LEGACY_KEYS.has(f.key),
-    );
+    const specs = fields.filter((f) => f.key.startsWith(prefix) && !AI_LEGACY_KEYS.has(f.key));
     if (specs.length) {
       providers[id] = specs;
       specs.forEach((s) => claimed.add(s.key));
     }
   }
-
   const legacy = fields.filter((f) => !claimed.has(f.key));
-  return { gateway, providers, legacy };
+
+  const agentGroup = groups.find((g) => g.group === AI_INFERENCE_GROUP);
+  const agentFields = agentGroup ? agentGroup.fields : [];
+  const extraByKey = {};
+  for (const group of groups) {
+    for (const f of group.fields || []) {
+      if (AI_INFERENCE_EXTRA_KEYS.includes(f.key)) extraByKey[f.key] = f;
+    }
+  }
+  const inference = {
+    planner: agentFields.filter((f) => f.key.startsWith("AGENT_LLM_") || f.key === "AGENT_VISUAL_QUERY_LIMIT"),
+    vlm: agentFields.filter((f) => f.key.startsWith("AGENT_VLM_")),
+    kis: agentFields.filter((f) => f.key.startsWith("KIS_")),
+    trake: AI_INFERENCE_EXTRA_KEYS.filter((k) => k.startsWith("TRAKE_")).map((k) => extraByKey[k]).filter(Boolean),
+    qa: AI_INFERENCE_EXTRA_KEYS.filter((k) => k.startsWith("QA_")).map((k) => extraByKey[k]).filter(Boolean),
+  };
+
+  return { gateway, providers, legacy, inference };
 }
 
 export function formatBytes(bytes) {

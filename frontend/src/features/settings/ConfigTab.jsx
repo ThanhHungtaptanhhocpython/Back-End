@@ -2,10 +2,11 @@ import { useMemo, useState } from "react";
 import { Alert, Collapse, Empty, Input, Switch, Tooltip } from "antd";
 
 import FieldRow from "./FieldRow.jsx";
-import { visibleGroups } from "./settingsModel.js";
+import { AI_INFERENCE_EXTRA_KEYS, AI_INFERENCE_GROUP, visibleGroups } from "./settingsModel.js";
 
 const DEFAULT_OPEN = ["Server", "Data/Media"];
-const HIDDEN_GROUPS = ["AI"]; // AI provider config lives on the AI Providers tab
+// AI provider + inference config lives on the AI Providers tab.
+const HIDDEN_GROUPS = ["AI", AI_INFERENCE_GROUP];
 
 export default function ConfigTab({ schema, config, form }) {
   const { values, secrets, errors, changed, setValue, setSecret } = form;
@@ -23,6 +24,7 @@ export default function ConfigTab({ schema, config, form }) {
         changedKeys: changed,
         values,
         excludeGroups: HIDDEN_GROUPS,
+        excludeKeys: AI_INFERENCE_EXTRA_KEYS,
       }),
     [schema, query, showAdvanced, modifiedOnly, changed, values],
   );
@@ -51,7 +53,7 @@ export default function ConfigTab({ schema, config, form }) {
         </Tooltip>
         <span className="set-flex-spacer" />
         <span className="set-dim" style={{ fontSize: 12 }}>
-          AI provider settings are on the <b>AI Providers</b> tab.
+          AI provider &amp; inference settings are on the <b>AI Providers</b> tab.
         </span>
       </div>
 

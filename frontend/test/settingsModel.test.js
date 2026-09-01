@@ -162,11 +162,39 @@ const AI_SCHEMA = {
         { key: "ANTHROPIC_API_KEY", kind: "secret", secret: true }, // legacy
       ],
     },
+    {
+      group: "Agent/VLM",
+      fields: [
+        { key: "AGENT_LLM_ENABLED", kind: "bool" },
+        { key: "AGENT_LLM_MODEL", kind: "str" },
+        { key: "AGENT_VISUAL_QUERY_LIMIT", kind: "int" },
+        { key: "AGENT_VLM_ENABLED", kind: "bool" },
+        { key: "AGENT_VLM_BATCH_SIZE", kind: "int" },
+        { key: "KIS_VQA_RERANK", kind: "bool" },
+      ],
+    },
+    {
+      group: "TRAKE",
+      fields: [
+        { key: "TRAKE_OCR_ENABLED", kind: "bool" },
+        { key: "TRAKE_BEAM_WIDTH", kind: "int" },
+        { key: "TRAKE_VLM_ENABLED", kind: "bool" },
+        { key: "TRAKE_ENABLE_VQA", kind: "bool" },
+      ],
+    },
+    {
+      group: "Q&A",
+      fields: [
+        { key: "QA_RETRIEVAL_POOL", kind: "int" },
+        { key: "QA_VLM_ENABLED", kind: "bool" },
+        { key: "QA_MAX_TOKENS", kind: "int" },
+      ],
+    },
     { group: "Server", fields: [{ key: "PORT", kind: "int" }] },
   ],
 };
 
-test("partitionAiFields splits gateway / provider cards / legacy", () => {
+test("partitionAiFields splits gateway / provider cards / legacy / inference", () => {
   const p = partitionAiFields(AI_SCHEMA);
   assert.deepEqual(p.gateway.map((f) => f.key), [
     "AI_GATEWAY_ENABLED", "AI_TEXT_PRIORITY", "AI_VISION_PRIORITY",
@@ -174,18 +202,29 @@ test("partitionAiFields splits gateway / provider cards / legacy", () => {
   ]);
   assert.deepEqual(p.providers.nim.map((f) => f.key), ["NIM_ENABLED", "NIM_API_KEY", "NIM_TEXT_MODEL"]);
   assert.deepEqual(p.providers.kilo.map((f) => f.key), ["KILO_ENABLED", "KILO_API_KEY"]);
-  // OpenRouter card gets its gateway fields but NOT the legacy identity knob
   assert.deepEqual(p.providers.openrouter.map((f) => f.key), [
     "OPENROUTER_ENABLED", "OPENROUTER_API_KEY", "OPENROUTER_MODEL",
   ]);
   assert.deepEqual(p.legacy.map((f) => f.key).sort(), [
     "ANTHROPIC_API_KEY", "LLM_PROVIDER", "OPENROUTER_SITE_URL",
   ]);
+  assert.deepEqual(p.inference.planner.map((f) => f.key), ["AGENT_LLM_ENABLED", "AGENT_LLM_MODEL", "AGENT_VISUAL_QUERY_LIMIT"]);
+  assert.deepEqual(p.inference.vlm.map((f) => f.key), ["AGENT_VLM_ENABLED", "AGENT_VLM_BATCH_SIZE"]);
+  assert.deepEqual(p.inference.kis.map((f) => f.key), ["KIS_VQA_RERANK"]);
+  assert.deepEqual(p.inference.trake.map((f) => f.key), ["TRAKE_VLM_ENABLED", "TRAKE_ENABLE_VQA"]);
+  assert.deepEqual(p.inference.qa.map((f) => f.key), ["QA_VLM_ENABLED", "QA_MAX_TOKENS"]);
 });
 
-test("visibleGroups excludeGroups hides the AI group from Configuration", () => {
-  const groups = visibleGroups(AI_SCHEMA, { excludeGroups: ["AI"] });
-  assert.deepEqual(groups.map((g) => g.group), ["Server"]);
+test("visibleGroups drops the AI + Agent/VLM groups and the moved TRAKE/Q&A keys", () => {
+  const groups = visibleGroups(AI_SCHEMA, {
+    excludeGroups: ["AI", "Agent/VLM"],
+    excludeKeys: ["TRAKE_VLM_ENABLED", "TRAKE_ENABLE_VQA", "QA_VLM_ENABLED", "QA_MAX_TOKENS"],
+  });
+  assert.deepEqual(groups.map((g) => g.group), ["TRAKE", "Q&A", "Server"]);
+  assert.deepEqual(groups.find((g) => g.group === "TRAKE").fields.map((f) => f.key), [
+    "TRAKE_OCR_ENABLED", "TRAKE_BEAM_WIDTH",
+  ]);
+  assert.deepEqual(groups.find((g) => g.group === "Q&A").fields.map((f) => f.key), ["QA_RETRIEVAL_POOL"]);
 });
 
 test("formatBytes is human readable", () => {

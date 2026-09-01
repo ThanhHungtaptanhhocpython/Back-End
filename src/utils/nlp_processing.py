@@ -128,12 +128,18 @@ class Translation():
         return not candidate.casefold().startswith(rejected_prefixes)
 
     def _prefer_contextual_translation(self, text: str) -> bool:
-        """Google often misreads Vietnamese without diacritics as unrelated words."""
-        if self.__from_lang != "vi":
+        """Use contextual fallback first for known ambiguous unaccented Vietnamese."""
+        if self.__from_lang != "vi" or self.__to_lang != "en":
             return False
         has_letters = bool(re.search(r"[A-Za-z]", text))
         has_vietnamese_diacritics = bool(re.search(r"[à-ỹÀ-ỸđĐ]", text))
-        return has_letters and not has_vietnamese_diacritics
+        return (
+            has_letters
+            and not has_vietnamese_diacritics
+            and bool(re.search(r"\bdung\s+duoi\s+nuoc\b", text, re.IGNORECASE))
+        )
+
+    @staticmethod
     def _is_real_translation(candidate: str, source: str) -> bool:
         """True when ``candidate`` is a non-empty string that differs from the input."""
         cleaned = (candidate or "").strip()
@@ -230,9 +236,6 @@ class Translation():
                 ),
             ])
             return self._clean_provider_output(getattr(response, "content", ""))
-        except Exception as e:
-            logger.warning(f"OpenRouter translation fallback failed: {e}")
-            return str(getattr(response, "content", "") or "").strip()
         except Exception as exc:
             logger.warning(
                 "Translation fallback failed (provider=openrouter, error=%s)",
@@ -268,51 +271,9 @@ class Translation():
                 status=TRANSLATION_OK,
             )
 
-        if self.__from_lang == self.__to_lang:
-            self.last_provider = "identity"
-            return cleaned
-
         cache_key = (self.__from_lang, self.__to_lang, cleaned)
-        if cache_key in self._cache:
-            self.last_provider = "cache"
-            cached = self._cache[cache_key]
-            self.last_translated = cached != cleaned
-            return cached
-
-        result = ""
-        tried_openrouter = False
-        if self._prefer_contextual_translation(cleaned):
-            tried_openrouter = True
-            fallback = self._translate_with_openrouter(cleaned)
-            if self._usable_translation(cleaned, fallback):
-                self.last_provider = "openrouter"
-                self.last_translated = True
-                self._cache[cache_key] = fallback
-                return fallback
-
-        if self.translator is None:
-            self._init_translator()
-        if self.translator is not None:
-            try:
-                result = self._clean_provider_output(self.translator.translate(cleaned))
-                if self._usable_translation(cleaned, result):
-                    self.last_provider = "google"
-                    self.last_translated = True
-                    self._cache[cache_key] = result
-                    return result
-            except Exception as e:
-                logger.warning(f"Translation call failed: {e}")
-
-        if not tried_openrouter:
-            fallback = self._translate_with_openrouter(cleaned)
-            if self._usable_translation(cleaned, fallback):
-                self.last_provider = "openrouter"
-                self.last_translated = True
-                self._cache[cache_key] = fallback
-                return fallback
         cached = self._cache.get(cache_key)
         if cached is not None:
-            # The cache only ever holds successful, different-from-input results.
             return TranslationResult(
                 text=cached,
                 translated=True,
@@ -320,14 +281,20 @@ class Translation():
                 status=TRANSLATION_OK,
             )
 
-        # 1) Primary provider.
+        tried_openrouter = False
+        if self._prefer_contextual_translation(cleaned):
+            tried_openrouter = True
+            fallback = self._translate_with_openrouter(cleaned)
+            if self._usable_translation(cleaned, fallback):
+                self._cache[cache_key] = fallback
+                return TranslationResult(fallback, True, "openrouter", TRANSLATION_OK)
+
         google_text = self._translate_with_google(cleaned)
-        if self._is_real_translation(google_text, cleaned):
+        google_text = self._clean_provider_output(google_text)
+        if self._usable_translation(cleaned, google_text):
             self._cache[cache_key] = google_text
             return TranslationResult(google_text, True, "google", TRANSLATION_OK)
 
-        # 2a) Multi-provider Text chain (translation + Agent planner), when the
-        #     AI gateway is enabled. Reports the provider that actually answered.
         gateway_text, gateway_provider = "", ""
         try:
             gateway_text, gateway_provider = self._translate_with_gateway(cleaned)
@@ -335,27 +302,27 @@ class Translation():
             logger.warning(
                 "Translation gateway error (error=%s)", type(exc).__name__
             )
-        if self._is_real_translation(gateway_text, cleaned):
+        gateway_text = self._clean_provider_output(gateway_text)
+        if self._usable_translation(cleaned, gateway_text):
             self._cache[cache_key] = gateway_text
             return TranslationResult(
                 gateway_text, True, gateway_provider or "gateway", TRANSLATION_OK
             )
 
-        # 2b) Single-provider OpenRouter fallback -- only if configured.
-        try:
-            fallback = (self._translate_with_openrouter(cleaned) or "").strip()
-        except Exception as exc:
-            logger.warning(
-                "Translation fallback error (provider=openrouter, error=%s)",
-                type(exc).__name__,
-            )
-            fallback = ""
-        if self._is_real_translation(fallback, cleaned):
-            self._cache[cache_key] = fallback
-            return TranslationResult(fallback, True, "openrouter", TRANSLATION_OK)
+        fallback = ""
+        if not tried_openrouter:
+            try:
+                fallback = self._translate_with_openrouter(cleaned)
+            except Exception as exc:
+                logger.warning(
+                    "Translation fallback error (provider=openrouter, error=%s)",
+                    type(exc).__name__,
+                )
+            fallback = self._clean_provider_output(fallback)
+            if self._usable_translation(cleaned, fallback):
+                self._cache[cache_key] = fallback
+                return TranslationResult(fallback, True, "openrouter", TRANSLATION_OK)
 
-        # 3) Nothing produced a usable translation. Report a structured failure:
-        # never cache it, never claim success, keep the original text for the UI.
         logger.warning(
             "Translation unavailable (providers tried: google=%s, gateway=%s, openrouter=%s)",
             "returned" if google_text else "empty/failed",

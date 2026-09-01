@@ -57,13 +57,14 @@ class Settings(BaseSettings):
     keyframes_root: Path | None = None
     features_root: Path | None = None
     media_info_path: Path | None = None
+    faiss_index_path: Path | None = None
+    metadata_path: Path | None = None
 
     # --- Video playback / frame capture ---
     # Archive (or directory) of per-video media-info JSON files carrying the
     # YouTube ``watch_url`` and ``length``. ``media-info-aic25-b1.zip`` is a
     # runtime asset that is not committed to Git; point this at wherever it
     # lives on the deployment machine.
-    media_info_path: Path | None = None
     # Archive (or directory) of per-video map-keyframes CSV files. These carry
     # the authoritative per-video FPS and the keyframe-ordinal -> frame index
     # mapping. Defaults to the extracted ``src/dict/map-keyframes`` directory;
@@ -91,6 +92,10 @@ class Settings(BaseSettings):
 
     # --- External Services ---
     elasticsearch_url: str = "http://localhost:9200"
+
+    # --- Legacy OpenCLIP retrieval settings ---
+    clip_model_name: str = "ViT-B-32"
+    clip_pretrained: str = "openai"
 
     # --- CORS ---
     # Comma-separated list of allowed origins. Use "*" to allow any origin
@@ -312,7 +317,8 @@ class Settings(BaseSettings):
         "keyframes_root",
         "features_root",
         "media_info_path",
-        "media_info_path",
+        "faiss_index_path",
+        "metadata_path",
         "map_keyframes_path",
         "video_capture_cache_path",
         "beit3_faiss_index_path",
@@ -370,6 +376,24 @@ class Settings(BaseSettings):
         if self.keyframes_root is not None:
             return Path(self.keyframes_root)
         return self.src_dir / "data" / "Keyframes"
+
+    def get_features_root(self) -> Path:
+        """Return the resolved per-video feature root directory."""
+        if self.features_root is not None:
+            return Path(self.features_root)
+        return self.src_dir / "dict" / "features"
+
+    def get_faiss_index_path(self) -> Path:
+        """Return the resolved legacy OpenCLIP FAISS index path."""
+        if self.faiss_index_path is not None:
+            return Path(self.faiss_index_path)
+        return self.src_dir / "dict" / "faiss_clip.bin"
+
+    def get_metadata_path(self) -> Path:
+        """Return the resolved legacy OpenCLIP metadata path."""
+        if self.metadata_path is not None:
+            return Path(self.metadata_path)
+        return self.src_dir / "dict" / "metadata_clip.json"
 
     def get_media_info_path(self) -> Path:
         """Return the resolved media-info archive/directory path.
@@ -434,15 +458,6 @@ class Settings(BaseSettings):
         if self.video_capture_cache_path is not None:
             return Path(self.video_capture_cache_path)
         return self.src_dir.parent / ".cache" / "video-captures"
-
-    def get_media_info_path(self) -> Path:
-        """Return the resolved directory containing per-video metadata JSON.
-
-        Falls back to ``src/dict/media-info``.
-        """
-        if self.media_info_path is not None:
-            return Path(self.media_info_path)
-        return self.src_dir / "dict" / "media-info"
 
     def get_agent_vlm_cache_path(self) -> Path:
         """Return the runtime cache path for OpenRouter VLM verdicts."""

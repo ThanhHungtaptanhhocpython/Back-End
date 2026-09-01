@@ -18,8 +18,6 @@ import {
   runBackendSearch,
   shouldUseQaDemoFallback,
 } from "../services/backendSearch.js";
-import { mockSearch } from "../mocks/searchEngine.js";
-import { getSearchConfig, isTransportError, runBackendAgentSearch, runBackendSearch } from "../services/backendSearch.js";
 import { mockSearch, mockTemporalSearch } from "../mocks/searchEngine.js";
 import { parseTemporalQuery, buildTemporalEventQueries } from "./temporalQuery.js";
 
@@ -74,7 +72,6 @@ export async function runSearch(tab, pivot) {
       if (tab?.searchType === "QA") {
         return runQaDemoFallback(tab, pivot, { reason: error.message });
       }
-      const fallback = await mockSearch(tab, pivot);
       const fallback = isTemporal ? await mockTemporalForTab(tab) : await mockSearch(tab, pivot);
       return {
         ...fallback,

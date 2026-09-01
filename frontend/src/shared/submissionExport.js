@@ -21,9 +21,9 @@ function videoNameForItem(item) {
     if (/^L\d+/i.test(folder)) {
       return normalizeVideoName(`${folder}_${video}`);
     }
-    const m = folder.match(/l(\d+)/i);
-    if (m) {
-      return `L${m[1]}_${video}`;
+    const match = folder.match(/l(\d+)/i);
+    if (match) {
+      return `L${match[1]}_${video}`;
     }
   }
   return video;
@@ -67,10 +67,6 @@ export function queryTypeFromSearchType(searchType) {
   return "kis";
 }
 
-export function buildSubmissionCsv(items, queryType, answerOverride = "") {
-  const type = String(queryType || "kis").toLowerCase();
-  const rows = (items || []).slice(0, MAX_SUBMISSION_ROWS);
-/** Drop later rows that repeat an earlier `video_id,frame_idx` pair. */
 function dedupeByVideoFrame(items) {
   const seen = new Set();
   const kept = [];
@@ -97,7 +93,6 @@ function mulberry32(seed) {
   };
 }
 
-/** Clamp a jittered row back to non-negative, strictly-increasing frame ids. */
 function enforceOrder(ids) {
   const out = ids.map((value) => Math.max(0, Math.round(value)));
   for (let i = 1; i < out.length; i += 1) {
@@ -106,13 +101,6 @@ function enforceOrder(ids) {
   return out;
 }
 
-/**
- * Expand one chosen candidate's frame ids into up to `rows` ordered rows so the
- * submission blankets each event's short ground-truth interval `[sⱼ, eⱼ]`
- * (BTC rule: a submitted frame counts if it lands anywhere inside that window,
- * which is usually < 10 frames wide). Row 0 is always the exact chosen frames;
- * the rest are deterministic jitters within `±radius`.
- */
 export function expandTemporalFrames(frameIds, { radius = 0, rows = 100 } = {}) {
   const base = (frameIds || []).map((value) => Number.parseInt(value, 10)).filter(Number.isFinite);
   const cap = Math.min(100, Math.max(1, Math.round(rows) || 1));
@@ -129,10 +117,10 @@ export function expandTemporalFrames(frameIds, { radius = 0, rows = 100 } = {}) 
     out.push(ordered);
   };
 
-  push(base); // row 0: exact chosen frames
+  push(base);
   for (let d = 1; d <= radius; d += 1) {
-    push(base.map((value) => value - d)); // coordinated slide back
-    push(base.map((value) => value + d)); // coordinated slide forward
+    push(base.map((value) => value - d));
+    push(base.map((value) => value + d));
   }
   for (let j = 0; j < base.length; j += 1) {
     for (let d = -radius; d <= radius; d += 1) {
@@ -150,16 +138,6 @@ export function expandTemporalFrames(frameIds, { radius = 0, rows = 100 } = {}) 
   return out;
 }
 
-/**
- * TRAKE CSV: up to 100 rows, one full candidate per row:
- *   `video_id,frame_event_1,...,frame_event_N`
- * Manually-edited sequences are emitted first; a later row that repeats an
- * earlier row's whole (video + ordered frames) tuple is dropped. Selection Tray
- * frames are never folded in here.
- *
- * `options.jitterRadius > 0` expands the first (chosen) sequence into jittered
- * rows via `expandTemporalFrames`; the remaining sequences then fill up to 100.
- */
 export function buildTemporalSubmissionCsv(sequences, options = {}) {
   const jitterRadius = Math.max(0, Math.round(Number(options.jitterRadius) || 0));
   const jitterRows = Math.min(100, Math.max(1, Math.round(Number(options.jitterRows) || 100)));
@@ -185,7 +163,7 @@ export function buildTemporalSubmissionCsv(sequences, options = {}) {
   const seen = new Set();
   const lines = [];
   const emit = (videoId, ids) => {
-    if (lines.length >= 100) return;
+    if (lines.length >= MAX_SUBMISSION_ROWS) return;
     const line = [videoId, ...ids].join(",");
     if (seen.has(line)) return;
     seen.add(line);
@@ -204,23 +182,20 @@ export function buildTemporalSubmissionCsv(sequences, options = {}) {
   return lines.join("\n");
 }
 
-export function buildSubmissionCsv(items, queryType, answer = "") {
+export function buildSubmissionCsv(items, queryType, answerOverride = "") {
   const type = String(queryType || "kis").toLowerCase();
 
   if (type === "trake") {
     if (looksLikeSequenceList(items)) {
       return buildTemporalSubmissionCsv(items);
     }
-    // Legacy single-sequence shape: one line, ordered frames, no dedupe.
-    const rows = (items || []).slice(0, 100);
+    const rows = (items || []).slice(0, MAX_SUBMISSION_ROWS);
     if (rows.length === 0) return "";
     const firstVideo = videoNameForItem(rows[0]);
     return [firstVideo, ...rows.map(normalizeFrameId)].join(",");
   }
 
-  // KIS / QA: a captured frame and a search hit for the same
-  // (video_id, frame_idx) must not produce two rows.
-  const rows = dedupeByVideoFrame(items || []).slice(0, 100);
+  const rows = dedupeByVideoFrame(items || []).slice(0, MAX_SUBMISSION_ROWS);
 
   if (type === "qa") {
     const manualAnswer = String(answerOverride ?? "");
@@ -228,8 +203,6 @@ export function buildSubmissionCsv(items, queryType, answer = "") {
       .map((item) => [
         videoNameForItem(item),
         normalizeFrameId(item),
-        // One Q&A query has one answer. A manually entered answer must therefore
-        // override any model-generated value attached to individual result rows.
         csvCell(
           truncateQaAnswer(manualAnswer !== "" ? manualAnswer : firstDefined(item?.answer, item?.backend?.answer, "")),
           true
@@ -302,7 +275,6 @@ export function makeSubmissionZip(files) {
   const zipFiles = [{ name: "submission/", content: "" }, ...normalizeZipFiles(files)];
 
   zipFiles.forEach((file) => {
-    // Match official sample archives: place CSV files inside submission/.
     const path = file.name.startsWith("submission/") ? file.name : `submission/${file.name}`;
     const nameBytes = encoder.encode(path);
     const contentBytes = encoder.encode(file.content);

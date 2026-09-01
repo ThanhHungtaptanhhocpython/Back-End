@@ -1305,30 +1305,30 @@ def _request_structured(
     max_tokens: int,
     schema: Dict[str, Any],
 ) -> Dict[str, Any]:
-def _request_answer_via_gateway(messages: List[Dict[str, Any]], max_tokens: int) -> Dict[str, Any]:
-    from src.services.ai import gateway as ai_gateway
-    from src.services.ai.base import AllProvidersFailed
 
-    try:
-        payload, _attempts, _provider = ai_gateway.vision_completion(
-            messages,
-            max_tokens=max_tokens,
-            response_format={"type": "json_schema", "json_schema": ANSWER_SCHEMA},
-        )
-    except AllProvidersFailed as exc:
-        raise urllib.error.URLError(f"vision chain exhausted: {exc}") from exc
-    content = (((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
-    if isinstance(content, list):
-        content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
-    return _extract_json_object(content)
+    def request_via_gateway() -> Dict[str, Any]:
+        from src.services.ai import gateway as ai_gateway
+        from src.services.ai.base import AllProvidersFailed
 
+        try:
+            payload, _attempts, _provider = ai_gateway.vision_completion(
+                messages,
+                max_tokens=max_tokens,
+                response_format={"type": "json_schema", "json_schema": schema},
+            )
+        except AllProvidersFailed as exc:
+            raise urllib.error.URLError(f"vision chain exhausted: {exc}") from exc
+        content = (((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
+        if isinstance(content, list):
+            content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+        return _extract_json_object(content)
 
-def _request_answer(messages: List[Dict[str, Any]], model: str, timeout: float, max_tokens: int) -> Dict[str, Any]:
     settings = get_settings()
     from src.services.openrouter_vlm_verifier import vision_gateway_available
 
     if vision_gateway_available(settings):
-        return _request_answer_via_gateway(messages, max_tokens)
+        return request_via_gateway()
+
     body = {
         "model": model,
         "temperature": 0,
@@ -1366,6 +1366,15 @@ def _request_answer(messages: List[Dict[str, Any]], model: str, timeout: float, 
 
 def _request_answer(messages: List[Dict[str, Any]], model: str, timeout: float, max_tokens: int) -> Dict[str, Any]:
     return _request_structured(messages, model, timeout, max_tokens, ANSWER_SCHEMA)
+
+
+def _request_verification(
+    messages: List[Dict[str, Any]],
+    model: str,
+    timeout: float,
+    max_tokens: int,
+) -> Dict[str, Any]:
+    return _request_structured(messages, model, timeout, max_tokens, VERIFICATION_SCHEMA)
 
 
 def _encode_detail_image(image: Image.Image, max_side: int, *, allow_upscale: bool) -> str:
@@ -1461,15 +1470,6 @@ def _select_detail_frame_ids(
 
     best_group_ids = min(by_group.values(), key=group_key)
     return best_group_ids[: max(1, limit)]
-
-
-def _request_verification(
-    messages: List[Dict[str, Any]],
-    model: str,
-    timeout: float,
-    max_tokens: int,
-) -> Dict[str, Any]:
-    return _request_structured(messages, model, timeout, max_tokens, VERIFICATION_SCHEMA)
 
 
 def _canonical_answer(value: Any, max_chars: int = 100) -> str:

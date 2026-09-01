@@ -156,33 +156,31 @@ export default function BatchQueryModal({ open, onClose, toast }) {
         };
 
         const res = await runSearch(searchTab);
-        const items = (res?.items || []).slice(0, topk);
-        const answeredItem = q.type === "qa"
-          ? items.find((item) => item?.answer || item?.backend?.answer)
-          : null;
-        const generatedAnswer = q.type === "qa"
-          ? String(answeredItem?.answer ?? answeredItem?.backend?.answer ?? "")
-          : "";
-        const qaAnswer = q.type === "qa" ? (q.answer || generatedAnswer) : "";
-        if (q.type === "qa" && qaAnswer === "") {
-          throw new Error("QA answer is missing. Enter it manually before exporting.");
-        }
-        const csvContent = buildSubmissionCsv(items, q.type, qaAnswer);
-        
-
         let csvContent;
         let count;
         let preview;
+
         if (isTrake) {
-          const seqs = res?.sequences || [];
-          csvContent = buildSubmissionCsv(seqs, "trake");
+          const sequences = res?.sequences || [];
+          csvContent = buildSubmissionCsv(sequences, "trake");
           count = csvContent ? csvContent.split("\n").filter(Boolean).length : 0;
           preview = csvContent.split("\n").slice(0, 2).join(" | ");
         } else {
           const items = (res?.items || []).slice(0, topk);
-          csvContent = buildSubmissionCsv(items, q.type);
+          const answeredItem = q.type === "qa"
+            ? items.find((item) => item?.answer || item?.backend?.answer)
+            : null;
+          const generatedAnswer = q.type === "qa"
+            ? String(answeredItem?.answer ?? answeredItem?.backend?.answer ?? "")
+            : "";
+          const qaAnswer = q.type === "qa" ? (q.answer || generatedAnswer) : "";
+          if (q.type === "qa" && qaAnswer === "") {
+            throw new Error("QA answer is missing. Enter it manually before exporting.");
+          }
+
+          csvContent = buildSubmissionCsv(items, q.type, qaAnswer);
           count = items.length;
-          preview = buildSubmissionCsv(items.slice(0, 2), q.type).split("\n").join(" | ");
+          preview = buildSubmissionCsv(items.slice(0, 2), q.type, qaAnswer).split(/\r?\n/).join(" | ");
         }
 
         generatedFiles.push({
@@ -191,12 +189,6 @@ export default function BatchQueryModal({ open, onClose, toast }) {
           queryType: q.type,
         });
 
-        summaryItems.push({
-          name: q.name,
-          type: q.type,
-          count: items.length,
-          preview: buildSubmissionCsv(items.slice(0, 2), q.type, qaAnswer).split(/\r?\n/).join(" | "),
-        });
         summaryItems.push({ name: q.name, type: q.type, count, preview });
       } catch (err) {
         console.error(`Error on query ${q.name}:`, err);

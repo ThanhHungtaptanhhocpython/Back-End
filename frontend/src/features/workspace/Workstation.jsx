@@ -115,8 +115,11 @@ export default function Workstation() {
     const query = String(tab?.query || "").trim();
     if (tab?.searchType !== "IMAGE" && !query) {
       searchSeqRef.current.set(tab.key, (searchSeqRef.current.get(tab.key) || 0) + 1);
-      setTabs((prev) => prev.map((t) => (t.key === tab.key ? { ...t, status: "idle", results: [], total: 0, latency: 0, meta: null, resultSource: null, resultMode: null } : t)));
-      setTabs((prev) => prev.map((t) => (t.key === tab.key ? { ...t, status: "idle", results: [], sequences: [], total: 0, latency: 0 } : t)));
+      setTabs((prev) => prev.map((t) => (
+        t.key === tab.key
+          ? { ...t, status: "idle", results: [], sequences: [], total: 0, latency: 0, meta: null, resultSource: null, resultMode: null }
+          : t
+      )));
       return;
     }
     if (tab?.searchType === "TEMPORAL" && !isRunnableTemporalQuery(parseTemporalQuery(query))) {
@@ -132,27 +135,17 @@ export default function Workstation() {
     const effectivePivot = pivotFrame || tab?.pivotItem;
 
     if (tabKey === activeKey) setFocusedId(null);
-    setTabs((prev) => prev.map((t) => (t.key === tabKey ? { ...t, status: "running", results: [], total: 0, latency: 0, meta: null, resultSource: null, resultMode: null } : t)));
-    setTabs((prev) => prev.map((t) => (t.key === tabKey ? { ...t, status: "running", results: [], sequences: [], total: 0, latency: 0 } : t)));
+    setTabs((prev) => prev.map((t) => (
+      t.key === tabKey
+        ? { ...t, status: "running", results: [], sequences: [], total: 0, latency: 0, meta: null, resultSource: null, resultMode: null }
+        : t
+    )));
     try {
       const res = await runSearchQuery(tab, effectivePivot);
       if (!isLatestSearch()) return;
 
       const isTemporal = res.type === "TEMPORAL" || Array.isArray(res.sequences);
       setTabs((prev) =>
-        prev.map((t) => (t.key === tabKey ? {
-          ...t,
-          status: "done",
-          results: res.items,
-          total: res.totalItems,
-          latency: res.latency,
-          meta: res.meta || null,
-          resultSource: res.source || null,
-          resultMode: res.mode || null,
-        } : t))
-      );
-      if (tabKey === activeKey) setFocusedId(res.items?.[0]?.id || null);
-      const qaDemoFallback = res.source === "fallback" && res.type === "QA";
         prev.map((t) =>
           t.key === tabKey
             ? {
@@ -162,10 +155,14 @@ export default function Workstation() {
                 sequences: isTemporal ? res.sequences || [] : [],
                 total: isTemporal ? res.totalItems || (res.sequences || []).length : res.totalItems,
                 latency: res.latency,
+                meta: res.meta || null,
+                resultSource: res.source || null,
+                resultMode: res.mode || null,
               }
             : t,
-        ),
+        )
       );
+      const qaDemoFallback = res.source === "fallback" && res.type === "QA";
       if (tabKey === activeKey) setFocusedId(isTemporal ? null : res.items?.[0]?.id || null);
       setBackend({
         backend: res.source === "live" || qaDemoFallback ? "online" : "offline",

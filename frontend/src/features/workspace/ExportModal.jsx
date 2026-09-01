@@ -253,8 +253,7 @@ export default function ExportModal({
       content: buildSubmissionCsv(selectedItems, queryType, answer),
       count: selectedItems.length,
     }];
-  }, [source, tabs, searchItems, keptItems, resolvedCustomItems, csvName, queryType, answer, tabQaAnswers]);
-  }, [source, tabs, searchItems, sequences, keptItems, resolvedCustomItems, csvName, queryType, answer, jitterRadius, jitterRows]);
+  }, [source, tabs, searchItems, sequences, keptItems, resolvedCustomItems, csvName, queryType, answer, tabQaAnswers, jitterRadius, jitterRows]);
 
   const rowCount = files.reduce((sum, file) => sum + file.count, 0);
   const preview = previewText(files);

@@ -129,7 +129,8 @@ ASR_INTENT = re.compile(
 )
 OCR_CONTEXT = re.compile(
     r"\b(?:map|chart|graph|diagram|legend|label|scoreboard|document|screen|"
-    r"bản đồ|ban do|biểu đồ|bieu do|chú giải|chu giai|ký hiệu|ky hieu|màn hình|man hinh)\b",
+    r"address|street|road|bản đồ|ban do|biểu đồ|bieu do|chú giải|chu giai|"
+    r"ký hiệu|ky hieu|màn hình|man hinh|địa chỉ|dia chi|đường|duong)\b",
     re.IGNORECASE,
 )
 
@@ -140,7 +141,14 @@ TEMPORAL_CONTEXT = re.compile(
 )
 
 QUESTION_TYPE_PATTERNS: Sequence[Tuple[str, re.Pattern[str]]] = (
-    ("count", re.compile(r"\b(?:how many|number of|count|bao nhiêu|bao nhieu|mấy|may)\b", re.IGNORECASE)),
+    (
+        "count",
+        re.compile(
+            r"\b(?:how many|number of|count|which number|bao nhiêu|bao nhieu|mấy|may|"
+            r"số nào\s+(?:không|khong)|so nao\s+khong)\b",
+            re.IGNORECASE,
+        ),
+    ),
     (
         "color",
         re.compile(
@@ -167,22 +175,23 @@ QUESTION_TYPE_PATTERNS: Sequence[Tuple[str, re.Pattern[str]]] = (
         ),
     ),
     (
-        "temporal",
-        re.compile(
-            r"\b(?:before|after|first|last|then|date of birth|calendar date|exact date|"
-            r"ngày sinh|ngay sinh|ngày chính xác|ngay chinh xac|trước đó|truoc do|trước khi|truoc khi|"
-            r"sau đó|sau do|sau khi|cuối cùng|cuoi cung|đầu tiên|dau tien)\b",
-            re.IGNORECASE,
-        ),
-    ),
-    (
         "object",
         re.compile(
             r"\b(?:what|which) (?:exact )?(?:kind of )?(?:chemical )?(?:object|device|vehicle|food|utensil|"
             r"container|transport|tool|item|animal|compound|substance|material|brand|model)|"
             r"\b(?:phương tiện|phuong tien|thiết bị|thiet bi|vật|vat|dụng cụ|dung cu|đồ vật|"
             r"do vat) gì\b|\b(?:phương tiện|phuong tien).{0,30}(?:nào|nao)\b|"
+            r"\b(?:loài|loai|giống|giong|con|cá|ca|topping|thịt của con|thit cua con)"
+            r".{0,40}(?:gì|gi|nào|nao)\b|\b[xX]\s+là\s+con\s+gì\b|"
             r"\b(?:nhãn hiệu|nhan hieu|mã sản phẩm|ma san pham)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "location",
+        re.compile(
+            r"\b(?:where|ở đâu|o dau|vị trí nào|vi tri nao|which (?:street|road)|"
+            r"nằm (?:ở|trên) đường nào|nam (?:o|tren) duong nao|đường nào|duong nao)\b",
             re.IGNORECASE,
         ),
     ),
@@ -196,7 +205,6 @@ QUESTION_TYPE_PATTERNS: Sequence[Tuple[str, re.Pattern[str]]] = (
         ),
     ),
     ("person", re.compile(r"\b(?:who|ai|người nào|nguoi nao)\b", re.IGNORECASE)),
-    ("location", re.compile(r"\b(?:where|ở đâu|o dau|vị trí nào|vi tri nao)\b", re.IGNORECASE)),
     (
         "action",
         re.compile(
@@ -211,6 +219,15 @@ QUESTION_TYPE_PATTERNS: Sequence[Tuple[str, re.Pattern[str]]] = (
         re.compile(
             r"^(?:is|are|was|were|do|does|did|can|could|has|have|có|co)\b|"
             r"\b(?:hay không|hay khong|không\s*\?|khong\s*\?)$",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "temporal",
+        re.compile(
+            r"\b(?:before|after|first|last|then|date of birth|calendar date|exact date|"
+            r"ngày sinh|ngay sinh|ngày chính xác|ngay chinh xac|trước đó|truoc do|trước khi|truoc khi|"
+            r"sau đó|sau do|sau khi|cuối cùng|cuoi cung|đầu tiên|dau tien)\b",
             re.IGNORECASE,
         ),
     ),
@@ -416,7 +433,8 @@ def _split_visual_events(query: str) -> List[str]:
         flags=re.IGNORECASE,
     )
     text = re.sub(
-        r"\s*(?:,\s*)?(?:followed by|after that|afterwards|then|next|finally)\s+",
+        r"\s*(?:[.!?]\s*)?(?:,\s*)?(?:followed by|after that|afterwards|then|next|finally)"
+        r"(?:\s*,)?\s+",
         " || ",
         text,
         flags=re.IGNORECASE,
@@ -436,6 +454,78 @@ def _split_visual_events(query: str) -> List[str]:
         if event:
             events.append(event)
     return events
+
+
+def _initial_time_window_seconds(question: str, translated: str) -> float | None:
+    """Extract an explicit initial video window such as '16 giây đầu tiên'."""
+    for value in (question, translated):
+        match = re.search(
+            r"\b(\d+(?:[.,]\d+)?)\s*(?:giây|giay|seconds?|secs?)\s*"
+            r"(?:đầu tiên|dau tien|đầu|dau|from the start|at the beginning)\b",
+            value,
+            re.IGNORECASE,
+        )
+        if match:
+            return _float(match.group(1).replace(",", "."), 0.0) or None
+        match = re.search(
+            r"\b(?:first|đầu tiên|dau tien)\s*(\d+(?:[.,]\d+)?)\s*"
+            r"(?:giây|giay|seconds?|secs?)\b",
+            value,
+            re.IGNORECASE,
+        )
+        if match:
+            return _float(match.group(1).replace(",", "."), 0.0) or None
+    return None
+
+
+def _enumeration_range(question: str, translated: str) -> Tuple[int, int] | None:
+    for value in (question, translated):
+        match = re.search(
+            r"(?:các số|cac so|numbers?)\s*(?:từ|tu|from)?\s*(\d+)\s*"
+            r"(?:-|–|đến|den|to)\s*(\d+)",
+            value,
+            re.IGNORECASE,
+        )
+        if match:
+            start, end = int(match.group(1)), int(match.group(2))
+            if 0 <= start <= end <= 100:
+                return start, end
+    return None
+
+
+def _text_evidence_queries(
+    question: str,
+    limit: int = 6,
+    *,
+    include_interrogative: bool = True,
+    include_full: bool = True,
+) -> List[str]:
+    """Create concise Vietnamese evidence queries from a story-like prompt."""
+    clauses: List[str] = []
+    for sentence in re.split(r"[.!?]+", _clean(question)):
+        for clause in re.split(
+            r"\b(?:sau đó|sau do|tiếp theo|tiep theo|rồi|roi|cuối cùng|cuoi cung)\b",
+            sentence,
+            flags=re.IGNORECASE,
+        ):
+            value = _clean(clause).strip(" ,;:-")
+            is_interrogative = bool(re.match(
+                r"^(?:hỏi|hoi|hãy cho biết|hay cho biet|đây là|day la|what|which|where|who|how)\b",
+                value,
+                re.IGNORECASE,
+            ))
+            if (
+                len(re.findall(r"\w+", value, re.UNICODE)) >= 4
+                and (include_interrogative or not is_interrogative)
+            ):
+                clauses.append(value)
+    # Individual descriptive clauses prevent common words from a long final
+    # question from dominating Elasticsearch BM25.  Keep the full prompt as a
+    # final conjunction signal when capacity permits.
+    queries = [*clauses, *([question] if include_full else [])]
+    if not queries:
+        queries = [question]
+    return _unique_queries(*queries, limit=max(1, limit))
 
 
 def _question_plan(question: str, visual_query_limit: int = 3) -> Dict[str, Any]:
@@ -472,7 +562,26 @@ def _question_plan(question: str, visual_query_limit: int = 3) -> Dict[str, Any]
     visual_query_event_ids = [event_by_query.get(query.casefold(), "global") for query in visual_queries]
     visual_query_priorities = [priority_by_query.get(query.casefold(), 0) for query in visual_queries]
     wants_ocr = answer_type == "ocr" or bool(OCR_INTENT.search(question) or OCR_CONTEXT.search(question))
-    wants_asr = answer_type == "asr" or bool(ASR_INTENT.search(question))
+    # Long natural-language QA descriptions often identify the exact video in
+    # spoken narration even when the requested value is visual.  ASR therefore
+    # acts as a retrieval anchor for all substantive QA types, not only direct
+    # "what was said" questions.
+    wants_asr = bool(
+        answer_type in {"asr", "object", "location", "person", "action", "temporal", "other"}
+        or ASR_INTENT.search(question)
+        or len(re.findall(r"\w+", question, re.UNICODE)) >= 12
+    )
+    time_window_seconds = _initial_time_window_seconds(question, translated)
+    enumeration_range = _enumeration_range(question, translated)
+    requires_set_comparison = bool(
+        enumeration_range
+        and re.search(
+            r"(?:not (?:visible|seen|shown)|không (?:được )?(?:nhìn thấy|thấy|xuất hiện)|"
+            r"khong (?:duoc )?(?:nhin thay|thay|xuat hien))",
+            question + " " + translated,
+            re.IGNORECASE,
+        )
+    )
     return {
         "question": question,
         "answer_type": answer_type,
@@ -485,6 +594,19 @@ def _question_plan(question: str, visual_query_limit: int = 3) -> Dict[str, Any]
         "visual_query_priorities": visual_query_priorities or [0],
         "ocr_query": question if wants_ocr else "",
         "asr_query": question if wants_asr else "",
+        "ocr_queries": _text_evidence_queries(question) if wants_ocr else [],
+        "asr_queries": (
+            _text_evidence_queries(
+                question,
+                include_interrogative=answer_type == "asr",
+                include_full=answer_type == "asr",
+            )
+            if wants_asr
+            else []
+        ),
+        "time_window_seconds": time_window_seconds,
+        "enumeration_range": enumeration_range,
+        "requires_set_comparison": requires_set_comparison,
     }
 
 
@@ -551,7 +673,39 @@ def _search_visual_queries(
     return ranked
 
 
-def _collect_text_evidence(plan: Dict[str, str], top_k: int) -> Dict[str, List[Dict[str, Any]]]:
+def _fuse_text_hits(
+    search: Any,
+    queries: Sequence[str],
+    top_k: int,
+) -> List[Dict[str, Any]]:
+    fused: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    for query_index, query in enumerate(queries):
+        for rank, row in enumerate(search(query, topk=top_k), 1):
+            video_id = _clean(row.get("video_id"))
+            timestamp = row.get("nearest_timestamp", row.get("timestamp", row.get("start_time", "")))
+            text_value = _clean(row.get("text") or row.get("ocr_text"))
+            key = (video_id.casefold(), str(timestamp), text_value.casefold())
+            if key not in fused:
+                fused[key] = dict(row)
+                fused[key]["qa_text_rrf"] = 0.0
+                fused[key]["qa_text_query_hits"] = []
+            item = fused[key]
+            item["qa_text_rrf"] += 1.0 / (20.0 + rank)
+            item["qa_text_query_hits"].append(query_index)
+            item["_score"] = max(_float(item.get("_score")), _float(row.get("_score")))
+    ranked = sorted(
+        fused.values(),
+        key=lambda row: (
+            _float(row.get("qa_text_rrf")),
+            len(set(row.get("qa_text_query_hits") or [])),
+            _float(row.get("_score")),
+        ),
+        reverse=True,
+    )
+    return ranked[:top_k]
+
+
+def _collect_text_evidence(plan: Dict[str, Any], top_k: int) -> Dict[str, List[Dict[str, Any]]]:
     evidence: Dict[str, List[Dict[str, Any]]] = {"ocr": [], "asr": []}
     if not plan["ocr_query"] and not plan["asr_query"]:
         return evidence
@@ -560,9 +714,17 @@ def _collect_text_evidence(plan: Dict[str, str], top_k: int) -> Dict[str, List[D
 
         processor = get_elastic_processor()
         if plan["ocr_query"]:
-            evidence["ocr"] = processor.search_ocr(plan["ocr_query"], topk=top_k)
+            evidence["ocr"] = _fuse_text_hits(
+                processor.search_ocr,
+                plan.get("ocr_queries") or [plan["ocr_query"]],
+                top_k,
+            )
         if plan["asr_query"]:
-            evidence["asr"] = processor.search_asr(plan["asr_query"], topk=top_k)
+            evidence["asr"] = _fuse_text_hits(
+                processor.search_asr,
+                plan.get("asr_queries") or [plan["asr_query"]],
+                top_k,
+            )
     except Exception as exc:
         logger.warning("Grounded Q&A text evidence unavailable: %s", exc)
     return evidence
@@ -595,6 +757,28 @@ def _optional_evidence_timestamp(row: Dict[str, Any], modality: str) -> float | 
 
 def _evidence_text(row: Dict[str, Any], modality: str) -> str:
     return _clean(row.get("text") if modality == "asr" else row.get("ocr_text"))[:500]
+
+
+def _video_metadata_lines(frames: Sequence[Dict[str, Any]]) -> List[str]:
+    """Expose concise existing catalogue metadata to the answer model.
+
+    Titles frequently name a recipe, animal, location, or lesson and provide a
+    useful cross-modal check without training or generating new annotations.
+    """
+    output: List[str] = []
+    seen: set[Tuple[str, str]] = set()
+    for frame in frames:
+        video_id = _clean(frame.get("video_id"))
+        media_info = frame.get("media_info") if isinstance(frame.get("media_info"), dict) else {}
+        title = _clean(media_info.get("title"))[:240]
+        if not video_id or not title:
+            continue
+        key = (video_id.casefold(), title.casefold())
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(f"VIDEO video={video_id} title={title}")
+    return output
 
 
 def _relevant_text_evidence(
@@ -889,10 +1073,39 @@ def _diversify_evidence_groups(
         selected.append(group)
         seen.add(key)
 
-    # The longest query usually carries the most concrete conjunction of
-    # subject, action and context.  Keep four alternatives for VLM reranking.
+    # Preserve the strongest fused evidence first.  Previously, four results
+    # from the longest query were inserted before the fused ranking; long
+    # story-like questions then filled the VLM context with lexical false
+    # positives while the correct top groups were left out.
+    fused_reserve = min(4, max(1, max_groups // 2))
+    for group in groups[:fused_reserve]:
+        add(group)
+
+    # Reserve anchors produced directly by OCR/ASR.  They can identify the
+    # exact video even when visual embeddings prefer a visually similar news
+    # story.  Rank by raw text relevance first, then by the group score.
+    text_groups = [
+        group
+        for group in groups
+        if any(frame.get("qa_text_evidence") for frame in group.get("frames") or [])
+    ]
+    text_groups.sort(
+        key=lambda group: (
+            max(
+                (_float(frame.get("qa_evidence_priority")) for frame in group.get("frames") or []),
+                default=0.0,
+            ),
+            _float(group.get("score")),
+        ),
+        reverse=True,
+    )
+    for group in text_groups[:2]:
+        add(group)
+
+    # The longest/high-priority query still gets alternatives, after the fused
+    # anchors have been secured.
     most_specific = query_order[0]
-    for group in by_query.get(most_specific, [])[:4]:
+    for group in by_query.get(most_specific, [])[:2]:
         add(group)
 
     # Preserve at least one candidate for every other event/query variant.
@@ -927,6 +1140,72 @@ def _timeline_context(retriever: Any, anchor: Dict[str, Any], limit: int) -> Lis
     except Exception as exc:
         logger.warning("Grounded Q&A timeline context unavailable: %s", exc)
         return []
+
+
+def _prepend_initial_window_frames(
+    retriever: Any,
+    groups: Sequence[Dict[str, Any]],
+    selected: Sequence[Dict[str, Any]],
+    plan: Dict[str, Any],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """Guarantee evidence from an explicitly requested initial time range.
+
+    Generic visual similarity often retrieves a matching scene late in another
+    video.  If the question says "first N seconds", choose the strongest group
+    that actually falls inside that interval and prepend its early timeline.
+    """
+    window = _float(plan.get("time_window_seconds"), 0.0)
+    if window <= 0.0 or not hasattr(retriever, "get_video_timeline"):
+        return list(selected)[:limit]
+
+    eligible: List[Dict[str, Any]] = []
+    for group in groups:
+        timestamps = [
+            _float(frame.get("timestamp"), float("inf"))
+            for frame in group.get("frames") or []
+        ]
+        if timestamps and min(timestamps) <= window:
+            eligible.append(group)
+    if not eligible:
+        return list(selected)[:limit]
+
+    target = max(eligible, key=lambda group: _float(group.get("score")))
+    video_id = _clean(target.get("video_id"))
+    try:
+        timeline = list(retriever.get_video_timeline(video_id=video_id, limit=60) or [])
+    except Exception as exc:
+        logger.warning("Grounded Q&A initial timeline unavailable: %s", exc)
+        timeline = []
+    timeline.extend(target.get("frames") or [])
+
+    scan: List[Dict[str, Any]] = []
+    seen_scan: set[str] = set()
+    for frame in sorted(timeline, key=lambda item: _float(item.get("timestamp"), float("inf"))):
+        if _float(frame.get("timestamp"), float("inf")) > window:
+            continue
+        key = _identity(frame)
+        if not key or key in seen_scan or resolve_keyframe_path(frame) is None:
+            continue
+        item = dict(frame)
+        item["qa_group_id"] = f"initial:{video_id}:0-{window:g}s"
+        item["qa_temporal_scan"] = True
+        scan.append(item)
+        seen_scan.add(key)
+        if len(scan) >= min(8, max(1, limit // 2)):
+            break
+
+    output: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for frame in [*scan, *selected]:
+        key = _identity(frame)
+        if not key or key in seen:
+            continue
+        output.append(frame)
+        seen.add(key)
+        if len(output) >= limit:
+            break
+    return output
 
 
 def _select_grouped_frames(
@@ -1195,6 +1474,22 @@ def _is_vietnamese_answer(answer: str, answer_type: str) -> bool:
     return not bool(tokens & ENGLISH_ANSWER_MARKERS)
 
 
+def _normalise_supporting_ids(values: Any, frame_ids: set[str]) -> List[str]:
+    if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+        return []
+    output: List[str] = []
+    for value in values:
+        candidate = value.strip()
+        if candidate not in frame_ids:
+            # Some vision models concatenate the descriptive frame label and
+            # the short evidence id, e.g. L30_V043_001818f2.
+            match = re.search(r"(f\d+)$", candidate, re.IGNORECASE)
+            candidate = match.group(1).lower() if match else candidate
+        if candidate in frame_ids and candidate not in output:
+            output.append(candidate)
+    return output
+
+
 def _normalise_answer(
     payload: Dict[str, Any],
     frame_ids: set[str],
@@ -1223,20 +1518,21 @@ def _normalise_answer(
     if not isinstance(supporting, list) or any(not isinstance(value, str) for value in supporting):
         errors.append("supporting_frame_ids must be strings")
         supporting = []
-    unexpected = set(supporting) - frame_ids
+    normalised_supporting = _normalise_supporting_ids(supporting, frame_ids)
+    unexpected = set(supporting) - frame_ids if supporting and not normalised_supporting else set()
     if unexpected:
         errors.append(f"unexpected supporting frame ids: {sorted(unexpected)}")
     for key in ("used_ocr_evidence", "used_asr_evidence"):
         if not isinstance(payload.get(key), bool):
             errors.append(f"{key} must be boolean")
-    if status == "answered" and not supporting:
+    if status == "answered" and not normalised_supporting:
         errors.append("answered result requires a supporting frame id")
     return {
         "status": status,
         "answer": answer,
         "confidence": max(0.0, min(1.0, confidence)),
         "reason": reason,
-        "supporting_frame_ids": [value for value in supporting if value in frame_ids],
+        "supporting_frame_ids": normalised_supporting,
         "used_ocr_evidence": bool(payload.get("used_ocr_evidence")),
         "used_asr_evidence": bool(payload.get("used_asr_evidence")),
         "answer_language": "vi",
@@ -1269,17 +1565,18 @@ def _normalise_verification(
     if not isinstance(supporting, list) or any(not isinstance(value, str) for value in supporting):
         errors.append("supporting_frame_ids must be strings")
         supporting = []
-    unexpected = set(supporting) - frame_ids
+    normalised_supporting = _normalise_supporting_ids(supporting, frame_ids)
+    unexpected = set(supporting) - frame_ids if supporting and not normalised_supporting else set()
     if unexpected:
         errors.append(f"unexpected verifier supporting frame ids: {sorted(unexpected)}")
-    if verified and not supporting:
+    if verified and not normalised_supporting:
         errors.append("verified result requires a supporting frame id")
     return {
         "verified": bool(verified),
         "canonical_answer": answer,
         "confidence": max(0.0, min(1.0, confidence)),
         "reason": reason,
-        "supporting_frame_ids": [value for value in supporting if value in frame_ids],
+        "supporting_frame_ids": normalised_supporting,
         "answer_language": "vi",
     }, errors
 
@@ -1354,13 +1651,21 @@ def grounded_video_qa(question: str, top_k: int) -> Tuple[List[Dict[str, Any]], 
         max(1, int(getattr(settings, "qa_max_evidence_groups", 4))),
         plan.get("visual_query_priorities"),
     )
+    selection_limit = max(1, min(int(settings.qa_max_frames), 16))
     selected = _select_grouped_frames(
         retriever,
         selection_groups,
-        max(1, min(int(settings.qa_max_frames), 16)),
+        selection_limit,
         max(1, int(settings.qa_per_video_limit)),
         max(1, int(getattr(settings, "qa_max_evidence_groups", 4))),
         max(1, int(getattr(settings, "qa_context_frames_per_group", 3))),
+    )
+    selected = _prepend_initial_window_frames(
+        retriever,
+        evidence_groups,
+        selected,
+        plan,
+        selection_limit,
     )
     selected_ids = {f"f{index}": frame for index, frame in enumerate(selected, 1)}
     prompt_text_evidence = _relevant_text_evidence(
@@ -1393,6 +1698,14 @@ def grounded_video_qa(question: str, top_k: int) -> Tuple[List[Dict[str, Any]], 
                         f"{modality.upper()} video={row.get('video_id')} "
                         f"time={_evidence_timestamp(row, modality):.3f}: {text}"
                     )
+        metadata_lines = _video_metadata_lines(selected)
+        set_comparison_lines: List[str] = []
+        if plan.get("requires_set_comparison"):
+            set_comparison_lines = [
+                f"This is a set-comparison question over {plan.get('enumeration_range')}.",
+                "List the values actually visible in the coherent requested time window, then subtract them from the stated range.",
+                "Do not claim that every value appeared unless every value is visibly evidenced.",
+            ]
         prompt_lines = [
             f"Question: {question}",
             f"Question type: {plan['answer_type']}",
@@ -1400,8 +1713,11 @@ def grounded_video_qa(question: str, top_k: int) -> Tuple[List[Dict[str, Any]], 
             f"Visual retrieval queries: {json.dumps(plan['visual_queries'], ensure_ascii=False)}",
             "Each event group is an alternative retrieved moment; use one group unless the question is temporal.",
             "For counts, count subjects in one frame/event and do not add repeated subjects across frames.",
+            *set_comparison_lines,
             "Text evidence:",
             *(evidence_lines or ["No OCR/ASR evidence was retrieved."]),
+            "Existing video catalogue metadata (use only for the matching attached video):",
+            *(metadata_lines or ["No video title metadata was available."]),
             "Attached keyframes are labelled with their event group:",
         ]
         content: List[Dict[str, Any]] = [{"type": "text", "text": "\n".join(prompt_lines)}]
@@ -1424,7 +1740,7 @@ def grounded_video_qa(question: str, top_k: int) -> Tuple[List[Dict[str, Any]], 
             try:
                 payload = _request_answer(
                     [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": content}],
-                    settings.agent_vlm_model,
+                    str(getattr(settings, "qa_answer_model", "") or settings.agent_vlm_model),
                     float(settings.agent_vlm_timeout_seconds),
                     int(settings.qa_max_tokens),
                 )
@@ -1446,30 +1762,41 @@ def grounded_video_qa(question: str, top_k: int) -> Tuple[List[Dict[str, Any]], 
         if not contract_errors:
             verdict = parsed
 
-        detail_types = {"count", "ocr"}
+        detail_types = {"count", "ocr", "location", "object"}
+        needs_detail = bool(
+            verdict.get("status") == "uncertain"
+            or _is_unresolved_answer(verdict.get("answer"))
+            or _float(verdict.get("confidence")) < float(settings.qa_min_confidence)
+        )
         if (
             bool(getattr(settings, "qa_detail_pass_enabled", True))
             and not contract_errors
             and plan["answer_type"] in detail_types
-            and verdict.get("supporting_frame_ids")
-            and (
-                verdict.get("status") == "uncertain"
-                or _is_unresolved_answer(verdict.get("answer"))
-                or _float(verdict.get("confidence")) < float(settings.qa_min_confidence)
-            )
+            and needs_detail
         ):
-            detail_frame_ids = _select_detail_frame_ids(
-                list(dict.fromkeys(verdict["supporting_frame_ids"])),
-                selected_ids,
-                max(1, min(int(getattr(settings, "qa_detail_max_frames", 2)), 4)),
-                bool(plan.get("needs_temporal_context")),
-            )
+            detail_limit = max(1, min(int(getattr(settings, "qa_detail_max_frames", 2)), 4))
+            supporting_ids = list(dict.fromkeys(verdict.get("supporting_frame_ids") or []))
+            if supporting_ids:
+                detail_frame_ids = _select_detail_frame_ids(
+                    supporting_ids,
+                    selected_ids,
+                    detail_limit,
+                    bool(plan.get("needs_temporal_context")),
+                )
+            else:
+                # A first pass may recognise that retrieval is relevant but be
+                # unable to cite a tiny value.  Inspect the strongest attached
+                # anchors instead of skipping the high-resolution pass.
+                detail_frame_ids = list(selected_ids)[:detail_limit]
             detail_lines = [
                 f"Câu hỏi: {question}",
                 f"Loại câu trả lời: {plan['answer_type']}",
                 f"Định dạng yêu cầu: {plan['expected_answer_format']}; tối đa {answer_max_chars} ký tự.",
-                "Các frame dưới đây đã được lượt đầu xác định là bằng chứng liên quan.",
+                "Các frame dưới đây là những bằng chứng truy xuất mạnh nhất cần kiểm tra kỹ.",
                 "Hãy đọc giá trị nhìn thấy rõ nhất bằng cách đối chiếu toàn cảnh và các ô phóng to.",
+                *(evidence_lines or ["Không có OCR/ASR liên quan được gửi."]),
+                *(metadata_lines or ["Không có tiêu đề video liên quan được gửi."]),
+                *set_comparison_lines,
             ]
             detail_content: List[Dict[str, Any]] = [
                 {"type": "text", "text": "\n".join(detail_lines)}

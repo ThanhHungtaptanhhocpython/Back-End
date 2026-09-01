@@ -9,6 +9,8 @@ from src.services.grounded_qa_service import (
     _candidate_from_evidence,
     _detail_image_data_urls,
     _diversify_evidence_groups,
+    _fuse_text_hits,
+    _normalise_supporting_ids,
     _question_plan,
     _relevant_text_evidence,
     _select_detail_frame_ids,
@@ -216,6 +218,55 @@ def test_question_plan_classifies_object_spatial_and_logo_ocr():
     assert ocr_plan["ocr_query"]
 
 
+def test_question_plan_classifies_requested_attribute_before_temporal_context():
+    with patch("src.services.grounded_qa_service.Translation") as translator:
+        translator.return_value.return_value = "visual query"
+        fish_plan = _question_plan("Sau đó người đầu bếp nói chuyện. Đây là loài cá gì?")
+        street_plan = _question_plan("Sau đó cụ ông trò chuyện. Quán trọ nằm trên đường nào?")
+        missing_plan = _question_plan(
+            "Trong 16 giây đầu tiên, số nào không được nhìn thấy trong các số từ 1-8?"
+        )
+
+    assert fish_plan["answer_type"] == "object"
+    assert street_plan["answer_type"] == "location"
+    assert street_plan["ocr_query"]
+    assert missing_plan["answer_type"] == "count"
+    assert missing_plan["time_window_seconds"] == 16.0
+    assert missing_plan["enumeration_range"] == (1, 8)
+    assert missing_plan["requires_set_comparison"] is True
+
+
+def test_long_visual_question_also_uses_asr_as_retrieval_anchor():
+    with patch("src.services.grounded_qa_service.Translation") as translator:
+        translator.return_value.return_value = "a cooking video with several ingredients"
+        plan = _question_plan(
+            "Người đầu bếp cho tiêu xanh, lá chanh và sả vào bụng của bốn con cá. Đây là loài cá gì?"
+        )
+
+    assert plan["answer_type"] == "object"
+    assert plan["asr_query"]
+    assert any("tiêu xanh" in query for query in plan["asr_queries"])
+
+
+def test_text_hit_fusion_promotes_specific_clause_match():
+    def search(query, topk):
+        if "quán trọ" in query and "cao tuổi" in query:
+            return [
+                {"video_id": "L30_V043", "start_time": 63.0, "text": "quán trọ dành cho các cụ già", "_score": 30.0},
+                {"video_id": "noise", "start_time": 10.0, "text": "người cao tuổi", "_score": 20.0},
+            ][:topk]
+        return [{"video_id": "road-noise", "start_time": 10.0, "text": "đường nào", "_score": 20.0}]
+
+    hits = _fuse_text_hits(search, ["quán trọ dành cho người cao tuổi", "đường nào"], 4)
+
+    assert hits[0]["video_id"] == "L30_V043"
+    assert any(hit["video_id"] == "L30_V043" for hit in hits)
+
+
+def test_supporting_id_recovers_vlm_concatenated_frame_label():
+    assert _normalise_supporting_ids(["L30_V043_001818f2"], {"f1", "f2"}) == ["f2"]
+
+
 def test_question_plan_removes_interrogative_words_from_visual_focus():
     translated = (
         "In the night scene, which two-wheeled vehicle has its rear fairing "
@@ -264,6 +315,15 @@ def test_split_visual_events_drops_final_interrogative():
     )
 
     assert events == ["a fish on a scale", "another fish held by its tail"]
+
+
+def test_split_visual_events_accepts_connector_followed_by_comma():
+    events = _split_visual_events(
+        "Inside a self-driving car. Then, the camera moves outside to a white car. "
+        "What number is written on it?"
+    )
+
+    assert events == ["Inside a self-driving car", "the camera moves outside to a white car"]
 
 
 def test_detail_images_include_full_frame_and_zoom_grid(tmp_path):
@@ -358,7 +418,13 @@ def test_diversified_groups_keep_specific_query_alternatives():
         limit=4,
     )
 
-    assert [group["id"] for group in selected[:3]] == ["specific-1", "specific-2", "specific-3"]
+    assert selected[0]["id"] == "generic"
+    assert {group["id"] for group in selected} == {
+        "generic",
+        "specific-1",
+        "specific-2",
+        "specific-3",
+    }
 
 
 def test_diversified_groups_honor_expansion_priority_before_query_length():
@@ -374,7 +440,24 @@ def test_diversified_groups_honor_expansion_priority_before_query_length():
         query_priorities=[0, 3],
     )
 
-    assert selected[0]["id"] == "hypothesis"
+    assert [group["id"] for group in selected] == ["long-base", "hypothesis"]
+
+
+def test_diversified_groups_reserve_direct_text_evidence():
+    groups = [
+        {"id": f"visual-{index}", "score": 5.0 - index, "best_query_ranks": {0: index}, "frames": [{}]}
+        for index in range(1, 8)
+    ]
+    groups.append({
+        "id": "asr-anchor",
+        "score": 1.0,
+        "best_query_ranks": {},
+        "frames": [{"qa_text_evidence": [{"modality": "asr"}], "qa_evidence_priority": 30.0}],
+    })
+
+    selected = _diversify_evidence_groups(groups, ["visual query"], limit=6)
+
+    assert "asr-anchor" in {group["id"] for group in selected}
 
 
 def test_text_evidence_is_limited_to_attached_video_moment():

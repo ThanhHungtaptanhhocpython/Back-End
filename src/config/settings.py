@@ -39,6 +39,7 @@ class Settings(BaseSettings):
         metadata_path: Path to the metadata JSON file.
         keyframes_root: Root directory for keyframe images.
         features_root: Root directory for per-video .npy feature files.
+        media_info_path: Directory containing per-video media-info JSON files.
         clip_model_name: OpenCLIP model architecture name.
         clip_pretrained: OpenCLIP pretrained weights identifier.
         log_level: Python logging level string.
@@ -56,6 +57,7 @@ class Settings(BaseSettings):
     metadata_path: Path | None = None
     keyframes_root: Path | None = None
     features_root: Path | None = None
+    media_info_path: Path | None = None
 
     # --- External Services ---
     elasticsearch_url: str = "http://localhost:9200"
@@ -137,13 +139,26 @@ class Settings(BaseSettings):
     trake_asr_enabled: bool = True
     trake_vlm_enabled: bool = True
     trake_vlm_max_sequences: int = 5
-    qa_retrieval_pool: int = 40
-    qa_max_frames: int = 8
-    qa_per_video_limit: int = 3
+    qa_retrieval_pool: int = 120
+    qa_visual_query_limit: int = 8
+    qa_max_frames: int = 16
+    qa_per_video_limit: int = 4
+    qa_event_window_seconds: float = 8.0
+    qa_max_evidence_groups: int = 12
+    qa_context_frames_per_group: int = 2
     qa_text_evidence_top_k: int = 12
     qa_evidence_window_seconds: float = 15.0
     qa_vlm_enabled: bool = True
+    qa_detail_pass_enabled: bool = True
+    qa_detail_model: str = "qwen/qwen3-vl-32b-instruct"
+    qa_detail_max_frames: int = 2
+    qa_detail_grid_size: int = 3
+    qa_detail_image_max_side: int = 900
+    qa_verify_enabled: bool = True
     qa_min_confidence: float = 0.55
+    qa_return_best_guess: bool = True
+    qa_uncertain_confidence_cap: float = 0.49
+    qa_answer_max_chars: int = 100
     qa_max_tokens: int = 700
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-3-5-sonnet-20240620"
@@ -176,6 +191,7 @@ class Settings(BaseSettings):
         "metadata_path",
         "keyframes_root",
         "features_root",
+        "media_info_path",
         "beit3_faiss_index_path",
         "beit3_global_ids_path",
         "beit3_video_metadata_path",
@@ -247,6 +263,15 @@ class Settings(BaseSettings):
         if self.features_root is not None:
             return Path(self.features_root)
         return self.src_dir / "data" / "features"
+
+    def get_media_info_path(self) -> Path:
+        """Return the resolved directory containing per-video metadata JSON.
+
+        Falls back to ``src/dict/media-info``.
+        """
+        if self.media_info_path is not None:
+            return Path(self.media_info_path)
+        return self.src_dir / "dict" / "media-info"
 
     def get_agent_vlm_cache_path(self) -> Path:
         """Return the runtime cache path for OpenRouter VLM verdicts."""

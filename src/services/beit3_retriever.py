@@ -84,7 +84,9 @@ class BEiT3Retriever:
         self._video_metadata = self._load_optional_parquet(
             self._settings.beit3_video_metadata_path, label="video_metadata.parquet"
         )
-        self._media_info_by_id = self._load_media_info_dir(self._settings.src_dir / "dict" / "media-info")
+        self._media_info_by_id = self._load_media_info_dir(
+            self._settings.get_media_info_path()
+        )
         self._keyframe_time_by_video = self._load_keyframe_time_maps(self._settings.src_dir / "dict" / "map-keyframes")
         self._index_meta = self._load_optional_json(
             self._settings.beit3_index_meta_path, label="index_meta.json"

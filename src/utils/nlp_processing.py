@@ -21,10 +21,15 @@ logger = logging.getLogger(__name__)
 
 class Translation():
     _cache: Dict[tuple[str, str, str], str] = {}
+    _SUPPORTED_LANGUAGES = {"en", "vi"}
 
     def __init__(self, from_lang='vi', to_lang='en'):
-        self.__to_lang = to_lang
-        self.__from_lang = from_lang
+        self.__to_lang = str(to_lang or "").strip().lower()
+        self.__from_lang = str(from_lang or "").strip().lower()
+        if self.__from_lang not in self._SUPPORTED_LANGUAGES:
+            raise ValueError(f"Unsupported source language: {self.__from_lang}")
+        if self.__to_lang not in self._SUPPORTED_LANGUAGES:
+            raise ValueError(f"Unsupported target language: {self.__to_lang}")
         self.translator = None
         self.last_provider = "none"
         self.last_translated = False
@@ -43,12 +48,48 @@ class Translation():
     def preprocessing(self, text):
         return text.strip() if text else ""
 
-    def _looks_english(self, text: str) -> bool:
-        if not text or self.__to_lang != "en":
+    @staticmethod
+    def _clean_provider_output(value: Any) -> str:
+        """Remove common LLM wrappers without changing translation content."""
+        text = str(value or "").strip()
+        if text.startswith("```") and text.endswith("```"):
+            text = re.sub(r"^```(?:text|markdown)?\s*", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"\s*```$", "", text)
+        text = re.sub(
+            r"^(?:translation|translated\s+text|english|vietnamese|tiếng\s+anh|tiếng\s+việt)\s*:\s*",
+            "",
+            text,
+            count=1,
+            flags=re.IGNORECASE,
+        ).strip()
+        if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+            text = text[1:-1].strip()
+        return text
+
+    @staticmethod
+    def _same_text(left: str, right: str) -> bool:
+        normalize = lambda value: re.sub(r"\s+", " ", value or "").strip().casefold()
+        return normalize(left) == normalize(right)
+
+    def _usable_translation(self, source: str, candidate: str) -> bool:
+        if not candidate or self._same_text(source, candidate):
             return False
-        has_latin = bool(re.search(r"[A-Za-z]", text))
-        has_vietnamese = bool(re.search("[\u00e0-\u1ef9\u00c0-\u1ef8\u0111\u0110]", text))
-        return has_latin and not has_vietnamese
+        rejected_prefixes = (
+            "here is the translation",
+            "the translation is",
+            "bản dịch là",
+            "tôi không thể dịch",
+            "i cannot translate",
+        )
+        return not candidate.casefold().startswith(rejected_prefixes)
+
+    def _prefer_contextual_translation(self, text: str) -> bool:
+        """Google often misreads Vietnamese without diacritics as unrelated words."""
+        if self.__from_lang != "vi":
+            return False
+        has_letters = bool(re.search(r"[A-Za-z]", text))
+        has_vietnamese_diacritics = bool(re.search(r"[à-ỹÀ-ỸđĐ]", text))
+        return has_letters and not has_vietnamese_diacritics
 
     def _translate_with_openrouter(self, text: str) -> str:
         from src.config.settings import get_settings
@@ -82,7 +123,7 @@ class Translation():
                     f"Translate from {self.__from_lang} to {self.__to_lang}:\n{text}",
                 ),
             ])
-            return str(getattr(response, "content", "") or "").strip()
+            return self._clean_provider_output(getattr(response, "content", ""))
         except Exception as e:
             logger.warning(f"OpenRouter translation fallback failed: {e}")
             return ""
@@ -94,6 +135,10 @@ class Translation():
         if not cleaned:
             return ""
 
+        if self.__from_lang == self.__to_lang:
+            self.last_provider = "identity"
+            return cleaned
+
         cache_key = (self.__from_lang, self.__to_lang, cleaned)
         if cache_key in self._cache:
             self.last_provider = "cache"
@@ -101,18 +146,23 @@ class Translation():
             self.last_translated = cached != cleaned
             return cached
 
-        if self._looks_english(cleaned):
-            self.last_provider = "identity"
-            self._cache[cache_key] = cleaned
-            return cleaned
-
         result = ""
+        tried_openrouter = False
+        if self._prefer_contextual_translation(cleaned):
+            tried_openrouter = True
+            fallback = self._translate_with_openrouter(cleaned)
+            if self._usable_translation(cleaned, fallback):
+                self.last_provider = "openrouter"
+                self.last_translated = True
+                self._cache[cache_key] = fallback
+                return fallback
+
         if self.translator is None:
             self._init_translator()
         if self.translator is not None:
             try:
-                result = (self.translator.translate(cleaned) or "").strip()
-                if result and result != cleaned:
+                result = self._clean_provider_output(self.translator.translate(cleaned))
+                if self._usable_translation(cleaned, result):
                     self.last_provider = "google"
                     self.last_translated = True
                     self._cache[cache_key] = result
@@ -120,12 +170,13 @@ class Translation():
             except Exception as e:
                 logger.warning(f"Translation call failed: {e}")
 
-        fallback = self._translate_with_openrouter(cleaned)
-        if fallback and fallback != cleaned:
-            self.last_provider = "openrouter"
-            self.last_translated = True
-            self._cache[cache_key] = fallback
-            return fallback
+        if not tried_openrouter:
+            fallback = self._translate_with_openrouter(cleaned)
+            if self._usable_translation(cleaned, fallback):
+                self.last_provider = "openrouter"
+                self.last_translated = True
+                self._cache[cache_key] = fallback
+                return fallback
 
         self.last_provider = "identity"
         self._cache[cache_key] = cleaned

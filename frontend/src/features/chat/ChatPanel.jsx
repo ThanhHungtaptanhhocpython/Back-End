@@ -281,6 +281,7 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
   const [translated, setTranslated] = useState("");
   const [translating, setTranslating] = useState(false);
   const [translationLive, setTranslationLive] = useState(false);
+  const [translationProvider, setTranslationProvider] = useState("none");
   const [editing, setEditing] = useState(false);
   const [editBuf, setEditBuf] = useState("");
 
@@ -293,6 +294,7 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
     if (!text || override !== null) {
       setTranslated("");
       setTranslationLive(false);
+      setTranslationProvider("none");
       setTranslating(false);
       return;
     }
@@ -305,9 +307,13 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
         if (!cancelled) {
           setTranslated(result?.text || "");
           setTranslationLive(Boolean(result?.live));
+          setTranslationProvider(result?.provider || "none");
         }
       } catch {
-        if (!cancelled) setTranslated("");
+        if (!cancelled) {
+          setTranslated("");
+          setTranslationProvider("unavailable");
+        }
       } finally {
         if (!cancelled) setTranslating(false);
       }
@@ -366,7 +372,9 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
           <div className="ws-tr-trans">
             <div className="ws-tr-head">
               <span>Translated - {dir === "en-vi" ? "Vietnamese" : "English"}</span>
-              <span className="ws-demo-badge">{translating ? "LIVE..." : translationLive ? "LIVE" : override !== null ? "EDITED" : "UNAVAILABLE"}</span>
+              <span className="ws-demo-badge">
+                {translating ? "LIVE..." : translationLive ? `LIVE · ${translationProvider.toUpperCase()}` : override !== null ? "EDITED" : "UNAVAILABLE"}
+              </span>
             </div>
             {editing ? (
               <textarea

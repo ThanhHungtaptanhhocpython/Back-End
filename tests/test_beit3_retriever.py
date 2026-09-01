@@ -60,7 +60,18 @@ from src.services.beit3_retriever import (
 def _bare_retriever(settings: Settings | None = None) -> BEiT3Retriever:
     """Build a BEiT3Retriever instance without running __init__."""
     obj = BEiT3Retriever.__new__(BEiT3Retriever)
-    obj._settings = settings or Settings(debug=False)
+    # Unit tests must not inherit machine-specific BEIT3_COL_* overrides from
+    # the developer's .env; synthetic data deliberately uses other columns.
+    obj._settings = settings or Settings(
+        debug=False,
+        _env_file=None,
+        beit3_col_vector_id=None,
+        beit3_col_video_id=None,
+        beit3_col_frame_id=None,
+        beit3_col_frame_path=None,
+        beit3_col_timestamp=None,
+        beit3_col_namespace=None,
+    )
     obj._device = torch.device("cpu")
     return obj
 

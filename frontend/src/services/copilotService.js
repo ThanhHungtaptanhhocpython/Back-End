@@ -1,5 +1,11 @@
-import { getSearchConfig, normalizeBackendItem, normalizeBackendResponse } from "./backendSearch.js";
+import {
+  getSearchConfig,
+  normalizeBackendItem,
+  normalizeBackendResponse,
+  shouldUseQaDemoFallback,
+} from "./backendSearch.js";
 import { mockChatReply } from "../mocks/copilot.js";
+import { mockSearch } from "../mocks/searchEngine.js";
 
 function cleanBaseUrl(baseUrl) {
   return String(baseUrl || "").trim().replace(/\/users$/i, "").replace(/\/+$/, "");
@@ -200,8 +206,31 @@ export async function askGroundedQa(text, { fetchImpl = globalThis.fetch, topk =
 
   const config = getSearchConfig();
   const baseUrl = cleanBaseUrl(config.baseUrl) || "http://127.0.0.1:3000";
+  const demoFallback = async ({ reason = "", liveMeta = null } = {}) => {
+    const fallback = await mockSearch({
+      searchType: "QA",
+      query: prompt,
+      params: { topk, clip: true, clipv2: false },
+    });
+    const meta = {
+      ...fallback.meta,
+      demo: true,
+      fallback_reason: reason || liveMeta?.reason || "No local keyframe image was available for grounded Q&A.",
+      live_status: liveMeta?.status || null,
+    };
+    return {
+      text: `${meta.answer}\n\nDEMO FALLBACK - local test data is being used until matching keyframes are available.`,
+      frames: fallback.items,
+      allFrames: fallback.items,
+      meta,
+      mode: "grounded_qa",
+      demo: true,
+      error: reason || undefined,
+    };
+  };
+
   if (config.mode === "demo" || typeof fetchImpl !== "function") {
-    return { text: mockChatReply(prompt, []), frames: [], demo: true };
+    return demoFallback({ reason: config.mode === "demo" ? "Frontend is running in demo mode." : "Fetch is unavailable." });
   }
 
   try {
@@ -222,6 +251,9 @@ export async function askGroundedQa(text, { fetchImpl = globalThis.fetch, topk =
       baseUrl
     );
     const meta = normalized.meta || {};
+    if (config.mode === "auto" && shouldUseQaDemoFallback({ searchType: "QA" }, normalized)) {
+      return demoFallback({ liveMeta: meta });
+    }
     const evaluated = normalized.items.filter((frame) => frame.backend?.qa_evidence_id);
     const supporting = evaluated.filter((frame) => frame.backend?.qa_supporting);
     const sourceFrames = supporting.length ? supporting : evaluated;
@@ -240,6 +272,9 @@ export async function askGroundedQa(text, { fetchImpl = globalThis.fetch, topk =
     };
   } catch (error) {
     console.warn("Grounded Q&A request failed:", error);
+    if (config.mode === "auto") {
+      return demoFallback({ reason: error instanceof Error ? error.message : String(error) });
+    }
     return {
       text: "Grounded Q&A is unavailable, so no answer was generated.",
       frames: [],

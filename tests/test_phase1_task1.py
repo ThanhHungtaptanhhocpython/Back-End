@@ -141,6 +141,12 @@ class TestSettingsEnvOverride(unittest.TestCase):
         path = settings.get_metadata_path()
         self.assertEqual(path.as_posix(), "/custom/metadata.json")
 
+    @patch.dict(os.environ, {"MEDIA_INFO_PATH": "/custom/media-info"})
+    def test_override_media_info_path(self) -> None:
+        settings = Settings(_env_file=None)
+        path = settings.get_media_info_path()
+        self.assertEqual(path.as_posix(), "/custom/media-info")
+
 
 class TestGetSettingsSingleton(unittest.TestCase):
     """Verify the lru_cache singleton behavior."""

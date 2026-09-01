@@ -8,7 +8,12 @@ import {
   LoadingOutlined
 } from "@ant-design/icons";
 import useDialogFocus from "../../hooks/useDialogFocus";
-import { makeSubmissionZip, buildSubmissionCsv, sanitizeQueryFileName } from "../../shared/submissionExport";
+import {
+  makeSubmissionZip,
+  buildSubmissionCsv,
+  sanitizeQueryFileName,
+  truncateQaAnswer,
+} from "../../shared/submissionExport";
 import { runSearch } from "../../shared/adapters";
 
 export default function BatchQueryModal({ open, onClose, toast }) {
@@ -34,6 +39,7 @@ export default function BatchQueryModal({ open, onClose, toast }) {
       return;
     }
 
+    const existingAnswers = new Map(parsedQueries.map((query) => [query.name, query.answer || ""]));
     const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
     const queries = [];
     let currentQuery = null;
@@ -51,6 +57,7 @@ export default function BatchQueryModal({ open, onClose, toast }) {
           name: `query-p1-${qNum}-${qType}.csv`,
           type: qType,
           text: qContent,
+          answer: existingAnswers.get(`query-p1-${qNum}-${qType}.csv`) || "",
         };
         queries.push(currentQuery);
       } else if (currentQuery && currentQuery.text) {
@@ -63,6 +70,7 @@ export default function BatchQueryModal({ open, onClose, toast }) {
           name: `query-p1-${qNum}-kis.csv`,
           type: "kis",
           text: line,
+          answer: "",
         };
         queries.push(currentQuery);
       }
@@ -88,6 +96,7 @@ export default function BatchQueryModal({ open, onClose, toast }) {
             name: `${stem}.csv`,
             type,
             text: content,
+            answer: "",
           });
         };
         reader.readAsText(file);
@@ -139,7 +148,17 @@ export default function BatchQueryModal({ open, onClose, toast }) {
 
         const res = await runSearch(searchTab);
         const items = (res?.items || []).slice(0, topk);
-        const csvContent = buildSubmissionCsv(items, q.type);
+        const answeredItem = q.type === "qa"
+          ? items.find((item) => item?.answer || item?.backend?.answer)
+          : null;
+        const generatedAnswer = q.type === "qa"
+          ? String(answeredItem?.answer ?? answeredItem?.backend?.answer ?? "")
+          : "";
+        const qaAnswer = q.type === "qa" ? (q.answer || generatedAnswer) : "";
+        if (q.type === "qa" && qaAnswer === "") {
+          throw new Error("QA answer is missing. Enter it manually before exporting.");
+        }
+        const csvContent = buildSubmissionCsv(items, q.type, qaAnswer);
         
         generatedFiles.push({
           name: sanitizeQueryFileName(q.name, q.type),
@@ -151,7 +170,7 @@ export default function BatchQueryModal({ open, onClose, toast }) {
           name: q.name,
           type: q.type,
           count: items.length,
-          preview: buildSubmissionCsv(items.slice(0, 2), q.type).split("\n").join(" | "),
+          preview: buildSubmissionCsv(items.slice(0, 2), q.type, qaAnswer).split(/\r?\n/).join(" | "),
         });
       } catch (err) {
         console.error(`Error on query ${q.name}:`, err);
@@ -256,15 +275,42 @@ export default function BatchQueryModal({ open, onClose, toast }) {
             />
           </div>
 
+          {parsedQueries.some((query) => query.type === "qa") ? (
+            <div className="ws-field">
+              <label className="ws-field-label">QA answers (optional when the live QA model returns one)</label>
+              {parsedQueries.map((query, index) => {
+                if (query.type !== "qa") return null;
+                return (
+                  <div key={query.name} style={{ marginBottom: 8 }}>
+                    <label className="ws-dim" style={{ display: "block", fontSize: 11, marginBottom: 3 }}>
+                      {query.name} ({Array.from(query.answer || "").length}/100)
+                    </label>
+                    <input
+                      value={query.answer || ""}
+                      onChange={(event) => {
+                        const value = truncateQaAnswer(event.target.value);
+                        setParsedQueries((current) => current.map((item, itemIndex) => (
+                          itemIndex === index ? { ...item, answer: value } : item
+                        )));
+                      }}
+                      placeholder="Vietnamese or English answer"
+                      disabled={running}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+
           <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
             <div className="ws-field" style={{ flex: 1 }}>
               <label className="ws-field-label">Top K frames per query</label>
               <input 
                 type="number" 
                 min={1} 
-                max={200} 
+                max={100}
                 value={topk} 
-                onChange={(e) => setTopk(Number(e.target.value) || 100)} 
+                onChange={(e) => setTopk(Math.max(1, Math.min(100, Number(e.target.value) || 100)))}
                 disabled={running}
               />
             </div>

@@ -11,8 +11,30 @@
 export { translateText } from "../services/translateService.js";
 export { askCopilot, askGroundedQa } from "../services/copilotService.js";
 
-import { getSearchConfig, isTransportError, runBackendAgentSearch, runBackendSearch } from "../services/backendSearch.js";
+import {
+  getSearchConfig,
+  isTransportError,
+  runBackendAgentSearch,
+  runBackendSearch,
+  shouldUseQaDemoFallback,
+} from "../services/backendSearch.js";
 import { mockSearch } from "../mocks/searchEngine.js";
+
+async function runQaDemoFallback(tab, pivot, { reason, liveMeta } = {}) {
+  const fallback = await mockSearch(tab, pivot);
+  return {
+    ...fallback,
+    mode: "FALLBACK DEMO - QA KEYFRAMES UNAVAILABLE",
+    source: "fallback",
+    fallbackReason: reason || liveMeta?.reason || "No local keyframe image was available for grounded Q&A.",
+    meta: {
+      ...fallback.meta,
+      demo: true,
+      fallback_reason: reason || liveMeta?.reason || "No local keyframe image was available for grounded Q&A.",
+      live_status: liveMeta?.status || null,
+    },
+  };
+}
 
 /**
  * Stable workstation search boundary.
@@ -28,9 +50,16 @@ export async function runSearch(tab, pivot) {
   }
 
   try {
-    return await runBackendSearch(tab, pivot, { config });
+    const result = await runBackendSearch(tab, pivot, { config });
+    if (config.mode === "auto" && shouldUseQaDemoFallback(tab, result)) {
+      return runQaDemoFallback(tab, pivot, { liveMeta: result.meta });
+    }
+    return result;
   } catch (error) {
     if (config.mode === "auto" && isTransportError(error)) {
+      if (tab?.searchType === "QA") {
+        return runQaDemoFallback(tab, pivot, { reason: error.message });
+      }
       const fallback = await mockSearch(tab, pivot);
       return {
         ...fallback,
@@ -38,6 +67,9 @@ export async function runSearch(tab, pivot) {
         source: "fallback",
         fallbackReason: error.message,
       };
+    }
+    if (config.mode === "auto" && tab?.searchType === "QA" && Number(error?.status) >= 500) {
+      return runQaDemoFallback(tab, pivot, { reason: error.message });
     }
     throw error;
   }

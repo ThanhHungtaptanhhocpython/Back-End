@@ -233,16 +233,31 @@ export function mockSearch(tab, pivot = null) {
     }
 
     scored.sort((a, b) => b.raw - a.raw);
+    const qaAnswer = type === "QA" ? QUESTION_BANK[hashString(q) % QUESTION_BANK.length] : "";
     const items = scored.slice(0, topk).map((s, i) => ({
       ...s.f,
       score: +(Math.min(1, 0.4 + s.raw * 0.6)).toFixed(3),
       rank: i + 1,
-      ...(type === "QA" ? { answer: QUESTION_BANK[hashString(q + s.f.id) % QUESTION_BANK.length] } : {}),
+      ...(type === "QA" ? { answer: qaAnswer } : {}),
     }));
+
+    const meta = type === "QA" ? {
+      status: "answered",
+      answer: qaAnswer,
+      confidence: 0.5,
+      reason: "Synthetic answer from the bundled QA test dataset.",
+      supporting_frame_ids: items.slice(0, 1).map((item) => item.id),
+      retrieved_frames: items.length,
+      evaluated_frames: Math.min(items.length, 3),
+      ocr_evidence: 0,
+      asr_evidence: 0,
+      demo: true,
+      provider: "local_mock",
+    } : null;
 
     const latency = 140 + (hashString(q + type) % 380);
     setTimeout(() => {
-      resolve({ items, totalItems: items.length, latency, type, mode: "LOCAL MOCK ENGINE" });
+      resolve({ items, totalItems: items.length, meta, latency, type, mode: "LOCAL MOCK ENGINE", source: "demo" });
     }, latency);
   });
 }

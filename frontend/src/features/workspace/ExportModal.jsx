@@ -4,10 +4,12 @@ import useDialogFocus from "../../hooks/useDialogFocus";
 import { fetchVideoTimeline } from "../../shared/adapters";
 import {
   buildSubmissionCsv,
+  makeUtf8CsvBlob,
   buildTemporalSubmissionCsv,
   makeSubmissionZip,
   queryTypeFromSearchType,
   sanitizeQueryFileName,
+  truncateQaAnswer,
 } from "../../shared/submissionExport";
 
 function safeDownloadName(value, fallback) {
@@ -18,7 +20,7 @@ function previewText(files) {
   if (!files.length) return "No frames selected.";
   return files
     .flatMap((file) => {
-      const lines = String(file.content || "").split("\n").filter(Boolean);
+      const lines = String(file.content || "").split(/\r?\n/).filter(Boolean);
       return [
         `submission/${sanitizeQueryFileName(file.name, file.queryType)}`,
         ...lines.slice(0, 5),
@@ -26,6 +28,27 @@ function previewText(files) {
       ];
     })
     .join("\n");
+}
+
+function firstQaAnswer(...itemGroups) {
+  for (const items of itemGroups) {
+    for (const item of items || []) {
+      const value = item?.answer ?? item?.backend?.answer;
+      if (value !== undefined && value !== null && String(value) !== "") {
+        return truncateQaAnswer(value);
+      }
+    }
+  }
+  return "";
+}
+
+function csvNameForQueryType(currentName, queryType) {
+  const fallback = `query-p1-1-${queryType}.csv`;
+  const name = String(currentName || "");
+  if (!name) return fallback;
+  return /-(?:kis|qa|trake)\.csv$/i.test(name)
+    ? name.replace(/-(?:kis|qa|trake)\.csv$/i, `-${queryType}.csv`)
+    : name;
 }
 
 function itemPriorityKey(item) {
@@ -77,23 +100,43 @@ export default function ExportModal({
   const [csvName, setCsvName] = useState("");
   const [zipName, setZipName] = useState("submission.zip");
   const [answer, setAnswer] = useState("");
+  const [tabQaAnswers, setTabQaAnswers] = useState({});
   const [jitterRadius, setJitterRadius] = useState(4);
   const [jitterRows, setJitterRows] = useState(100);
   const [resolvedCustomItems, setResolvedCustomItems] = useState([]);
   const [hydratingCustomItems, setHydratingCustomItems] = useState(false);
   const closeRef = useRef(null);
+  const initializedForOpenRef = useRef(false);
   const dialogRef = useDialogFocus(closeRef, open);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      initializedForOpenRef.current = false;
+      return;
+    }
+    // Parent props receive new array references whenever Workstation rerenders
+    // (including its one-second clock tick). Initialize only once per opening
+    // so user choices and typed values are never reset while the modal is open.
+    if (initializedForOpenRef.current) return;
+    initializedForOpenRef.current = true;
     setSource(defaultSource);
     setQueryType(inferredType);
     setCsvName(`query-p1-1-${inferredType}.csv`);
     setZipName("submission.zip");
-    setAnswer("");
+    setAnswer(firstQaAnswer(items, searchItems, keptItems));
+    setTabQaAnswers(Object.fromEntries(
+      (tabs || [])
+        .filter((tab) => queryTypeFromSearchType(tab?.searchType) === "qa")
+        .map((tab) => [tab.key, firstQaAnswer(tab?.results)])
+    ));
     setResolvedCustomItems(items || []);
     setHydratingCustomItems(false);
-  }, [open, defaultSource, inferredType, items]);
+  }, [open, defaultSource, inferredType, items, searchItems, keptItems, tabs]);
+
+  const selectQueryType = (nextType) => {
+    setQueryType(nextType);
+    setCsvName((currentName) => csvNameForQueryType(currentName, nextType));
+  };
 
   useEffect(() => {
     if (!open || source !== "custom") {
@@ -171,7 +214,8 @@ export default function ExportModal({
           return {
             name: `query-p1-${index + 1}-${type}.csv`,
             queryType: type,
-            content: buildSubmissionCsv(rows, type, answer),
+            qaAnswer: type === "qa" ? (tabQaAnswers[tab.key] || "") : "",
+            content: buildSubmissionCsv(rows, type, type === "qa" ? (tabQaAnswers[tab.key] || "") : ""),
             count: rows.length,
           };
         })
@@ -205,14 +249,17 @@ export default function ExportModal({
     return [{
       name: sanitizeQueryFileName(csvName, queryType),
       queryType,
+      qaAnswer: queryType === "qa" ? answer : "",
       content: buildSubmissionCsv(selectedItems, queryType, answer),
       count: selectedItems.length,
     }];
+  }, [source, tabs, searchItems, keptItems, resolvedCustomItems, csvName, queryType, answer, tabQaAnswers]);
   }, [source, tabs, searchItems, sequences, keptItems, resolvedCustomItems, csvName, queryType, answer, jitterRadius, jitterRows]);
 
   const rowCount = files.reduce((sum, file) => sum + file.count, 0);
   const preview = previewText(files);
   const hasQa = files.some((file) => file.queryType === "qa");
+  const missingQaAnswers = files.filter((file) => file.queryType === "qa" && file.count > 0 && file.qaAnswer === "");
 
   // The export always wiggles / writes-first sequences[0]; reindexing already
   // put the pinned ("Use this") or edited sequence there.
@@ -241,6 +288,10 @@ export default function ExportModal({
       toast.warning("Nothing to export");
       return false;
     }
+    if (missingQaAnswers.length > 0) {
+      toast.warning("Enter an answer for every QA query before exporting");
+      return false;
+    }
     return true;
   };
 
@@ -248,7 +299,7 @@ export default function ExportModal({
     if (!ensureRows()) return;
     files.forEach((file) => {
       downloadBlob(
-        new Blob([file.content], { type: "text/csv;charset=utf-8" }),
+        makeUtf8CsvBlob(file.content),
         sanitizeQueryFileName(file.name, file.queryType)
       );
     });
@@ -273,7 +324,13 @@ export default function ExportModal({
             <ExportOutlined /> Export Submission
           </div>
           <span className="ws-dim" style={{ fontSize: "11px", letterSpacing: "1px" }}>
-            {rowCount} ROWS - {files.length} CSV - {hydratingCustomItems ? "LOADING TIMELINE" : rowCount === 0 ? "EMPTY" : "READY"}
+            {rowCount} ROWS - {files.length} CSV - {hydratingCustomItems
+              ? "LOADING TIMELINE"
+              : rowCount === 0
+                ? "EMPTY"
+                : missingQaAnswers.length > 0
+                  ? "QA ANSWER REQUIRED"
+                  : "READY"}
           </span>
           <button ref={closeRef} className="ws-modal-close" onClick={onClose} title="Close (Esc)">
             <CloseOutlined />
@@ -393,7 +450,7 @@ export default function ExportModal({
                   ["qa", "QA"],
                   ["trake", "TRAKE"],
                 ].map(([value, label]) => (
-                  <button key={value} className={`ws-type ${queryType === value ? "active" : ""}`} onClick={() => setQueryType(value)}>
+                  <button key={value} className={`ws-type ${queryType === value ? "active" : ""}`} onClick={() => selectQueryType(value)}>
                     {label}
                   </button>
                 ))}
@@ -401,10 +458,43 @@ export default function ExportModal({
             </div>
           ) : null}
 
-          {hasQa ? (
+          {hasQa && source !== "allTabs" ? (
             <div className="ws-field">
-              <label className="ws-field-label">Fallback answer for QA (max 100 chars)</label>
-              <input value={answer} onChange={(e) => setAnswer(e.target.value.slice(0, 100))} placeholder="Used when result has no answer" />
+              <label className="ws-field-label">QA answer (required, max 100 characters)</label>
+              <input value={answer} onChange={(e) => setAnswer(truncateQaAnswer(e.target.value))} placeholder="Vietnamese or English answer" />
+              <span className="ws-dim" style={{ fontSize: 11 }}>
+                {Array.from(answer).length}/100 characters. This answer is written to every prediction row for this query.
+              </span>
+              {answer === "" ? (
+                <span style={{ display: "block", color: "#dc2626", fontSize: 11, marginTop: 3 }}>
+                  Enter an answer to enable QA export.
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+
+          {hasQa && source === "allTabs" ? (
+            <div className="ws-field">
+              <label className="ws-field-label">QA answers (one answer per query, max 100 characters)</label>
+              {(tabs || []).map((tab, index) => {
+                if (queryTypeFromSearchType(tab?.searchType) !== "qa" || !tab?.results?.length) return null;
+                const value = tabQaAnswers[tab.key] || "";
+                return (
+                  <div key={tab.key} style={{ marginBottom: 8 }}>
+                    <label className="ws-dim" style={{ display: "block", fontSize: 11, marginBottom: 3 }}>
+                      query-p1-{index + 1}-qa.csv ({Array.from(value).length}/100)
+                    </label>
+                    <input
+                      value={value}
+                      onChange={(e) => setTabQaAnswers((current) => ({
+                        ...current,
+                        [tab.key]: truncateQaAnswer(e.target.value),
+                      }))}
+                      placeholder="Vietnamese or English answer"
+                    />
+                  </div>
+                );
+              })}
             </div>
           ) : null}
 
@@ -423,10 +513,10 @@ export default function ExportModal({
             <div className="ws-exp-preview">{preview}</div>
           </div>
           <div className="ws-runbar">
-            <button className="ws-btn primary" onClick={downloadZip} disabled={rowCount === 0}>
+            <button className="ws-btn primary" onClick={downloadZip} disabled={rowCount === 0 || missingQaAnswers.length > 0}>
               <ExportOutlined /> Download ZIP
             </button>
-            <button className="ws-btn" onClick={downloadCsv} disabled={rowCount === 0}>
+            <button className="ws-btn" onClick={downloadCsv} disabled={rowCount === 0 || missingQaAnswers.length > 0}>
               Download CSV only
             </button>
             <button className="ws-btn" onClick={onClose}>

@@ -306,6 +306,18 @@ export function normalizeBackendResponse(payload, { type, latency }, baseUrl = "
   };
 }
 
+/**
+ * A live Q&A request can retrieve vector matches while still having no local
+ * image files for the VLM to inspect. In auto mode that state should use the
+ * local demo dataset so the complete answer UI remains testable while
+ * keyframes are being downloaded.
+ */
+export function shouldUseQaDemoFallback(tab, result) {
+  if (tab?.searchType !== "QA" || result?.source !== "live") return false;
+  const evaluatedFrames = Number(result?.meta?.evaluated_frames);
+  return Number.isFinite(evaluatedFrames) && evaluatedFrames <= 0;
+}
+
 function cleanChatBaseUrl(baseUrl) {
   return String(baseUrl || "").trim().replace(/\/users$/i, "").replace(/\/+$/, "");
 }

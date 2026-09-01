@@ -56,8 +56,15 @@ class Translation():
     # stored, so a transient provider outage cannot "freeze" a query to its
     # original text until the backend restarts.
     _cache: Dict[tuple[str, str, str], str] = {}
+    _SUPPORTED_LANGUAGES = {"en", "vi"}
 
     def __init__(self, from_lang='vi', to_lang='en'):
+        self.__to_lang = str(to_lang or "").strip().lower()
+        self.__from_lang = str(from_lang or "").strip().lower()
+        if self.__from_lang not in self._SUPPORTED_LANGUAGES:
+            raise ValueError(f"Unsupported source language: {self.__from_lang}")
+        if self.__to_lang not in self._SUPPORTED_LANGUAGES:
+            raise ValueError(f"Unsupported target language: {self.__to_lang}")
         self.__from_lang = _normalize_lang(from_lang) or "auto"
         self.__to_lang = _normalize_lang(to_lang) or "en"
         self.translator = None
@@ -86,6 +93,47 @@ class Translation():
         return text.strip() if text else ""
 
     @staticmethod
+    def _clean_provider_output(value: Any) -> str:
+        """Remove common LLM wrappers without changing translation content."""
+        text = str(value or "").strip()
+        if text.startswith("```") and text.endswith("```"):
+            text = re.sub(r"^```(?:text|markdown)?\s*", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"\s*```$", "", text)
+        text = re.sub(
+            r"^(?:translation|translated\s+text|english|vietnamese|tiếng\s+anh|tiếng\s+việt)\s*:\s*",
+            "",
+            text,
+            count=1,
+            flags=re.IGNORECASE,
+        ).strip()
+        if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+            text = text[1:-1].strip()
+        return text
+
+    @staticmethod
+    def _same_text(left: str, right: str) -> bool:
+        normalize = lambda value: re.sub(r"\s+", " ", value or "").strip().casefold()
+        return normalize(left) == normalize(right)
+
+    def _usable_translation(self, source: str, candidate: str) -> bool:
+        if not candidate or self._same_text(source, candidate):
+            return False
+        rejected_prefixes = (
+            "here is the translation",
+            "the translation is",
+            "bản dịch là",
+            "tôi không thể dịch",
+            "i cannot translate",
+        )
+        return not candidate.casefold().startswith(rejected_prefixes)
+
+    def _prefer_contextual_translation(self, text: str) -> bool:
+        """Google often misreads Vietnamese without diacritics as unrelated words."""
+        if self.__from_lang != "vi":
+            return False
+        has_letters = bool(re.search(r"[A-Za-z]", text))
+        has_vietnamese_diacritics = bool(re.search(r"[à-ỹÀ-ỸđĐ]", text))
+        return has_letters and not has_vietnamese_diacritics
     def _is_real_translation(candidate: str, source: str) -> bool:
         """True when ``candidate`` is a non-empty string that differs from the input."""
         cleaned = (candidate or "").strip()
@@ -181,6 +229,9 @@ class Translation():
                     f"Translate from {self.__from_lang} to {self.__to_lang}:\n{text}",
                 ),
             ])
+            return self._clean_provider_output(getattr(response, "content", ""))
+        except Exception as e:
+            logger.warning(f"OpenRouter translation fallback failed: {e}")
             return str(getattr(response, "content", "") or "").strip()
         except Exception as exc:
             logger.warning(
@@ -217,7 +268,48 @@ class Translation():
                 status=TRANSLATION_OK,
             )
 
+        if self.__from_lang == self.__to_lang:
+            self.last_provider = "identity"
+            return cleaned
+
         cache_key = (self.__from_lang, self.__to_lang, cleaned)
+        if cache_key in self._cache:
+            self.last_provider = "cache"
+            cached = self._cache[cache_key]
+            self.last_translated = cached != cleaned
+            return cached
+
+        result = ""
+        tried_openrouter = False
+        if self._prefer_contextual_translation(cleaned):
+            tried_openrouter = True
+            fallback = self._translate_with_openrouter(cleaned)
+            if self._usable_translation(cleaned, fallback):
+                self.last_provider = "openrouter"
+                self.last_translated = True
+                self._cache[cache_key] = fallback
+                return fallback
+
+        if self.translator is None:
+            self._init_translator()
+        if self.translator is not None:
+            try:
+                result = self._clean_provider_output(self.translator.translate(cleaned))
+                if self._usable_translation(cleaned, result):
+                    self.last_provider = "google"
+                    self.last_translated = True
+                    self._cache[cache_key] = result
+                    return result
+            except Exception as e:
+                logger.warning(f"Translation call failed: {e}")
+
+        if not tried_openrouter:
+            fallback = self._translate_with_openrouter(cleaned)
+            if self._usable_translation(cleaned, fallback):
+                self.last_provider = "openrouter"
+                self.last_translated = True
+                self._cache[cache_key] = fallback
+                return fallback
         cached = self._cache.get(cache_key)
         if cached is not None:
             # The cache only ever holds successful, different-from-input results.

@@ -97,6 +97,30 @@ class TestSettingsEnvOverride(unittest.TestCase):
         settings = Settings(_env_file=None)
         self.assertEqual(settings.log_level, "DEBUG")
 
+    @patch.dict(os.environ, {"CLIP_MODEL_NAME": "ViT-B-32", "CLIP_PRETRAINED": "openai"})
+    def test_override_model_config(self) -> None:
+        settings = Settings(_env_file=None)
+        self.assertEqual(settings.clip_model_name, "ViT-B-32")
+        self.assertEqual(settings.clip_pretrained, "openai")
+
+    @patch.dict(os.environ, {"FAISS_INDEX_PATH": "/custom/path/index.bin"})
+    def test_override_faiss_path(self) -> None:
+        settings = Settings(_env_file=None)
+        path = settings.get_faiss_index_path()
+        self.assertEqual(path.as_posix(), "/custom/path/index.bin")
+
+    @patch.dict(os.environ, {"METADATA_PATH": "/custom/metadata.json"})
+    def test_override_metadata_path(self) -> None:
+        settings = Settings(_env_file=None)
+        path = settings.get_metadata_path()
+        self.assertEqual(path.as_posix(), "/custom/metadata.json")
+
+    @patch.dict(os.environ, {"MEDIA_INFO_PATH": "/custom/media-info"})
+    def test_override_media_info_path(self) -> None:
+        settings = Settings(_env_file=None)
+        path = settings.get_media_info_path()
+        self.assertEqual(path.as_posix(), "/custom/media-info")
+
 
 class TestGetSettingsSingleton(unittest.TestCase):
     """Verify the lru_cache singleton behavior."""

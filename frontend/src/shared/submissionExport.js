@@ -2,6 +2,13 @@ function firstDefined(...values) {
   return values.find((value) => value !== undefined && value !== null && value !== "");
 }
 
+export const MAX_SUBMISSION_ROWS = 100;
+export const MAX_QA_ANSWER_LENGTH = 100;
+
+export function truncateQaAnswer(value, maxLength = MAX_QA_ANSWER_LENGTH) {
+  return Array.from(String(value ?? "")).slice(0, maxLength).join("");
+}
+
 function normalizeVideoName(value) {
   return String(value || "unknown-video").trim().replace(/\.(mp4|mov|avi|mkv|webm)$/i, "");
 }
@@ -42,9 +49,9 @@ function normalizeFrameId(item) {
   return Number.isFinite(parsed) ? String(parsed) : String(raw || "").trim();
 }
 
-function csvCell(value) {
+function csvCell(value, forceQuote = false) {
   const text = String(value ?? "");
-  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  return forceQuote || /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
 export function sanitizeQueryFileName(name, queryType = "kis") {
@@ -60,6 +67,9 @@ export function queryTypeFromSearchType(searchType) {
   return "kis";
 }
 
+export function buildSubmissionCsv(items, queryType, answerOverride = "") {
+  const type = String(queryType || "kis").toLowerCase();
+  const rows = (items || []).slice(0, MAX_SUBMISSION_ROWS);
 /** Drop later rows that repeat an earlier `video_id,frame_idx` pair. */
 function dedupeByVideoFrame(items) {
   const seen = new Set();
@@ -213,13 +223,19 @@ export function buildSubmissionCsv(items, queryType, answer = "") {
   const rows = dedupeByVideoFrame(items || []).slice(0, 100);
 
   if (type === "qa") {
+    const manualAnswer = String(answerOverride ?? "");
     return rows
       .map((item) => [
         videoNameForItem(item),
         normalizeFrameId(item),
-        csvCell(String(firstDefined(item?.answer, item?.backend?.answer, answer)).slice(0, 100)),
+        // One Q&A query has one answer. A manually entered answer must therefore
+        // override any model-generated value attached to individual result rows.
+        csvCell(
+          truncateQaAnswer(manualAnswer !== "" ? manualAnswer : firstDefined(item?.answer, item?.backend?.answer, "")),
+          true
+        ),
       ].join(","))
-      .join("\n");
+      .join("\r\n");
   }
 
   return rows
@@ -227,11 +243,18 @@ export function buildSubmissionCsv(items, queryType, answer = "") {
       videoNameForItem(item),
       normalizeFrameId(item),
     ].join(","))
-    .join("\n");
+    .join("\r\n");
 }
 
-function crc32(text) {
-  const bytes = new TextEncoder().encode(text);
+export function makeUtf8CsvBlob(csvContent, { excelCompatible = true } = {}) {
+  const bytes = new TextEncoder().encode(String(csvContent ?? ""));
+  const parts = excelCompatible
+    ? [new Uint8Array([0xef, 0xbb, 0xbf]), bytes]
+    : [bytes];
+  return new Blob(parts, { type: "text/csv;charset=utf-8" });
+}
+
+function crc32(bytes) {
   let crc = -1;
   for (const byte of bytes) {
     crc ^= byte;
@@ -283,7 +306,7 @@ export function makeSubmissionZip(files) {
     const path = file.name.startsWith("submission/") ? file.name : `submission/${file.name}`;
     const nameBytes = encoder.encode(path);
     const contentBytes = encoder.encode(file.content);
-    const checksum = crc32(file.content);
+    const checksum = crc32(contentBytes);
     const localOffset = local.length;
 
     pushU32(local, 0x04034b50);

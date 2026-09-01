@@ -8,6 +8,7 @@ import {
   probeBackend,
   runAgentChat,
   runBackendSearch,
+  shouldUseQaDemoFallback,
   temporalRequestBody,
 } from "../src/services/backendSearch.js";
 
@@ -26,6 +27,21 @@ test("normalizes a FastAPI BaseResponse into a workstation card", () => {
   assert.equal(result.items[0].frameName, "cam-01_0007");
   assert.equal(result.items[0].image, "data:image/webp;base64,ZmFrZQ==");
   assert.equal(result.items[0].score, 0.92);
+});
+
+test("detects live QA results that have no local keyframes for VLM evaluation", () => {
+  const missingFrames = {
+    source: "live",
+    meta: { status: "uncertain", answer: "Insufficient evidence.", evaluated_frames: 0 },
+  };
+  const evaluatedFrames = {
+    source: "live",
+    meta: { status: "answered", answer: "A red bus.", evaluated_frames: 2 },
+  };
+
+  assert.equal(shouldUseQaDemoFallback({ searchType: "QA" }, missingFrames), true);
+  assert.equal(shouldUseQaDemoFallback({ searchType: "QA" }, evaluatedFrames), false);
+  assert.equal(shouldUseQaDemoFallback({ searchType: "TEXT" }, missingFrames), false);
 });
 
 

@@ -39,6 +39,10 @@ class Settings(BaseSettings):
         src_dir: Absolute path to the `src/` directory. All data paths
             are resolved relative to this.
         keyframes_root: Root directory for keyframe images.
+        features_root: Root directory for per-video .npy feature files.
+        media_info_path: Directory containing per-video media-info JSON files.
+        clip_model_name: OpenCLIP model architecture name.
+        clip_pretrained: OpenCLIP pretrained weights identifier.
         log_level: Python logging level string.
     """
 
@@ -51,6 +55,8 @@ class Settings(BaseSettings):
     # --- Data Paths (resolved relative to src_dir if not absolute) ---
     src_dir: Path = _default_src_dir()
     keyframes_root: Path | None = None
+    features_root: Path | None = None
+    media_info_path: Path | None = None
 
     # --- Video playback / frame capture ---
     # Archive (or directory) of per-video media-info JSON files carrying the
@@ -159,13 +165,27 @@ class Settings(BaseSettings):
     trake_asr_enabled: bool = True
     trake_vlm_enabled: bool = True
     trake_vlm_max_sequences: int = 5
-    qa_retrieval_pool: int = 40
-    qa_max_frames: int = 8
-    qa_per_video_limit: int = 3
+    qa_retrieval_pool: int = 120
+    qa_visual_query_limit: int = 8
+    qa_max_frames: int = 16
+    qa_per_video_limit: int = 4
+    qa_event_window_seconds: float = 8.0
+    qa_max_evidence_groups: int = 8
+    qa_context_frames_per_group: int = 3
     qa_text_evidence_top_k: int = 12
     qa_evidence_window_seconds: float = 15.0
     qa_vlm_enabled: bool = True
+    qa_answer_model: str = "qwen/qwen3-vl-32b-instruct"
+    qa_detail_pass_enabled: bool = True
+    qa_detail_model: str = "qwen/qwen3-vl-32b-instruct"
+    qa_detail_max_frames: int = 2
+    qa_detail_grid_size: int = 3
+    qa_detail_image_max_side: int = 900
+    qa_verify_enabled: bool = True
     qa_min_confidence: float = 0.55
+    qa_return_best_guess: bool = True
+    qa_uncertain_confidence_cap: float = 0.49
+    qa_answer_max_chars: int = 100
     qa_max_tokens: int = 700
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-3-5-sonnet-20240620"
@@ -290,6 +310,8 @@ class Settings(BaseSettings):
         return value
     @field_validator(
         "keyframes_root",
+        "features_root",
+        "media_info_path",
         "media_info_path",
         "map_keyframes_path",
         "video_capture_cache_path",
@@ -412,6 +434,15 @@ class Settings(BaseSettings):
         if self.video_capture_cache_path is not None:
             return Path(self.video_capture_cache_path)
         return self.src_dir.parent / ".cache" / "video-captures"
+
+    def get_media_info_path(self) -> Path:
+        """Return the resolved directory containing per-video metadata JSON.
+
+        Falls back to ``src/dict/media-info``.
+        """
+        if self.media_info_path is not None:
+            return Path(self.media_info_path)
+        return self.src_dir / "dict" / "media-info"
 
     def get_agent_vlm_cache_path(self) -> Path:
         """Return the runtime cache path for OpenRouter VLM verdicts."""

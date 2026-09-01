@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 class TextSearchRequest(BaseModel):
@@ -16,8 +16,8 @@ class CaptureSimilarRequest(BaseModel):
 
 class TranslateRequest(BaseModel):
     text: str = Field(..., min_length=1)
-    from_lang: str = Field(default="vi")
-    to_lang: str = Field(default="en")
+    from_lang: Literal["vi", "en"] = Field(default="vi")
+    to_lang: Literal["vi", "en"] = Field(default="en")
 
 class TranslateResponse(BaseModel):
     success: bool = True

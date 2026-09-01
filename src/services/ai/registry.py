@@ -42,6 +42,15 @@ def _openrouter_resolver(settings: Settings, base_url: str):
     return base_url, (), headers, None
 
 
+def _kilo_resolver(settings: Settings, base_url: str):
+    # Kilo's gateway is OpenRouter-derived and accepts the same id headers.
+    headers = {
+        "HTTP-Referer": settings.openrouter_site_url,
+        "X-Title": settings.openrouter_app_name,
+    }
+    return base_url, (), headers, None
+
+
 def _gemini_resolver(settings: Settings, base_url: str):
     # AI Studio key, else fall back to the legacy GOOGLE_API_KEY.
     key = settings.gemini_api_key or settings.google_api_key
@@ -104,6 +113,14 @@ PROVIDER_DEFS: dict[str, ProviderDef] = {
         text_model_field="cloudflare_text_model", vision_model_field="cloudflare_vision_model",
         timeout_field="cloudflare_timeout_seconds", enabled_field="cloudflare_enabled",
         resolver=_cloudflare_resolver,
+    ),
+    "kilo": ProviderDef(
+        id="kilo", label="Kilo AI Gateway",
+        default_base_url="https://kilocode.ai/api/openrouter",
+        key_field="kilo_api_key", base_url_field="kilo_base_url",
+        text_model_field="kilo_text_model", vision_model_field="kilo_vision_model",
+        timeout_field="kilo_timeout_seconds", enabled_field="kilo_enabled",
+        resolver=_kilo_resolver,
     ),
 }
 

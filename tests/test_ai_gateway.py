@@ -204,6 +204,24 @@ class TestModelDiscovery:
 
 
 # ---------------------------------------------------------------------------
+class TestKiloProvider:
+    def test_registered_and_openrouter_compatible(self) -> None:
+        assert "kilo" in registry.all_provider_ids()
+        s = _settings(kilo_enabled=True, kilo_api_key="k-kilo", kilo_text_model="anthropic/claude-3.5-sonnet",
+                      ai_text_priority="kilo,groq")
+        provider = registry.build_provider("kilo", s)
+        assert provider.is_configured() and provider.base_url.endswith("/api/openrouter")
+        assert provider.extra_headers.get("X-Title")  # OpenRouter-style id headers
+        assert [p.id for p in registry.text_chain(s)] == ["kilo", "groq"]
+
+    def test_in_chain_and_answers(self, transport) -> None:
+        transport({"kilocode.ai": (200, _completion_body("from-kilo"))})
+        s = _settings(kilo_enabled=True, kilo_api_key="k", kilo_text_model="m",
+                      ai_text_priority="kilo,groq")
+        result, attempts = gateway.text_completion([{"role": "user", "content": "hi"}], settings=s)
+        assert result.provider == "kilo" and result.text == "from-kilo"
+
+
 class TestCloudflareRequiresAccountId:
     def test_missing_account_id_is_not_configured(self) -> None:
         s = _settings(cloudflare_enabled=True, cloudflare_api_key="k", cloudflare_text_model="cf-t")

@@ -192,8 +192,8 @@ class Settings(BaseSettings):
     # provider gateway, trying each entry of the Text or Vision priority list in
     # order and falling back to local behaviour when every provider fails.
     ai_gateway_enabled: bool = False
-    ai_text_priority: str = "nim,cerebras,groq,openrouter,gemini,cloudflare"
-    ai_vision_priority: str = "gemini,openrouter,nim,cloudflare,groq,cerebras"
+    ai_text_priority: str = "nim,cerebras,groq,openrouter,kilo,gemini,cloudflare"
+    ai_vision_priority: str = "gemini,openrouter,kilo,nim,cloudflare,groq,cerebras"
     ai_local_fallback_enabled: bool = True
     ai_gateway_max_tokens: int = 1024
 
@@ -235,6 +235,14 @@ class Settings(BaseSettings):
     cloudflare_text_model: str = ""
     cloudflare_vision_model: str = ""
     cloudflare_timeout_seconds: float = 45.0
+
+    # Kilo AI Gateway (OpenRouter-compatible aggregator, kilocode.ai)
+    kilo_enabled: bool = False
+    kilo_api_key: str | None = None
+    kilo_base_url: str = "https://kilocode.ai/api/openrouter"
+    kilo_text_model: str = ""
+    kilo_vision_model: str = ""
+    kilo_timeout_seconds: float = 45.0
 
     # --- Cloud asset storage (dataset read from Azure Blob or S3-compatible) ---
     cloud_assets_enabled: bool = False
@@ -315,6 +323,7 @@ class Settings(BaseSettings):
         "groq_api_key",
         "gemini_api_key",
         "cloudflare_api_key",
+        "kilo_api_key",
         "azure_storage_connection_string",
         "azure_storage_primary_key",
         "s3_access_key_id",

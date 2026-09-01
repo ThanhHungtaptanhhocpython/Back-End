@@ -86,6 +86,7 @@ _BASIC_KEYS = {
     "GEMINI_ENABLED", "GEMINI_API_KEY", "GEMINI_TEXT_MODEL", "GEMINI_VISION_MODEL",
     "CLOUDFLARE_ENABLED", "CLOUDFLARE_API_KEY", "CLOUDFLARE_ACCOUNT_ID",
     "CLOUDFLARE_TEXT_MODEL", "CLOUDFLARE_VISION_MODEL",
+    "KILO_ENABLED", "KILO_API_KEY", "KILO_TEXT_MODEL", "KILO_VISION_MODEL",
     # Agent / VLM top-level toggles
     "AGENT_LLM_ENABLED", "AGENT_LLM_MODEL", "AGENT_VLM_ENABLED", "AGENT_VLM_MODEL",
     # TRAKE / Q&A top-level toggles
@@ -328,6 +329,14 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     _f("CLOUDFLARE_TEXT_MODEL", G_AI, STR),
     _f("CLOUDFLARE_VISION_MODEL", G_AI, STR),
     _f("CLOUDFLARE_TIMEOUT_SECONDS", G_AI, FLOAT, minimum=1, maximum=600),
+    # Kilo AI Gateway (kilocode.ai -- OpenRouter-compatible aggregator)
+    _f("KILO_ENABLED", G_AI, BOOL),
+    _f("KILO_API_KEY", G_AI, SECRET, secret=True, help="Kilo Code API key (kilocode.ai)."),
+    _f("KILO_BASE_URL", G_AI, URL, placeholder="https://kilocode.ai/api/openrouter",
+       help="Kilo gateway base (OpenRouter-compatible). Confirm with Test."),
+    _f("KILO_TEXT_MODEL", G_AI, STR, help="Model ID via Kilo, e.g. anthropic/claude-3.5-sonnet. Confirm via Test."),
+    _f("KILO_VISION_MODEL", G_AI, STR, help="Vision-capable model ID; confirm via Test."),
+    _f("KILO_TIMEOUT_SECONDS", G_AI, FLOAT, minimum=1, maximum=600),
 
     # -- Agent / VLM ---------------------------------------------------------
     # -- Agent Search TEXT planner (LLM) --

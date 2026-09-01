@@ -1,4 +1,8 @@
-import { ReloadOutlined } from "@ant-design/icons";
+import { ReloadOutlined, SettingOutlined } from "@ant-design/icons";
+
+const openSettings = () => {
+  window.location.hash = "#/settings";
+};
 
 export default function StatusBar({ clock, backend, onPing, onShortcuts }) {
   const isDemo = backend.demo !== false;
@@ -51,6 +55,9 @@ export default function StatusBar({ clock, backend, onPing, onShortcuts }) {
       </div>
 
       <div className="ws-topright">
+        <button className="ws-status-btn" onClick={openSettings} title="Open Settings">
+          <SettingOutlined /> Settings
+        </button>
         <button className="ws-status-btn" onClick={onShortcuts} title="Keyboard shortcuts">
           Shortcuts
         </button>

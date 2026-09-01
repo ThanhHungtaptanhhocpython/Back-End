@@ -132,10 +132,32 @@ with `preview_url: null` and a `preview_error` reason; app startup is unaffected
 
 ## 🏃‍♂️ Running the Server
 
-### Step 1: Start Elasticsearch
+### Recommended: the local launcher
+
+```bash
+python -m launcher            # backend (+ frontend, if LAUNCHER_FRONTEND_ENABLED)
+python -m launcher --no-frontend
+```
+
+The launcher reads the **active runtime-config revision**, starts the FastAPI
+backend, and watches for restart requests from the Settings UI. On a config
+change it applies the new revision, polls `/health`, and — if the app does not
+come up healthy within `LAUNCHER_HEALTH_TIMEOUT_SECONDS` — automatically
+restores the previous revision and starts again. When `HOST`/`PORT` change it
+also restarts the local frontend with the new API base URL.
+
+Runtime configuration lives in a per-user SQLite store
+(`<app-data>/HCMAI2026/config.db`), seeded from `.env` on first run. After that,
+edit configuration through the loopback-only Settings API / UI
+(`/settings/...`), not `.env`. Set `HCMAI_DISABLE_CONFIG_STORE=1` to fall back
+to pure `.env` behaviour.
+
+### Manual (no launcher)
+
+#### Step 1: Start Elasticsearch
 - **Via Docker:** `docker run -d -p 9200:9200 -e "discovery.type=single-node" elasticsearch:8.15.0`
 
-### Step 2: Start FastAPI
+#### Step 2: Start FastAPI
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```

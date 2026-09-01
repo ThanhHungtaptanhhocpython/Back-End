@@ -52,7 +52,7 @@ class TestSettingsDefaults(unittest.TestCase):
     """Verify that default values are sensible without any .env file."""
 
     def setUp(self) -> None:
-        self.settings = Settings(_env_file=None, debug=False, keyframes_root=None, features_root=None)
+        self.settings = Settings(_env_file=None, debug=False, keyframes_root=None)
 
     def test_default_env(self) -> None:
         self.assertEqual(self.settings.env, "development")
@@ -74,16 +74,11 @@ class TestSettingsPathResolvers(unittest.TestCase):
     """Verify that path resolver methods return correct defaults."""
 
     def setUp(self) -> None:
-        self.settings = Settings(_env_file=None, debug=False, keyframes_root=None, features_root=None)
+        self.settings = Settings(_env_file=None, debug=False, keyframes_root=None)
 
     def test_keyframes_default_path(self) -> None:
         path = self.settings.get_keyframes_root()
         self.assertTrue(str(path).endswith("Keyframes"))
-        self.assertIn("data", str(path))
-
-    def test_features_default_path(self) -> None:
-        path = self.settings.get_features_root()
-        self.assertTrue(str(path).endswith("features"))
         self.assertIn("data", str(path))
 
 

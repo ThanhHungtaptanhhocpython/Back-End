@@ -1,0 +1,264 @@
+.set-page {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 20px 24px 64px;
+}
+
+.set-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.set-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.set-restart {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.set-actionbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 0 12px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid #e2e8f0;
+  position: sticky;
+  top: 0;
+  background: #f8fafc;
+  z-index: 6;
+}
+
+.set-config-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 12px 0 16px;
+}
+
+.set-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #475569;
+  white-space: nowrap;
+}
+
+.set-flex-spacer {
+  flex: 1 1 auto;
+}
+
+.set-group {
+  border: 1px solid var(--ws-border, #e2e8f0);
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: #fff;
+}
+
+.set-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.set-group-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.set-group-help {
+  font-size: 12px;
+  color: #64748b;
+  margin: -4px 0 10px;
+}
+
+.set-field {
+  padding: 10px 0;
+  border-top: 1px dashed #eef2f7;
+}
+.set-field:first-of-type {
+  border-top: none;
+}
+.set-field--error .set-field-widget :is(input, textarea, .ant-select-selector) {
+  border-color: #ef4444 !important;
+}
+
+.set-field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.set-field-label {
+  font-weight: 600;
+  font-size: 13px;
+  color: #1e293b;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.set-field-key {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.set-field-help {
+  font-size: 12px;
+  color: #64748b;
+  margin: 2px 0 8px;
+}
+
+.set-field-msg {
+  color: #dc2626;
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.set-field-resolved {
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 4px;
+}
+.set-field-resolved code {
+  background: #f1f5f9;
+  padding: 0 4px;
+  border-radius: 3px;
+}
+.set-field-resolved.missing {
+  color: #b45309;
+}
+
+.set-tag {
+  transform: scale(0.85);
+  transform-origin: left center;
+}
+
+.set-secret {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.set-dim {
+  color: #94a3b8;
+}
+
+.set-test {
+  font-size: 12px;
+  margin-top: 4px;
+  word-break: break-word;
+}
+.set-test.ok {
+  color: #059669;
+}
+.set-test.bad {
+  color: #dc2626;
+}
+
+.set-provider-list {
+  background: #fff;
+}
+
+.set-provider-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.set-provider-actions {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #eef2f7;
+}
+
+.set-inf-section {
+  margin-bottom: 8px;
+}
+.set-inf-title {
+  margin: 8px 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+}
+
+.set-explainer {
+  margin-bottom: 16px;
+  background: #fff;
+}
+.set-explainer-body :is(p, li) {
+  font-size: 13px;
+}
+.set-explainer-list {
+  margin: 0 0 12px;
+  padding-left: 20px;
+}
+.set-explainer-list li {
+  margin-bottom: 6px;
+  color: #475569;
+}
+.set-explainer code {
+  background: #f1f5f9;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.set-picker-list {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  max-height: 340px;
+  overflow: auto;
+  background: #fff;
+}
+
+.set-picker-row {
+  cursor: pointer;
+  padding: 6px 12px !important;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.set-picker-row:hover {
+  background: #f1f5f9;
+}
+.set-picker-row.selected {
+  background: #dbeafe;
+}
+.set-picker-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 820px) {
+  .set-config-body {
+    grid-template-columns: 1fr;
+  }
+  .set-config-nav {
+    display: none;
+  }
+}

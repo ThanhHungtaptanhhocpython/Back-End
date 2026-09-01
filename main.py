@@ -27,6 +27,7 @@ from src.api.routers.health_router import router as health_router
 from src.api.routers.search_router import router as search_router
 from src.api.routers.chat_router import router as chat_router
 from src.api.routers.video_router import router as video_router
+from src.api.routers.settings_router import router as settings_router
 from src.api.middleware import RequestLoggingMiddleware, global_exception_handler
 from src.config.settings import get_settings
 
@@ -66,7 +67,9 @@ async def validation_exception_handler(
 ) -> JSONResponse:
     """Return a standard error response for Pydantic validation failures."""
     print(f"Validation Error: {exc.errors()}")
-    print(f"Request body: {await request.body()}")
+    # Never echo the body of a management-API request: it may carry secrets.
+    if not request.url.path.startswith(("/settings", "/users/settings")):
+        print(f"Request body: {await request.body()}")
     return JSONResponse(
         status_code=400,
         content={
@@ -95,6 +98,10 @@ app.include_router(search_router, prefix="")
 app.include_router(video_router, prefix="/users")
 app.include_router(video_router, prefix="")
 app.include_router(chat_router)
+# Local management API (loopback-only). Dual-prefixed like the search router so
+# it works whether or not the frontend API base URL ends in "/users".
+app.include_router(settings_router, prefix="/users")
+app.include_router(settings_router, prefix="")
 
 
 keyframes_root = settings.get_keyframes_root()
@@ -259,6 +266,17 @@ async def serve_keyframe(image_path: str):
                 all_frames = sorted([f for f in vdir.iterdir() if f.is_file()])
                 if all_frames:
                     return FileResponse(str(all_frames[0]))
+
+    # Last resort before the placeholder: if cloud assets are configured, fetch
+    # this keyframe on demand and LRU-cache it locally.
+    try:
+        from src.services.assets import resolve_keyframe_file
+
+        cloud_file = resolve_keyframe_file(image_path)
+        if cloud_file is not None and cloud_file.is_file():
+            return FileResponse(str(cloud_file))
+    except Exception:  # noqa: BLE001 - never let this break image serving
+        pass
 
     svg_content = _make_svg_placeholder(video_id, f"Frame {stem}")
     return Response(content=svg_content, media_type="image/svg+xml")

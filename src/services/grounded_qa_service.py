@@ -88,9 +88,9 @@ def _question_plan(question: str) -> Dict[str, str]:
 
 
 def _get_retriever() -> Any:
-    from src.services.beit3_retriever import get_beit3_retriever
+    from src.services.retrieval_backend import get_active_retriever
 
-    return get_beit3_retriever()
+    return get_active_retriever()
 
 
 def _collect_text_evidence(plan: Dict[str, str], top_k: int) -> Dict[str, List[Dict[str, Any]]]:
@@ -131,7 +131,14 @@ def _candidate_from_evidence(
     max_timestamp_delta: float,
 ) -> Dict[str, Any] | None:
     frame = None
-    if modality == "asr" and row.get("nearest_faiss_id") is not None:
+    # `nearest_faiss_id` on an ASR row was precomputed against the BEiT3 FAISS
+    # index at ASR-indexing time. If the active retriever is a different
+    # backend (a different vector-id space), an integer collision there would
+    # silently return an unrelated frame -- so this shortcut only applies when
+    # the active retriever actually is BEiT3. Every other backend falls
+    # straight through to the embedding-space-agnostic video_id+timestamp
+    # lookup below.
+    if modality == "asr" and row.get("nearest_faiss_id") is not None and getattr(retriever, "backend_id", None) == "beit3":
         frame = retriever.get_frame_by_vector_id(row.get("nearest_faiss_id"))
     if frame is None and row.get("video_id"):
         frame = retriever.get_nearest_frame(str(row.get("video_id")), _evidence_timestamp(row, modality))

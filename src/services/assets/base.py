@@ -31,7 +31,19 @@ ARTIFACT_NAMES = (
     "tokenizer",
     "media_info",
     "map_keyframes",
+    "jina_faiss_index",
+    "jina_global_ids",
+    "jina_index_meta",
 )
+
+# The runtime artifact set each retrieval backend actually needs, keyed by
+# Settings.retrieval_backend value. Used to scope a sync to only the active
+# backend's artifacts -- a member on Jina must never be made to download the
+# (possibly much larger) BEiT3 checkpoint + FAISS index, and vice versa.
+BACKEND_ARTIFACT_NAMES: dict[str, tuple[str, ...]] = {
+    "beit3": ("faiss_index", "global_ids", "video_metadata", "index_meta", "checkpoint", "tokenizer"),
+    "jina_clip_v2": ("jina_faiss_index", "jina_global_ids", "jina_index_meta"),
+}
 
 
 class AssetStoreError(RuntimeError):

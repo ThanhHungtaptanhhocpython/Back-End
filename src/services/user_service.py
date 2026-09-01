@@ -106,14 +106,16 @@ def generate_random_answer():
 
 
 def getImageDataSingleTextSearch(query, k):
-    """Real visual text search: BEiT3 text encoder -> exact FAISS IP search.
+    """Real visual text search: active backend's text encoder -> exact FAISS IP search.
 
-    This is the production `/singletextsearch` path. Returned scores are the
-    real FAISS inner-product similarity, never a rank-derived placeholder.
+    This is the production `/singletextsearch` path. The active backend is
+    RETRIEVAL_BACKEND (BEiT3 or Jina CLIP v2, see
+    src/services/retrieval_backend.py); scores are the real FAISS
+    inner-product similarity, never a rank-derived placeholder.
     """
-    from src.services.beit3_retriever import get_beit3_retriever
+    from src.services.retrieval_backend import get_active_retriever
 
-    return get_beit3_retriever().search_visual(query, top_k=k)
+    return get_active_retriever().search_visual(query, top_k=k)
 
 
 def getGroundedQASearch(query, k):

@@ -1,9 +1,16 @@
 # Cloud asset storage — team workflow
 
-The backend can read its runtime artifacts (BEiT3 FAISS index, parquet files,
-model checkpoint, tokenizer, media-info, map-keyframes) and keyframes from
-**Azure Blob** or an **S3-compatible** bucket instead of local disk. Only the
-app *reads*; publishing the dataset + manifest is a one-time operator task.
+The backend can read its runtime artifacts (retrieval FAISS index, parquet
+files, model checkpoint/tokenizer where applicable, media-info,
+map-keyframes) and keyframes from **Azure Blob** or an **S3-compatible**
+bucket instead of local disk. Only the app *reads*; publishing the dataset +
+manifest is a one-time operator task.
+
+Two independent retrieval backends can be served this way — **BEiT3** and
+**Jina CLIP v2** (see `RETRIEVAL_BACKEND` in `.env.example`). They are two
+different embedding spaces built from two different FAISS indexes; a sync
+only ever pulls the artifacts for the *active* backend, never both (see
+[Selective sync](#selective-sync-by-backend) below).
 
 ## The manifest
 
@@ -17,17 +24,155 @@ the **metadata** container/bucket:
     {"name": "faiss_index", "container": "embeddings", "key": "beit3/beit3_faiss.index",
      "size": 1176325506, "sha256": "…64 hex…"},
     {"name": "global_ids",  "container": "embeddings", "key": "beit3/global_ids.parquet",
-     "size": 4789145, "sha256": "…"}
+     "size": 4789145, "sha256": "…"},
     // checkpoint, tokenizer, video_metadata, index_meta, media_info, map_keyframes …
+
+    {"name": "jina_faiss_index", "container": "embeddings",
+     "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/jina_faiss.index",
+     "size": 1176325506, "sha256": "…64 hex…"},
+    {"name": "jina_global_ids", "container": "embeddings",
+     "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/jina_global_ids.parquet",
+     "size": 61234567, "sha256": "…"},
+    {"name": "jina_index_meta", "container": "embeddings",
+     "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/jina_index_meta.json",
+     "size": 512, "sha256": "…"}
   ],
   "keyframes": {"container": "keyframes", "prefix": "", "layout": "{namespace}/{video_id}/{frame_id}.webp"}
 }
 ```
 
 `sync_artifacts` streams each blob, checks **size + SHA-256**, and only promotes
-a version once **every** listed artifact is present — a half-finished sync never
-shadows a good one. Keyframes are fetched on demand from the `keyframes`
+a version once **every requested artifact** is present and verified — a
+half-finished sync never shadows a good one, and (see below) a sync scoped to
+one backend's artifacts is not blocked by the other backend's artifacts also
+listed in the manifest. Keyframes are fetched on demand from the `keyframes`
 container and LRU-cached locally.
+
+## Jina CLIP v2 artifact set
+
+| Artifact name (manifest) | File | Contains |
+| --- | --- | --- |
+| `jina_faiss_index` | `jina_faiss.index` | `IndexIDMap2(IndexFlatIP(1024))` |
+| `jina_global_ids` | `jina_global_ids.parquet` | one row per keyframe: `vector_id`, `split`, `video_id`, `embedding_row`, `keyframe_ordinal`, `timestamp_ms`, `asset_key`, `frame_path` (alias of `asset_key`), `source_frame_id` |
+| `jina_index_meta` | `jina_index_meta.json` | model id + pinned revision, dimension, metric, normalization, vector count, metadata schema version |
+
+`asset_key` is the real, literal keyframe object key inside the `keyframes`
+container, e.g. `L21_a/L21_V001/keyframe_0000.jpg` — never a path guessed from
+a numeric frame id. The keyframe resolver (`src/services/assets/__init__.py`)
+looks at `asset_key` first, then `frame_path`, before falling back to
+anything else (see [Keyframe resolution](#keyframe-resolution)).
+
+There is no `jina_checkpoint`/`jina_tokenizer` artifact: the Jina CLIP v2
+model itself is loaded from a **local, pinned** HuggingFace snapshot
+(`JINA_MODEL_PATH` + `JINA_MODEL_REVISION`, `JINA_LOCAL_FILES_ONLY=true`), not
+synced through this manifest.
+
+### Azure object layout (as produced by the existing embedding pipeline)
+
+The Kaggle notebooks under `scripts/notebooks/` (`embed-jina-upload-azure-*`,
+`merge-azure-jina-embedding-index.ipynb`) already produce this layout in the
+`embeddings` container:
+
+```text
+<embedding_run>/jina/<namespace>/<video_id>.npy          # per-video (N,1024) embeddings
+<embedding_run>/records/<namespace>/<video_id>.json      # per-video {"records": [...]}
+indexes/<embedding_run>/jina/jina_faiss.index             # merged/built index (see below)
+indexes/<embedding_run>/jina/jina_global_ids.parquet
+indexes/<embedding_run>/jina/jina_index_meta.json
+```
+
+Keyframes themselves live in the `keyframes` container at
+`<namespace>/<video_id>/<frame_file>` (e.g. `L21_a/L21_V001/keyframe_0000.jpg`) —
+this is exactly the value stored in `asset_key`.
+
+## Build the Jina runtime artifacts
+
+`scripts/cloud/build_jina_index.py` reads the per-video `.npy` + records JSON
+(downloaded locally from the `embeddings` container ahead of time) and an
+optional map-keyframes directory, validates them, and writes the four files
+above plus a build report. It never loads the whole corpus into RAM — each
+video's `.npy` is opened with `mmap_mode='r'` and added to the FAISS index one
+video at a time.
+
+```bash
+python scripts/cloud/build_jina_index.py \
+    --embeddings-root /data/jina/embeddings \
+    --records-root /data/jina/records \
+    --map-keyframes-root /data/map-keyframes \
+    --model-id jinaai/jina-clip-v2 \
+    --model-revision <pinned-commit-sha> \
+    --embedding-run fine_keyframes_jina_clip_v2_1024d_v2 \
+    --out-dir ./jina_runtime
+```
+
+Validation performed (fails loudly, never silently drops a bad row):
+embedding shape `(N, 1024)`; finite values; L2-normalized (±2e-3); `.npy` row
+order matches the metadata's `local_position` exactly; unique `vector_id`
+and `asset_key` across the whole corpus; non-empty, path-safe `video_id` /
+`split`; a resolvable `timestamp_ms` for every row (record value, or a
+map-keyframes fallback — never invented); FAISS `ntotal` equal to the
+parquet row count.
+
+Then publish the manifest for it the same way as BEiT3's:
+
+```bash
+# add the jina_* entries (see manifest_spec.example.json) pointing "local" at
+# ./jina_runtime/jina_faiss.index, jina_global_ids.parquet, jina_index_meta.json
+python scripts/cloud/build_asset_manifest.py --spec manifest_spec.json --out hcmai-assets.json
+```
+
+## Selective sync by backend
+
+`POST /settings/cloud/sync` syncs only the **active** backend's artifacts
+(`BACKEND_ARTIFACT_NAMES` in `src/services/assets/base.py`) when the request
+doesn't name specific artifacts — a member running `RETRIEVAL_BACKEND=jina_clip_v2`
+is never made to also download the (larger) BEiT3 checkpoint + FAISS index,
+and vice versa. Promotion to *current* is gated on the requested subset being
+fully present with a verified size + SHA-256 (`ArtifactCache.is_version_verified`),
+not merely "the file exists" and not on every artifact the manifest happens
+to list.
+
+## Keyframe resolution
+
+`resolve_keyframe_file` (and the underlying `_keyframe_rel_path`) resolve a
+search-result item to a cache key in this order:
+
+1. `asset_key` — the authoritative cloud key, if the item carries one.
+2. `frame_path` / `image_path` / `keyframe_path`.
+3. The manifest's `keyframes.layout` template, only if it uses solely the
+   whitelisted placeholders (`namespace`, `split`, `video_id`, `frame_id`,
+   `frame_name`) and every value it needs is present — a malformed or
+   attacker-influenced layout is ignored, never used to build a path.
+4. The legacy `video_id`/`split`/`frame_id` heuristic BEiT3 result rows have
+   always used (produces a `.webp` name).
+
+`.jpg`, `.jpeg`, `.webp` and `.png` are all recognised. Nothing here ever
+reformats a numeric frame id into a guessed filename like
+`keyframe_0000.jpg` — that filename only ever comes from real `asset_key`/
+`frame_path` mapping data or a validated `layout`. Both the artifact cache and
+the keyframe LRU cache reject any path that would resolve outside their root
+(`../` traversal, absolute-path escapes) rather than reading/writing it.
+
+## Migration / rollback: BEiT3 ↔ Jina CLIP v2
+
+Switching backends is a config-only change — no code deploy:
+
+1. Sync the target backend's artifacts (Settings → Cloud Assets → **Sync
+   artifacts**, or `POST /settings/cloud/sync`) if not already local.
+2. Set `RETRIEVAL_BACKEND` to `beit3` or `jina_clip_v2` in Settings →
+   Retrieval (or `.env`) and restart.
+3. Textual KIS, grounded Q&A candidate retrieval, and TRAKE per-event
+   retrieval now come from the new backend. Image-similarity endpoints
+   ('Similar' on a capture, search-by-uploaded-image) are unaffected — they
+   always use BEiT3, so its artifacts should stay configured/synced even
+   while `RETRIEVAL_BACKEND=jina_clip_v2`.
+4. Roll back by setting `RETRIEVAL_BACKEND` back to `beit3` and restarting;
+   nothing about the BEiT3 artifacts or index is touched by running with
+   Jina active, so this is always safe.
+
+Because the two backends' FAISS indexes, vector-id spaces, and result rows
+never mix, a rollback (or a forward migration) is always a clean cut — there
+is no partial/mixed state to reconcile.
 
 ## 1. Build & upload the artifacts (operator, once per dataset version)
 

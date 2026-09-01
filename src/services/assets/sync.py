@@ -119,7 +119,6 @@ def sync_artifacts(
 ) -> SyncReport:
     started = time.perf_counter()
     manifest = manifest or store.fetch_manifest()
-    all_names = [a.name for a in manifest.artifacts]
     wanted = manifest.artifacts if not names else [a for a in manifest.artifacts if a.name in set(names)]
 
     report = SyncReport(version=manifest.version)
@@ -128,7 +127,13 @@ def sync_artifacts(
         report.results.append(result)
         logger.info("sync %s/%s -> %s", manifest.version, art.name, result.status)
 
-    if cache.is_version_complete(manifest.version, all_names):
+    # Promotion is scoped to what was actually requested (`wanted`), not every
+    # artifact the manifest happens to declare -- a member syncing only the
+    # active backend's artifacts (see BACKEND_ARTIFACT_NAMES) must still reach
+    # "current" without also downloading the other backend's files. Each slot
+    # is re-verified by size + SHA-256 here (not just "the file exists"), so a
+    # stale or half-written leftover from an earlier run can never count.
+    if wanted and cache.is_version_verified(manifest.version, wanted):
         cache.set_current(manifest.version)
         report.promoted = True
     report.current_version = cache.get_current()

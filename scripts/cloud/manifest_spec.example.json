@@ -1,5 +1,6 @@
 {
   "_comment": "Copy to manifest_spec.json and set every 'local' path to your built runtime artifacts, then: python scripts/cloud/build_asset_manifest.py --spec manifest_spec.json --out hcmai-assets.json [--upload]",
+  "_comment_jina": "The jina_* entries below are only needed when publishing the Jina CLIP v2 backend (see docs/CLOUD_ASSETS.md); built by scripts/cloud/build_jina_index.py. Remove that whole block if you only run BEiT3.",
   "version": "2026-09-01",
   "artifacts": {
     "faiss_index": {
@@ -31,6 +32,21 @@
       "local": "E:/GitHub/HCMAI2026/beit3_runtime/beit3.spm",
       "container": "metadata",
       "key": "beit3/beit3.spm"
+    },
+    "jina_faiss_index": {
+      "local": "E:/GitHub/HCMAI2026/jina_runtime/jina_faiss.index",
+      "container": "embeddings",
+      "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/jina_faiss.index"
+    },
+    "jina_global_ids": {
+      "local": "E:/GitHub/HCMAI2026/jina_runtime/jina_global_ids.parquet",
+      "container": "embeddings",
+      "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/jina_global_ids.parquet"
+    },
+    "jina_index_meta": {
+      "local": "E:/GitHub/HCMAI2026/jina_runtime/jina_index_meta.json",
+      "container": "embeddings",
+      "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/jina_index_meta.json"
     }
   },
   "keyframes": {

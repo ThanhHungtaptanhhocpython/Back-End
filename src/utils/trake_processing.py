@@ -148,28 +148,29 @@ class TRAKE:
             candidate["score"] = min(1.0, (0.82 * visual) + (0.18 * evidence_score)) if active else visual
 
     def retrieve_top_k(self, query: str, k: int = 200) -> List[Dict]:
-        """Retrieve candidates from the BEiT3 corpus used by the current keyframes.
+        """Retrieve candidates from the active retrieval backend's corpus.
 
-        The old OpenCLIP index references legacy keyframe ordinals that no
-        longer map reliably to files in KEYFRAMES_ROOT. BEiT3 records carry a
-        frame_path from the same corpus as the on-disk images.
+        The active backend is RETRIEVAL_BACKEND (BEiT3 or Jina CLIP v2, see
+        src/services/retrieval_backend.py). Both expose the same result shape
+        for the fields this method reads -- a frame_path from the same corpus
+        as the served images, and a per-video frame_idx that is never the
+        FAISS/vector id (that stays in vector_id and must not reach the
+        submission CSV).
         """
-        from src.services.beit3_retriever import get_beit3_retriever
+        from src.services.retrieval_backend import get_active_retriever
 
         event_plan = self._plan_event(query)
         translated_query = event_plan["visual_query"]
-        results = get_beit3_retriever().search_visual(translated_query, top_k=k)
+        retriever = get_active_retriever()
+        results = retriever.search_visual(translated_query, top_k=k)
 
         candidates = []
         for result in results:
             frame_path = str(result.get("frame_path") or "").replace("\\", "/")
+            asset_key = str(result.get("asset_key") or "").replace("\\", "/") or frame_path
             path_parts = frame_path.split("/")
-            namespace = str(result.get("namespace") or (path_parts[0] if path_parts else ""))
+            namespace = str(result.get("namespace") or result.get("split") or (path_parts[0] if path_parts else ""))
             split = namespace
-            # ``frame_idx`` from the BEiT3 retriever is the *original per-video
-            # frame index* (map-keyframes ``frame_idx`` column), already stripped
-            # of zero padding. It is never the FAISS/vector id -- that lives in
-            # ``vector_id`` and must not reach the submission.
             frame_idx_value = result.get("frame_idx", result.get("frame_id"))
             try:
                 global_frame_id = int(frame_idx_value)
@@ -188,9 +189,11 @@ class TRAKE:
                 "split": split,
                 "score": float(result.get("score", 0.0)),
                 "image_path": frame_path,
+                "asset_key": asset_key,
                 "query": query,
                 "query_en": translated_query or query,
                 "planner_source": event_plan["planner_source"],
+                "retrieval_backend": getattr(retriever, "backend_id", None),
             })
 
         self._normalise_retrieval_scores(candidates)

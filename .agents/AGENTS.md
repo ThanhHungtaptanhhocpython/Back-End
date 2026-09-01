@@ -10,10 +10,11 @@ The **AI Challenge 2025 Backend** is a multimodal image/video keyframe retrieval
 
 ### Core Tech Stack & AI Models
 - **AI Models:**
-  - **BEiT-3:** `beit3_large_patch16_384_retrieval` is the sole visual-retrieval backbone. Text and image queries are encoded into the shared 1024-d space and searched against one FAISS index (see `src/services/beit3_retriever.py`). OpenCLIP has been fully removed.
+  - **BEiT-3:** `beit3_large_patch16_384_retrieval` is the default visual-retrieval backbone. Text and image queries are encoded into a shared 1024-d space and searched against its own FAISS index (see `src/services/beit3_retriever.py`). OpenCLIP has been fully removed. Image-similarity endpoints ('Similar' on a capture, search-by-uploaded-image) always use BEiT3, regardless of `RETRIEVAL_BACKEND`.
+  - **Jina CLIP v2:** an alternate, cloud-primary text-to-image backend (`src/services/jina_retriever.py`) with its own independent 1024-d FAISS index built by `scripts/cloud/build_jina_index.py`. `RETRIEVAL_BACKEND` (`beit3` | `jina_clip_v2`, see `src/services/retrieval_backend.py`) selects which backend serves textual KIS, grounded Q&A candidate retrieval, and TRAKE per-event retrieval. **BEiT3 and Jina CLIP v2 are two different embedding spaces built from two different FAISS indexes — never mix a vector, vector id, or frame path from one into the other.** The Jina model is loaded from a local, pinned HuggingFace snapshot (`JINA_MODEL_REVISION`), never fetched unpinned at request time.
   - **BLIP-VQA:** Uses `Salesforce/blip-vqa-base` for local visual question answering and reranking.
 - **Search Technologies:**
-  - **Faiss:** `IndexIDMap2(IndexFlatIP)` over the BEiT-3 vectors; inner-product scores are returned as-is.
+  - **Faiss:** `IndexIDMap2(IndexFlatIP)` over each backend's own vectors; inner-product scores are returned as-is.
   - **Elasticsearch:** Actively used for text-based OCR and ASR multimodal search.
 - **Frameworks:**
   - **FastAPI:** The sole API framework for all routing and Pydantic validation (Flask has been retired).
@@ -22,6 +23,13 @@ The **AI Challenge 2025 Backend** is a multimodal image/video keyframe retrieval
   - BEiT-3 runtime artifacts are machine-specific and set via the environment:
     `BEIT3_FAISS_INDEX_PATH`, `BEIT3_GLOBAL_IDS_PATH` (`global_ids.parquet`),
     `BEIT3_CHECKPOINT_PATH`, `BEIT3_TOKENIZER_PATH`.
+  - Jina CLIP v2 runtime artifacts (when `RETRIEVAL_BACKEND=jina_clip_v2`) are
+    likewise machine-specific: `JINA_FAISS_INDEX_PATH`, `JINA_GLOBAL_IDS_PATH`
+    (`jina_global_ids.parquet`, schema in `scripts/cloud/build_jina_index.py`),
+    `JINA_MODEL_PATH` + `JINA_MODEL_REVISION` (pinned local snapshot). Either
+    backend's artifacts may be synced from cloud assets instead of a local
+    path (see `docs/CLOUD_ASSETS.md`) -- a sync only pulls the active
+    backend's artifact set, never both.
 
 ---
 

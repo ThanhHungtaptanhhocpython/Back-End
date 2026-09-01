@@ -285,9 +285,9 @@ def handle_video_keyframes(
     around: Optional[str] = None,
     limit: Optional[int] = 60
 ):
-    from src.services.beit3_retriever import get_beit3_retriever
+    from src.services.retrieval_backend import get_active_retriever
     try:
-        retriever = get_beit3_retriever()
+        retriever = get_active_retriever()
         items = retriever.get_video_timeline(video_id=video_id, around_frame_id=around, limit=limit or 60)
         return BaseResponse(
             success=True,

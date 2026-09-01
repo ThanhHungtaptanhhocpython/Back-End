@@ -81,6 +81,8 @@ def _first_matching_column(columns: list[str], candidates: list[str]) -> str | N
 class BEiT3Retriever:
     """Owns the BEiT3 model, tokenizer, FAISS index, and metadata tables."""
 
+    backend_id = "beit3"
+
     @staticmethod
     def _artifact(name: str, configured):
         """Prefer a synced cloud artifact for ``name`` (checksum-verified,

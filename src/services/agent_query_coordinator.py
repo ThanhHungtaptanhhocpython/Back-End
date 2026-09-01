@@ -1142,9 +1142,9 @@ def _find_timeline_center(timeline: List[Dict[str, Any]], seed: Dict[str, Any]) 
 
 def _default_neighbor_provider(video_id: str, around_frame_id: str, limit: int) -> List[Dict[str, Any]]:
     try:
-        from src.services.beit3_retriever import get_beit3_retriever
+        from src.services.retrieval_backend import get_active_retriever
 
-        return get_beit3_retriever().get_video_timeline(video_id=video_id, around_frame_id=around_frame_id, limit=limit)
+        return get_active_retriever().get_video_timeline(video_id=video_id, around_frame_id=around_frame_id, limit=limit)
     except Exception as exc:
         logger.debug("Agent temporal neighbor expansion skipped for %s/%s: %s", video_id, around_frame_id, exc)
         return []

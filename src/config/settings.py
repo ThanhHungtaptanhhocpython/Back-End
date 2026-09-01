@@ -113,6 +113,33 @@ class Settings(BaseSettings):
     beit3_col_timestamp: str | None = None
     beit3_col_namespace: str | None = None
 
+    # --- Retrieval backend selection ---
+    # Which visual-retrieval backend serves textual KIS, grounded Q&A candidate
+    # retrieval, and TRAKE per-event retrieval. BEiT3 and Jina CLIP v2 are two
+    # different embedding spaces with two independent FAISS indexes; switching
+    # this never mixes vectors from one into the other's search.
+    retrieval_backend: str = "beit3"  # "beit3" | "jina_clip_v2"
+
+    # --- Jina CLIP v2 Retrieval (cloud-primary visual search) ---
+    # FAISS index + parquet/json are runtime artifacts, same as BEiT3's: either
+    # a machine-local path or synced from cloud assets (see src/services/assets).
+    jina_faiss_index_path: Path | None = None
+    jina_global_ids_path: Path | None = None
+    jina_index_meta_path: Path | None = None
+    # The model itself is loaded from a local, pinned HuggingFace snapshot --
+    # never fetched unpinned at request time. `jina_model_path` may be a local
+    # directory or a repo id; when it is a repo id, `jina_local_files_only`
+    # forces transformers to use the already-cached snapshot for
+    # `jina_model_revision` instead of hitting the network.
+    jina_model_path: str = "jinaai/jina-clip-v2"
+    jina_model_revision: str | None = None
+    jina_local_files_only: bool = True
+    jina_trust_remote_code: bool = True
+    jina_device: str = "cpu"
+    # `truncate_dim` passed to encode_text/encode_image; must match the 1024-d
+    # FAISS index the corpus was built with (see scripts/cloud/build_jina_index.py).
+    jina_truncate_dim: int = 1024
+
     # --- Logging ---
     log_level: str = "INFO"
 
@@ -299,6 +326,9 @@ class Settings(BaseSettings):
         "beit3_index_meta_path",
         "beit3_checkpoint_path",
         "beit3_tokenizer_path",
+        "jina_faiss_index_path",
+        "jina_global_ids_path",
+        "jina_index_meta_path",
         "agent_vlm_cache_path",
         "cloud_assets_cache_path",
         "launcher_frontend_dir",
@@ -318,6 +348,7 @@ class Settings(BaseSettings):
         "google_api_key",
         "openrouter_translate_model",
         "agent_llm_model",
+        "jina_model_revision",
         "nim_api_key",
         "cerebras_api_key",
         "groq_api_key",

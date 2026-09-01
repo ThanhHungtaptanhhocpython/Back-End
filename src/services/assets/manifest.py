@@ -27,6 +27,9 @@ _DEFAULT_CONTAINER = {
     "tokenizer": CONTAINER_METADATA,
     "media_info": CONTAINER_METADATA,
     "map_keyframes": CONTAINER_METADATA,
+    "jina_faiss_index": CONTAINER_EMBEDDINGS,
+    "jina_global_ids": CONTAINER_EMBEDDINGS,
+    "jina_index_meta": CONTAINER_EMBEDDINGS,
 }
 
 _DEFAULT_KEYFRAMES = {

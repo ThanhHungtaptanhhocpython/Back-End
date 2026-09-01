@@ -187,6 +187,17 @@ class TestKeyframeCache:
         with pytest.raises(ValueError):
             kf.put("../../evil.webp", b"x")
 
+    def test_get_rejects_escape_path_without_raising(self, tmp_path: Path):
+        """`get` is called on every resolve; it must degrade to a cache miss
+        for a path-traversal attempt, not raise or read outside its root."""
+        kf = KeyframeCache(tmp_path, max_bytes=0)
+        outside = tmp_path.parent / "escaped-secret.txt"
+        outside.write_bytes(b"do-not-read-me")
+        try:
+            assert kf.get("../escaped-secret.txt") is None
+        finally:
+            outside.unlink(missing_ok=True)
+
 
 # ---------------------------------------------------------------------------
 class TestSync:
@@ -244,12 +255,48 @@ class TestSync:
         report = sync_artifacts(store, cache)
         assert {r.name: r.status for r in report.results}["faiss_index"] == "size_mismatch"
 
-    def test_subset_sync_not_promoted(self, tmp_path: Path):
+    def test_subset_sync_promotes_when_requested_subset_is_complete(self, tmp_path: Path):
+        """A scoped sync (e.g. only the active backend's artifacts, see
+        BACKEND_ARTIFACT_NAMES) must be able to reach 'current' on its own --
+        a member syncing only Jina artifacts must never be blocked from
+        promoting just because the manifest also lists BEiT3 artifacts they
+        never asked to download."""
         store, _ = self._store()
         cache = ArtifactCache(tmp_path)
         report = sync_artifacts(store, cache, names=["faiss_index"])
         assert [r.name for r in report.results] == ["faiss_index"]
+        assert report.promoted is True and cache.get_current() == report.version
+        # The artifact that was never requested is simply absent -- not an error.
+        assert cache.slot(report.version, "global_ids").present is False
+
+    def test_subset_sync_with_bad_artifact_not_promoted(self, tmp_path: Path):
+        """Even a scoped sync only promotes once every artifact it actually
+        requested is present with a verified size + SHA-256 -- a stale/corrupt
+        file for one of the requested names blocks promotion of the whole
+        requested set."""
+        store, _ = self._store()
+        bad = json.loads(store.objects[("metadata", "hcmai-assets.json")])
+        bad["artifacts"][0]["sha256"] = _sha(b"WRONG")
+        store.objects[("metadata", "hcmai-assets.json")] = json.dumps(bad).encode()
+        cache = ArtifactCache(tmp_path)
+        report = sync_artifacts(store, cache, names=["faiss_index", "global_ids"])
+        assert {r.name: r.status for r in report.results}["faiss_index"] == "checksum_mismatch"
         assert report.promoted is False and cache.get_current() is None
+
+    def test_presence_only_check_does_not_gate_promotion(self, tmp_path: Path):
+        """is_version_complete (presence-only) still exists for callers that
+        only need a quick existence check, but sync_artifacts itself must gate
+        promotion on is_version_verified (size + SHA-256), not just presence."""
+        store, _ = self._store()
+        cache = ArtifactCache(tmp_path)
+        # A stale file sitting at the right path, with no valid sidecar, would
+        # satisfy is_version_complete but must never satisfy is_version_verified.
+        stale_dir = cache.version_dir("stale-v")
+        stale_dir.mkdir(parents=True, exist_ok=True)
+        (stale_dir / "faiss_index").write_bytes(b"not the real bytes")
+        assert cache.is_version_complete("stale-v", ["faiss_index"]) is True
+        arts = [a for a in [type("A", (), {"name": "faiss_index", "sha256": _sha(b"real"), "size": 4})()]]
+        assert cache.is_version_verified("stale-v", arts) is False
 
     def test_download_error_surfaced(self, tmp_path: Path):
         store, _ = self._store()
@@ -320,6 +367,93 @@ class TestS3WithFakeClient:
         manifest = store.fetch_manifest()
         assert manifest.version == "v9"
         assert store.read_object("embeddings", "beit3/f.index") == payload
+
+
+# ---------------------------------------------------------------------------
+class TestKeyframeRelPathPriority:
+    """The resolver must prefer asset_key over frame_path, fetch the real JPG
+    key for a Jina result, and never guess a BEiT3-style .webp filename for
+    an item that actually carries a Jina asset_key."""
+
+    def test_asset_key_wins_over_frame_path(self):
+        item = {"asset_key": "L21/L21_V001/keyframe_0000.jpg", "frame_path": "L21/L21_V001/000000.webp"}
+        assert assets._keyframe_rel_path(item) == "L21/L21_V001/keyframe_0000.jpg"
+
+    def test_jina_result_resolves_to_its_own_jpg_key_not_a_beit3_guess(self):
+        # Shaped like a Jina search result: has legacy-looking frame_id/video_id
+        # fields that WOULD trigger the old .webp-guessing heuristic, but also
+        # carries the real asset_key -- the guess must never win.
+        item = {
+            "asset_key": "L21/L21_V001/keyframe_0000.jpg",
+            "video_id": "L21_V001",
+            "frame_id": "0",
+            "split": "L21",
+            "retrieval_backend": "jina_clip_v2",
+        }
+        rel = assets._keyframe_rel_path(item)
+        assert rel == "L21/L21_V001/keyframe_0000.jpg"
+        assert not rel.endswith(".webp")
+
+    def test_supports_jpg_jpeg_webp_png(self):
+        for ext in ("jpg", "jpeg", "webp", "png"):
+            item = {"asset_key": f"L21/L21_V001/keyframe_0000.{ext}"}
+            assert assets._keyframe_rel_path(item).endswith(f".{ext}")
+
+    def test_path_traversal_in_asset_key_is_rejected(self):
+        item = {"asset_key": "../../etc/passwd"}
+        assert assets._keyframe_rel_path(item) == ""
+
+    def test_legacy_beit3_item_without_asset_key_keeps_old_heuristic(self):
+        item = {"video_id": "L21_V001", "frame_id": "000010", "split": "L21"}
+        assert assets._keyframe_rel_path(item) == "L21/L21_V001/000010.webp"
+
+    def test_layout_fallback_only_used_when_no_asset_key_or_frame_path(self):
+        item = {"video_id": "L21_V001", "split": "L21", "frame_id": "42"}
+        layout = "{namespace}/{video_id}/{frame_id}.png"
+        assert assets._keyframe_rel_path(item, layout=layout) == "L21/L21_V001/42.png"
+        # asset_key still wins even with a layout supplied.
+        item2 = dict(item, asset_key="L21/L21_V001/keyframe_0042.jpg")
+        assert assets._keyframe_rel_path(item2, layout=layout) == "L21/L21_V001/keyframe_0042.jpg"
+
+    def test_layout_rejects_unknown_placeholders(self):
+        # An invalid layout (unknown placeholder) is ignored, not used -- the
+        # resolver falls through to the next fallback instead of ever
+        # formatting the untrusted template.
+        item = {"video_id": "L21_V001", "split": "L21", "frame_id": "42"}
+        malicious_layout = "{namespace}/../{video_id}/{unknown_field}"
+        rel = assets._keyframe_rel_path(item, layout=malicious_layout)
+        assert ".." not in rel.split("/")
+        assert rel == "L21/L21_V001/42.webp"  # fell through to the legacy heuristic
+
+    def test_layout_traversal_via_values_is_rejected(self):
+        # Even with only whitelisted placeholders, a value that injects ".."
+        # must not be allowed to escape the cache root.
+        item = {"video_id": "../../escape", "split": "L21", "frame_id": "42"}
+        layout = "{namespace}/{video_id}/{frame_id}.jpg"
+        assert assets._layout_rel_path(item, layout) == ""
+
+    def test_fetches_real_jpg_key_from_cloud_store(self, tmp_path: Path, monkeypatch):
+        img = b"JPEGDATA"
+        objs = {("keyframes", "L21/L21_V001/keyframe_0000.jpg"): img}
+        store = InMemoryStore(objs)
+        monkeypatch.setattr(assets, "build_asset_store", lambda settings=None: store)
+        monkeypatch.setattr(assets, "get_manifest", lambda *a, **k: None)
+        assets.reset_caches()
+
+        s = Settings(
+            _env_file=None, cloud_assets_enabled=True, cloud_assets_provider="s3_compatible",
+            cloud_assets_cache_path=str(tmp_path), cloud_assets_keyframe_cache_max_bytes=10_000_000,
+        )
+        item = {
+            "asset_key": "L21/L21_V001/keyframe_0000.jpg",
+            "frame_path": "L21/L21_V001/keyframe_0000.jpg",
+            "video_id": "L21_V001",
+            "retrieval_backend": "jina_clip_v2",
+        }
+        resolved = assets.resolve_keyframe_file(item, settings=s)
+        assert resolved is not None and resolved.read_bytes() == img
+        assert store.reads == [("keyframes", "L21/L21_V001/keyframe_0000.jpg")]
+        assets.reset_caches()
 
 
 # ---------------------------------------------------------------------------

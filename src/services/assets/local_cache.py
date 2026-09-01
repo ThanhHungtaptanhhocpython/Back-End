@@ -116,8 +116,28 @@ class ArtifactCache:
         os.replace(tmp_side, self._sidecar(version, name))
 
     def is_version_complete(self, version: str, names: list[str]) -> bool:
+        """Presence-only check: every named artifact file exists on disk.
+
+        This does NOT verify size/checksum -- use :meth:`is_version_verified`
+        before promoting a version to *current*.
+        """
         with self._lock:
             return all(self.slot(version, name).present for name in names)
+
+    def is_version_verified(self, version: str, artifacts) -> bool:
+        """Full check: every artifact is present with a size+SHA-256 that
+        matches the manifest before a version is allowed to become *current*.
+
+        ``artifacts`` is an iterable of objects/records with ``.name``,
+        ``.sha256`` and ``.size`` (e.g. :class:`ManifestArtifact`). Unlike
+        :meth:`is_version_complete`, a stale or half-written file that merely
+        *exists* at the right path never counts as complete here.
+        """
+        with self._lock:
+            return all(
+                self.slot(version, art.name, expected_sha=art.sha256, expected_size=art.size).verified
+                for art in artifacts
+            )
 
     # -- maintenance ------------------------------------------------------
     def clear(self) -> int:
@@ -180,11 +200,20 @@ class KeyframeCache:
 
     def _abs(self, rel_path: str) -> Path:
         rel = rel_path.replace("\\", "/").lstrip("/")
-        return (self.root / rel).resolve()
+        root = self.root.resolve()
+        path = (root / rel).resolve()
+        # keep the cache inside its root -- blocks "../../x" and absolute-path
+        # escapes from either writing or reading outside the cache directory.
+        if root != path and root not in path.parents:
+            raise ValueError(f"unsafe keyframe path: {rel_path}")
+        return path
 
     def get(self, rel_path: str) -> Path | None:
         with self._lock:
-            path = self._abs(rel_path)
+            try:
+                path = self._abs(rel_path)
+            except ValueError:
+                return None
             if not path.is_file():
                 self._index.pop(rel_path, None)
                 return None
@@ -196,9 +225,6 @@ class KeyframeCache:
     def put(self, rel_path: str, data: bytes) -> Path:
         with self._lock:
             path = self._abs(rel_path)
-            # keep the cache inside its root
-            if self.root.resolve() not in path.parents:
-                raise ValueError(f"unsafe keyframe path: {rel_path}")
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_name(path.name + ".tmp")
             tmp.write_bytes(data)

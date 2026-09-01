@@ -53,7 +53,7 @@ GROUP_HELP = {
     G_SERVER: "Where the API binds and which browser origins may call it.",
     G_DATA: "Local dataset / media paths for keyframes, playback and captures.",
     G_ELASTIC: "Elasticsearch cluster used for OCR / ASR text search.",
-    G_RETRIEVAL: "BEiT3 visual-search runtime artifacts (checkpoint, index, parquet).",
+    G_RETRIEVAL: "Visual-search backend (BEiT3 or Jina CLIP v2) and its runtime artifacts.",
     G_AI: "Optional multi-provider gateway and per-provider keys / models.",
     G_AGENT: "Agent Search planner and VLM candidate-verification tuning.",
     G_TRAKE: "Ordered-event (TRAKE) retrieval and scoring parameters.",
@@ -74,8 +74,10 @@ _BASIC_KEYS = {
     # Elasticsearch
     "ELASTICSEARCH_URL",
     # Retrieval
+    "RETRIEVAL_BACKEND",
     "BEIT3_FAISS_INDEX_PATH", "BEIT3_GLOBAL_IDS_PATH", "BEIT3_VIDEO_METADATA_PATH",
     "BEIT3_INDEX_META_PATH", "BEIT3_CHECKPOINT_PATH", "BEIT3_TOKENIZER_PATH", "BEIT3_DEVICE",
+    "JINA_FAISS_INDEX_PATH", "JINA_GLOBAL_IDS_PATH", "JINA_MODEL_PATH", "JINA_MODEL_REVISION",
     # AI gateway essentials
     "AI_GATEWAY_ENABLED", "AI_TEXT_PRIORITY", "AI_VISION_PRIORITY", "AI_LOCAL_FALLBACK_ENABLED",
     "OPENROUTER_API_KEY", "OPENROUTER_MODEL",
@@ -208,7 +210,17 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     _f("ELASTICSEARCH_URL", G_ELASTIC, URL, placeholder="http://localhost:9200",
        help="Base URL of the Elasticsearch cluster used for OCR/ASR search."),
 
+    # -- Retrieval: backend selection ----------------------------------------
+    _f("RETRIEVAL_BACKEND", G_RETRIEVAL, CHOICE, choices=("beit3", "jina_clip_v2"),
+       help="Which backend serves textual KIS, grounded Q&A candidate retrieval, "
+            "and TRAKE per-event retrieval. BEiT3 and Jina CLIP v2 are different "
+            "embedding spaces with independent FAISS indexes -- this never mixes "
+            "vectors from one into the other's search. Image-similarity endpoints "
+            "('Similar' on a capture, search-by-uploaded-image) always use BEiT3."),
+
     # -- Retrieval (BEiT3) --------------------------------------------------
+    # Always needed for the image-similarity endpoints ('Similar' on a capture,
+    # search-by-uploaded-image), regardless of RETRIEVAL_BACKEND.
     _f("BEIT3_FAISS_INDEX_PATH", G_RETRIEVAL, PATH, path_kind="file",
        help="FAISS index file for the BEiT3 visual-search path."),
     _f("BEIT3_GLOBAL_IDS_PATH", G_RETRIEVAL, PATH, path_kind="file", help="global_ids.parquet."),
@@ -225,6 +237,37 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     _f("BEIT3_COL_FRAME_PATH", G_RETRIEVAL, STR, help="Optional parquet column override."),
     _f("BEIT3_COL_TIMESTAMP", G_RETRIEVAL, STR, help="Optional parquet column override."),
     _f("BEIT3_COL_NAMESPACE", G_RETRIEVAL, STR, help="Optional parquet column override."),
+
+    # -- Retrieval (Jina CLIP v2) ---------------------------------------------
+    _f("JINA_FAISS_INDEX_PATH", G_RETRIEVAL, PATH, path_kind="file",
+       hide_when={"RETRIEVAL_BACKEND": "beit3"},
+       help="FAISS index file for the Jina CLIP v2 visual-search path "
+            "(built by scripts/cloud/build_jina_index.py)."),
+    _f("JINA_GLOBAL_IDS_PATH", G_RETRIEVAL, PATH, path_kind="file",
+       hide_when={"RETRIEVAL_BACKEND": "beit3"}, help="jina_global_ids.parquet."),
+    _f("JINA_INDEX_META_PATH", G_RETRIEVAL, PATH, path_kind="file",
+       hide_when={"RETRIEVAL_BACKEND": "beit3"}, help="jina_index_meta.json."),
+    _f("JINA_MODEL_PATH", G_RETRIEVAL, STR, placeholder="jinaai/jina-clip-v2",
+       hide_when={"RETRIEVAL_BACKEND": "beit3"},
+       help="Local snapshot directory, or a HuggingFace repo id resolved from "
+            "the local cache only (see JINA_LOCAL_FILES_ONLY)."),
+    _f("JINA_MODEL_REVISION", G_RETRIEVAL, STR,
+       hide_when={"RETRIEVAL_BACKEND": "beit3"},
+       help="Pinned commit hash the local snapshot was downloaded at. Required "
+            "so the encoder can never silently drift to a newer unpinned model."),
+    _f("JINA_LOCAL_FILES_ONLY", G_RETRIEVAL, BOOL,
+       hide_when={"RETRIEVAL_BACKEND": "beit3"},
+       help="Never fetch the model from the network at request time; use only "
+            "the already-downloaded local snapshot for JINA_MODEL_REVISION."),
+    _f("JINA_TRUST_REMOTE_CODE", G_RETRIEVAL, BOOL,
+       hide_when={"RETRIEVAL_BACKEND": "beit3"},
+       help="Jina CLIP v2 ships custom modeling code on the Hub; required True "
+            "to load it via transformers.AutoModel."),
+    _f("JINA_DEVICE", G_RETRIEVAL, CHOICE, choices=("cpu", "cuda"),
+       hide_when={"RETRIEVAL_BACKEND": "beit3"}, help="Torch device for Jina text encoding."),
+    _f("JINA_TRUNCATE_DIM", G_RETRIEVAL, INT, minimum=64, maximum=4096,
+       hide_when={"RETRIEVAL_BACKEND": "beit3"},
+       help="Must match the dimension the FAISS index was built with (1024)."),
 
     # -- AI: legacy single-provider LLM knobs (used only when the gateway is OFF) --
     _f("LLM_PROVIDER", G_AI, CHOICE, label="Legacy LLM provider",

@@ -572,9 +572,13 @@ def cloud_sync(payload: CloudSyncRequest | None = None) -> dict:
         raise HTTPException(status_code=422, detail=f"Invalid manifest: {exc}")
     except assets.AssetStoreError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
-    report = assets.sync_artifacts(
-        store, cache, names=payload.names or None, manifest=manifest
+    # An explicit request always wins; otherwise sync only the active
+    # backend's artifacts -- a member on Jina must never be made to also
+    # download the (possibly much larger) BEiT3 checkpoint + FAISS index.
+    names = payload.names or list(
+        assets.BACKEND_ARTIFACT_NAMES.get(settings.retrieval_backend, assets.BACKEND_ARTIFACT_NAMES["beit3"])
     )
+    report = assets.sync_artifacts(store, cache, names=names, manifest=manifest)
     return report.to_dict()
 
 

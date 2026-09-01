@@ -201,9 +201,11 @@ def multimodal_search(
             # We must import inside the function to avoid circular imports
             # if user_service imports from fusion_service later.
             from src.services.user_service import getImageDataSingleTextSearch
-            # getImageDataSingleTextSearch returns BEiT3Retriever results with
-            # real FAISS inner-product scores in 'score' and the FAISS vector
-            # id in 'vector_id'; map them to the generic keys this module uses.
+            # getImageDataSingleTextSearch returns the active retrieval
+            # backend's results (RETRIEVAL_BACKEND: BEiT3 or Jina CLIP v2, see
+            # src/services/retrieval_backend.py) with real FAISS inner-product
+            # scores in 'score' and that backend's own vector id in
+            # 'vector_id'; map them to the generic keys this module uses.
             faiss_list = getImageDataSingleTextSearch(visual_query, topk)
             for item in faiss_list:
                 item["_score"] = item.get("score", 0.0)

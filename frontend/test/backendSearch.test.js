@@ -9,6 +9,7 @@ import {
   runAgentChat,
   runBackendSearch,
   shouldUseQaDemoFallback,
+  temporalRequestBody,
 } from "../src/services/backendSearch.js";
 
 const successPayload = {
@@ -73,7 +74,7 @@ test("normalizes submission frame id separately from FAISS vector id", () => {
 test("routes a text query to FastAPI's users endpoint", async () => {
   let call;
   await runBackendSearch(
-    { searchType: "TEXT", query: "forklift", params: { topk: 3, clip: true, clipv2: false } },
+    { searchType: "TEXT", query: "forklift", params: { topk: 3 } },
     null,
     {
       config: { baseUrl: "http://localhost:3000", mode: "live" },
@@ -85,13 +86,83 @@ test("routes a text query to FastAPI's users endpoint", async () => {
   );
 
   assert.equal(call.url, "http://localhost:3000/users/singletextsearch");
-  assert.deepEqual(JSON.parse(call.init.body), { query: "forklift", topk: 3, clip: true, clipv2: false });
+  assert.deepEqual(JSON.parse(call.init.body), { query: "forklift", topk: 3 });
+});
+
+test("routes an OCR Text query to the /ocrsearch endpoint", async () => {
+  let call;
+  await runBackendSearch(
+    { searchType: "OCR", query: "north gate", params: { topk: 5 } },
+    null,
+    {
+      config: { baseUrl: "http://localhost:3000", mode: "live" },
+      fetchImpl: async (url, init) => {
+        call = { url, init };
+        return { ok: true, json: async () => successPayload };
+      },
+    },
+  );
+
+  assert.equal(call.url, "http://localhost:3000/users/ocrsearch");
+  assert.deepEqual(JSON.parse(call.init.body), { query: "north gate", topk: 5 });
+});
+
+test("temporalRequestBody folds context into every event and caps topk at 100", () => {
+  const body = temporalRequestBody(
+    ["Bối cảnh: video nấu ăn về nấm", "E1: cắt nấm", "E2: bắc chảo lên bếp"].join("\n"),
+    250,
+  );
+  assert.equal(body.topk, 100);
+  assert.equal(body.context, "video nấu ăn về nấm");
+  assert.equal(body.query.length, 2);
+  assert.ok(body.query[0].query.includes("video nấu ăn về nấm"));
+  assert.ok(body.query[0].query.includes("cắt nấm"));
+});
+
+test("routes a temporal query to /users/temporalsearch with event objects", async () => {
+  let call;
+  const seqPayload = {
+    success: true,
+    data: {
+      total_items: 1,
+      items: [
+        {
+          video_id: "L21_V001",
+          timestamps: [1, 2],
+          frames: [
+            { event_index: 1, video_key: "L21_V001", frame_key: "000010", submission_frame_id: 10, timestamp: 1 },
+            { event_index: 2, video_key: "L21_V001", frame_key: "000040", submission_frame_id: 40, timestamp: 2 },
+          ],
+        },
+      ],
+    },
+  };
+  const result = await runBackendSearch(
+    { searchType: "TEMPORAL", query: "E1: a\nE2: b", params: { topk: 50 } },
+    null,
+    {
+      config: { baseUrl: "http://localhost:3000", mode: "live" },
+      fetchImpl: async (url, init) => {
+        call = { url, init };
+        return { ok: true, json: async () => seqPayload };
+      },
+    },
+  );
+
+  assert.equal(call.url, "http://localhost:3000/users/temporalsearch");
+  const sent = JSON.parse(call.init.body);
+  assert.deepEqual(sent.query, [{ query: "a" }, { query: "b" }]);
+  assert.equal(sent.topk, 50);
+  assert.equal(result.type, "TEMPORAL");
+  assert.equal(result.sequences.length, 1);
+  assert.deepEqual(result.sequences[0].frames.map((f) => f.submissionFrameId), [10, 40]);
+  assert.deepEqual(result.items, []);
 });
 
 test("routes an image pivot as multipart data", async () => {
   let body;
   await runBackendSearch(
-    { searchType: "IMAGE", params: { topk: 2, clip: true, clipv2: false, imageFile: null } },
+    { searchType: "IMAGE", params: { topk: 2, imageFile: null } },
     { faissIndex: 7 },
     {
       config: { baseUrl: "http://localhost:3000/users", mode: "live" },
@@ -105,6 +176,70 @@ test("routes an image pivot as multipart data", async () => {
 
   assert.equal(body.get("faiss_index"), "7");
   assert.equal(body.get("topk"), "2");
+});
+
+test("routes a captured-frame pivot to the capture-similar endpoint without faiss_index", async () => {
+  let call;
+  await runBackendSearch(
+    { searchType: "IMAGE", params: { topk: 30 } },
+    {
+      captured: true,
+      videoKey: "L21_V001",
+      submissionFrameId: 351,
+      frameKey: "351",
+      backend: { video_id: "L21_V001", frame_idx: 351 },
+    },
+    {
+      config: { baseUrl: "http://localhost:3000/users", mode: "live" },
+      fetchImpl: async (url, init) => {
+        call = { url, init };
+        return { ok: true, json: async () => successPayload };
+      },
+    }
+  );
+
+  assert.equal(call.url, "http://localhost:3000/users/videos/captures/L21_V001/351/similar");
+  assert.equal(call.init.headers["Content-Type"], "application/json");
+  assert.deepEqual(JSON.parse(call.init.body), { topk: 30 });
+  // A captured frame_idx is per-video; it must never be sent as faiss_index.
+  assert.ok(!/faiss_index/.test(String(call.init.body)));
+});
+
+test("captured pivot with frame_idx 0 still targets the capture-similar endpoint", async () => {
+  let call;
+  await runBackendSearch(
+    { searchType: "IMAGE", params: { topk: 10 } },
+    { captured: true, videoKey: "L21_V001", submissionFrameId: 0 },
+    {
+      config: { baseUrl: "http://localhost:3000", mode: "live" },
+      fetchImpl: async (url, init) => {
+        call = { url, init };
+        return { ok: true, json: async () => successPayload };
+      },
+    }
+  );
+  assert.equal(call.url, "http://localhost:3000/users/videos/captures/L21_V001/0/similar");
+});
+
+test("a non-captured keyframe pivot still sends faiss_index to imagesearch", async () => {
+  let url;
+  let body;
+  await runBackendSearch(
+    { searchType: "IMAGE", params: { topk: 5 } },
+    { faissIndex: 277466, submissionFrameId: 3048, globalFrameId: 3048 },
+    {
+      config: { baseUrl: "http://localhost:3000/users", mode: "live" },
+      fetchImpl: async (u, init) => {
+        url = u;
+        body = init.body;
+        return { ok: true, json: async () => successPayload };
+      },
+    }
+  );
+
+  assert.equal(url, "http://localhost:3000/users/imagesearch");
+  assert.equal(body.get("faiss_index"), "277466");
+  assert.equal(body.get("topk"), "5");
 });
 
 test("does not classify valid HTTP failures as transport failures", async () => {
@@ -161,7 +296,7 @@ test("normalizes OCR results into keyframe image URLs", () => {
     },
   };
 
-  const result = normalizeBackendResponse(payload, { type: "OCR+OD", latency: 66 }, "http://localhost:3000/users");
+  const result = normalizeBackendResponse(payload, { type: "OCR", latency: 66 }, "http://localhost:3000/users");
   assert.equal(result.items[0].image, "http://localhost:3000/keyframes/L25/L25_V041/181.jpg");
   assert.equal(result.items[0].ocrText, "remember");
 });

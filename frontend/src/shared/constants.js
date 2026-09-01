@@ -3,7 +3,9 @@
 export const SEARCH_TYPES = [
   { value: "TEXT", label: "Text" },
   { value: "QA", label: "Q&A" },
-  { value: "OCR+OD", label: "OCR + OD" },
+  // Backend runs OCR only (no object detection); "/ocrandodsearch" is kept as a
+  // compatibility alias for the old "OCR+OD" type value.
+  { value: "OCR", label: "OCR Text" },
   { value: "IMAGE", label: "Image" },
   { value: "TEMPORAL", label: "Temporal" },
 ];

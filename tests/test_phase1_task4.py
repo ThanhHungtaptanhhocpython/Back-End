@@ -25,20 +25,14 @@ if BACKEND_ROOT not in sys.path:
 # Pre-mock heavy ML modules and local util classes
 # ---------------------------------------------------------------------------
 sys.modules.setdefault("faiss", MagicMock())
-sys.modules.setdefault("open_clip", MagicMock())
 sys.modules.setdefault("torch", MagicMock())
 sys.modules.setdefault("transformers", MagicMock())
 
 # Mock the actual classes inside the utils modules so we can track initialization
-mock_my_faiss = MagicMock()
 mock_trake = MagicMock()
 mock_vlm_processor = MagicMock()
 
 # Inject the mocked classes into sys.modules
-mock_faiss_proc = MagicMock()
-mock_faiss_proc.MyFaiss = mock_my_faiss
-sys.modules["utils.faiss_processing"] = mock_faiss_proc
-
 mock_trake_proc = MagicMock()
 mock_trake_proc.TRAKE = mock_trake
 sys.modules["utils.trake_processing"] = mock_trake_proc
@@ -55,32 +49,19 @@ class TestLazyInitialization(unittest.TestCase):
         """Test that importing user_service doesn't trigger model init."""
         
         # 1. Reset call counts
-        mock_my_faiss.reset_mock()
         mock_trake.reset_mock()
         mock_vlm_processor.reset_mock()
-        
+
         # 2. Import the service
         from src.services import user_service
-        
+
         # Reset any cached singletons for the test
-        user_service._cosine_faiss = None
         user_service._trake_search = None
         user_service._vlm_processor = None
-        
+
         # Importing should NOT trigger instantiations
-        mock_my_faiss.assert_not_called()
         mock_trake.assert_not_called()
         mock_vlm_processor.assert_not_called()
-
-        # 3. Call get_cosine_faiss() -> should initialize MyFaiss once
-        faiss_instance_1 = user_service.get_cosine_faiss()
-        mock_my_faiss.assert_called_once()
-        self.assertIsNotNone(faiss_instance_1)
-        
-        # Calling again should NOT initialize a new instance
-        faiss_instance_2 = user_service.get_cosine_faiss()
-        self.assertIs(faiss_instance_1, faiss_instance_2)
-        self.assertEqual(mock_my_faiss.call_count, 1)
 
         # 4. Call get_trake_search() -> should initialize TRAKE once
         trake_instance_1 = user_service.get_trake_search()

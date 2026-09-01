@@ -10,18 +10,24 @@ import {
   VideoCameraOutlined,
   OrderedListOutlined,
 } from "@ant-design/icons";
-import { fmtDur } from "../../shared/format";
+import { fmtDur, toTimecode } from "../../shared/format";
 import { getFramePool } from "../../mocks/searchEngine";
 import { fetchVideoTimeline } from "../../shared/adapters";
-import { buildVideoPlayback } from "../../services/videoPlayback";
+import { buildVideoPlayback, youtubeVideoId } from "../../services/videoPlayback";
+import { buildCaptureCandidate, captureFrame, fetchPlayback } from "../../services/videoCapture";
 import useDialogFocus from "../../hooks/useDialogFocus";
+import useVideoPlayer from "../../hooks/useVideoPlayer";
 
-export default function ReviewOverlay({ item, results, isKept, onClose, onNavigate, onSelect, onToggleKeep, onRemove, onPivot, onAsk, onExportThis }) {
+export default function ReviewOverlay({ item, results, isKept, onClose, onNavigate, onSelect, onToggleKeep, onRemove, onPivot, onAsk, onExportThis, onCapture, replaceCtx, onReplaceEventFrame }) {
   const [compareId, setCompareId] = useState(null);
   const [stripMode, setStripMode] = useState("timeline"); // "timeline" | "results"
   const [timeline, setTimeline] = useState([]);
   const [loadingTimeline, setLoadingTimeline] = useState(false);
   const [showVideo, setShowVideo] = useState(false);
+  const [playback, setPlayback] = useState(null);
+  const [playbackError, setPlaybackError] = useState(null);
+  const [capturing, setCapturing] = useState(false);
+  const [captureNote, setCaptureNote] = useState(null);
   const backRef = useRef(null);
   const dialogRef = useDialogFocus(backRef);
   const hydratedItem = useMemo(() => {
@@ -33,7 +39,29 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
     );
     return match ? { ...item, ...match, rank: item.rank, score: item.score } : item;
   }, [item, timeline]);
-  const videoPlayback = useMemo(() => buildVideoPlayback(hydratedItem), [hydratedItem]);
+  // The backend playback endpoint is the source of truth for the watch URL.
+  // Search enrichment may not carry it (e.g. media-info served from a zip the
+  // retriever doesn't read), so fall back to the metadata we just fetched.
+  const videoItem = useMemo(() => {
+    if (!hydratedItem) return hydratedItem;
+    if (!playback?.watchUrl) return hydratedItem;
+    // Backend watch_url is authoritative; item.link is often the string
+    // "undefined" from upstream normalization, so don't prefer it.
+    return { ...hydratedItem, link: playback.watchUrl };
+  }, [hydratedItem, playback?.watchUrl]);
+  const videoPlayback = useMemo(
+    () => buildVideoPlayback(videoItem, playback?.playbackOffsetSeconds || 0),
+    [videoItem, playback?.playbackOffsetSeconds],
+  );
+  const playerStart = playback?.startSeconds != null ? playback.startSeconds : videoPlayback?.start || 0;
+  const player = useVideoPlayer({
+    type: videoPlayback?.type === "youtube" ? "youtube" : "video",
+    youtubeId: videoPlayback ? youtubeVideoId(videoPlayback.url) : "",
+    url: videoPlayback?.url || "",
+    start: playerStart,
+    active: Boolean(showVideo && videoPlayback),
+  });
+  const captureFps = playback?.fps || hydratedItem?.fps || 25;
 
   useEffect(() => {
     let active = true;
@@ -69,7 +97,90 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
   useEffect(() => {
     setCompareId(null);
     setShowVideo(false);
+    setCaptureNote(null);
   }, [item?.id]);
+
+  // Load backend playback metadata (watch_url, fps, offset, start time for the
+  // frame under review). Capture stays disabled until this resolves.
+  useEffect(() => {
+    let active = true;
+    setPlayback(null);
+    setPlaybackError(null);
+
+    const videoId = item?.videoKey;
+    if (!videoId || videoId === "unknown-video" || !item?.real) return undefined;
+
+    const frameIdx = item?.submissionFrameId ?? item?.frameKey ?? null;
+    fetchPlayback(videoId, frameIdx)
+      .then((meta) => {
+        if (active) setPlayback(meta);
+      })
+      .catch((err) => {
+        if (active) setPlaybackError(err instanceof Error ? err.message : "Playback metadata unavailable.");
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [item?.videoKey, item?.submissionFrameId, item?.frameKey, item?.real]);
+
+  const canCapture = Boolean(
+    (onCapture || onReplaceEventFrame) && videoPlayback && showVideo && player.ready && playback && !playbackError && !capturing,
+  );
+
+  const handleCapture = async () => {
+    if (!canCapture) return;
+    const currentTime = player.getCurrentTime();
+    if (currentTime == null) {
+      setCaptureNote({ type: "error", text: "Could not read the player time yet - try again." });
+      return;
+    }
+    setCapturing(true);
+    setCaptureNote(null);
+    player.pause();
+    try {
+      const result = await captureFrame(videoItem.videoKey, currentTime);
+      const candidate = buildCaptureCandidate(videoItem, result);
+      const previewSuffix = candidate.hasPreview ? "" : " - preview unavailable";
+
+      // Storyboard "replace event" flow: the captured frame becomes event N,
+      // subject to the same window as a timeline pick (same video is implied,
+      // timestamp must sit between the neighbouring events).
+      if (replaceCtx) {
+        const ts = Number(result.sourceTimeSeconds);
+        if (!(ts > replaceCtx.minTs && ts < replaceCtx.maxTs) || !Number.isFinite(Number(result.frameIdx))) {
+          setCaptureNote({
+            type: "error",
+            text: `Captured ${toTimecode(ts, result.fps || captureFps)} is outside event ${replaceCtx.eventIndex}'s window - scrub between the neighbouring events, then capture.`,
+          });
+          return;
+        }
+        onReplaceEventFrame?.(candidate);
+        setCaptureNote({
+          type: "ok",
+          text: `Captured frame ${result.frameIdx} -> event ${replaceCtx.eventIndex}${previewSuffix}`,
+        });
+        onClose();
+        return;
+      }
+
+      const outcome = onCapture?.(candidate, result);
+      const added = outcome === undefined ? true : Boolean(outcome);
+      setCaptureNote({
+        type: added ? "ok" : "dupe",
+        text: added
+          ? `Captured frame ${result.frameIdx} (${toTimecode(result.sourceTimeSeconds, result.fps || captureFps)}) - added to tray${previewSuffix}`
+          : `Frame ${result.frameIdx} is already in the tray`,
+      });
+    } catch (err) {
+      setCaptureNote({
+        type: "error",
+        text: err instanceof Error ? err.message : "Capture failed.",
+      });
+    } finally {
+      setCapturing(false);
+    }
+  };
 
   if (!item) return null;
 
@@ -79,6 +190,27 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
   const compareItem = compareId ? (results || []).find((r) => r.id === compareId) : null;
   const atStart = curIdx <= 0;
   const atEnd = curIdx === -1 || curIdx >= seq.length - 1;
+
+  // "Replace event frame": the frame currently under review becomes event N of
+  // an edited temporal sequence, but only if it stays in the same video and
+  // between the neighbouring events' timestamps.
+  const replaceCandidate = hydratedItem || item;
+  const replaceFrameId = Number(replaceCandidate?.submissionFrameId ?? replaceCandidate?.backend?.frame_idx);
+  const replaceSameVideo = Boolean(replaceCtx) && replaceCandidate?.videoKey === replaceCtx?.videoKey;
+  const replaceInWindow =
+    Boolean(replaceCtx) &&
+    Number(replaceCandidate?.timestamp) > replaceCtx.minTs &&
+    Number(replaceCandidate?.timestamp) < replaceCtx.maxTs;
+  const canReplace = Boolean(replaceCtx) && replaceSameVideo && replaceInWindow && Number.isFinite(replaceFrameId);
+  const replaceHint = !replaceCtx
+    ? ""
+    : !replaceSameVideo
+      ? `Replacement must stay in ${replaceCtx.videoKey}`
+      : !Number.isFinite(replaceFrameId)
+        ? "This frame has no resolvable frame index"
+        : !replaceInWindow
+          ? "Replacement must sit between the neighbouring events' timestamps"
+          : `Use this frame for event ${replaceCtx.eventIndex}`;
   const filmstripLabel = loadingTimeline
     ? `Loading timeline - ${item.videoKey}`
     : stripMode === "timeline"
@@ -121,9 +253,11 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
           <button className={`ws-btn small ${isKept ? "" : "primary"}`} onClick={() => onToggleKeep(item)} title="Keep / unkeep (Space)">
             {isKept ? "Kept" : "Keep"}
           </button>
-          <button className="ws-btn small" onClick={() => onPivot(item)} title="Similar-image pivot">
-            <PlusSquareOutlined /> Similar
-          </button>
+          {replaceCtx ? null : (
+            <button className="ws-btn small" onClick={() => onPivot(item)} title="Similar-image pivot">
+              <PlusSquareOutlined /> Similar
+            </button>
+          )}
           <button className="ws-btn small" onClick={() => onAsk(item)} title="Ask the copilot about this frame">
             <MessageOutlined /> Ask
           </button>
@@ -132,9 +266,23 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
               <VideoCameraOutlined /> {showVideo ? "Show frame" : "Play video"}
             </button>
           ) : null}
-          <button className="ws-btn small" onClick={() => onRemove(item)} title="Remove from results (Delete)">
-            <DeleteOutlined /> Remove
-          </button>
+          {replaceCtx ? (
+            <button
+              className="ws-btn small primary"
+              onClick={() => {
+                onReplaceEventFrame?.(replaceCandidate);
+                onClose();
+              }}
+              disabled={!canReplace}
+              title={replaceHint}
+            >
+              <OrderedListOutlined /> Replace event {replaceCtx.eventIndex}
+            </button>
+          ) : (
+            <button className="ws-btn small" onClick={() => onRemove(item)} title="Remove from results (Delete)">
+              <DeleteOutlined /> Remove
+            </button>
+          )}
         </div>
       </header>
 
@@ -154,16 +302,65 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
               </div>
             ) : showVideo && videoPlayback ? (
               <div className="ws-review-player">
-                {videoPlayback.type === "youtube" ? (
-                  <iframe
-                    src={videoPlayback.embedUrl}
-                    title={`${hydratedItem.videoKey} YouTube stream`}
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                    allowFullScreen
-                  />
-                ) : (
-                  <video src={videoPlayback.url} controls autoPlay />
-                )}
+                <div className="ws-review-player-frame">
+                  {videoPlayback.type === "youtube" ? (
+                    <div className="ws-review-yt" ref={player.hostRef} />
+                  ) : (
+                    <video ref={player.hostRef} src={videoPlayback.url} controls autoPlay />
+                  )}
+                  {videoPlayback.type === "youtube" && player.ready && player.autoplayBlocked && !player.playing ? (
+                    <button
+                      type="button"
+                      className="ws-review-play-shade"
+                      onClick={() => player.play()}
+                      title="Your browser blocked autoplay - click to start playback"
+                    >
+                      <VideoCameraOutlined />
+                      <span>Click to play</span>
+                      <small>Autoplay was blocked by the browser</small>
+                    </button>
+                  ) : null}
+                </div>
+                <div className="ws-review-capture-bar">
+                  <button
+                    className="ws-btn small primary"
+                    type="button"
+                    onClick={handleCapture}
+                    disabled={!canCapture}
+                    title={
+                      playbackError
+                        ? playbackError
+                        : !player.ready
+                          ? "Waiting for the player to be ready"
+                          : "Capture the frame at the current playback position"
+                    }
+                  >
+                    <VideoCameraOutlined />{" "}
+                    {capturing
+                      ? "Capturing..."
+                      : replaceCtx
+                        ? `Capture -> event ${replaceCtx.eventIndex}`
+                        : "Capture frame"}
+                  </button>
+                  <span className="ws-review-capture-hint">
+                    {playbackError
+                      ? `Capture unavailable: ${playbackError}`
+                      : player.error
+                        ? player.error
+                        : !player.ready
+                          ? "Loading player..."
+                          : player.autoplayBlocked && !player.playing
+                            ? "Autoplay blocked - click the video to play, then scrub to the exact moment"
+                            : playback
+                              ? `${playback.fps} fps${playback.playbackOffsetSeconds ? ` - offset ${playback.playbackOffsetSeconds}s` : ""}${player.playing ? "" : " - paused"}`
+                              : "Loading metadata..."}
+                  </span>
+                  {captureNote ? (
+                    <span className={`ws-review-capture-note ${captureNote.type}`} role="status">
+                      {captureNote.text}
+                    </span>
+                  ) : null}
+                </div>
               </div>
             ) : (
               <button
@@ -172,7 +369,15 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
                 onClick={() => videoPlayback && setShowVideo(true)}
                 title={videoPlayback ? "Play video from this timestamp" : hydratedItem.frameName}
               >
-                <img className="ws-review-img" src={hydratedItem.image} alt={hydratedItem.frameName} />
+                {hydratedItem.image ? (
+                  <img className="ws-review-img" src={hydratedItem.image} alt={hydratedItem.frameName} />
+                ) : (
+                  <div className="ws-review-img ws-review-img-missing" role="img" aria-label="Exact preview unavailable">
+                    <VideoCameraOutlined />
+                    <span>Preview unavailable</span>
+                    <small>{hydratedItem.previewError || "The captured frame is still export-ready."}</small>
+                  </div>
+                )}
                 {videoPlayback ? (
                   <span className="ws-review-media-play">
                     <VideoCameraOutlined />

@@ -37,7 +37,7 @@
  * @property {string} label         - Tab label
  * @property {string} searchType    - One of SEARCH_TYPES values
  * @property {string} query         - Query text
- * @property {{topk:number, clip:boolean, clipv2:boolean, imageFile:File|string|null}} params
+ * @property {{topk:number, imageFile:File|string|null}} params
  * @property {"running"|"done"|"err"} status
  * @property {number} latency       - Mock latency ms
  * @property {FrameItem[]} results  - Ranked result frames

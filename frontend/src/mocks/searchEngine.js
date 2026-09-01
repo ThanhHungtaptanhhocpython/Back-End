@@ -170,13 +170,14 @@ export function mockSearch(tab, pivot = null) {
         const d = Math.abs(s.f.seed - base) + Math.abs(s.f.faissIndex - base) * 0.02;
         s.raw = Math.max(0, 1 - d / 900);
       });
-    } else if (type === "OCR+OD") {
+    } else if (type === "OCR") {
+      // OCR Text only: rank on burned-in text (and the folder / video labels),
+      // never on detected-object classes.
       const tokens = q.split(/\s+/).filter(Boolean);
       scored.forEach((s) => {
         let hit = 0;
         tokens.forEach((t) => {
           if (s.f.ocrText.toLowerCase().includes(t)) hit += 2;
-          if (s.f.odClasses.some((c) => c.toLowerCase().includes(t))) hit += 1.5;
           if (s.f.folderKey.toLowerCase().includes(t) || s.f.videoKey.toLowerCase().includes(t)) hit += 1;
         });
         s.raw = hit > 0 ? 0.5 + Math.min(hit, 4) * 0.12 : (hashString(q + s.f.id) / 4294967296) * 0.12;
@@ -257,6 +258,97 @@ export function mockSearch(tab, pivot = null) {
     const latency = 140 + (hashString(q + type) % 380);
     setTimeout(() => {
       resolve({ items, totalItems: items.length, meta, latency, type, mode: "LOCAL MOCK ENGINE", source: "demo" });
+    }, latency);
+  });
+}
+
+/**
+ * Deterministic mock temporal search: synthesizes storyboard sequences (one
+ * keyframe per event) from the frame pool so the Temporal tab is usable in
+ * demo / FastAPI-unavailable mode.
+ */
+export function mockTemporalSearch({ events = [], context = "", topk = 20 } = {}) {
+  return new Promise((resolve) => {
+    const pool = getFramePool();
+    const eventList = (events.length ? events : ["event"]).map((event) => String(event || "").trim());
+    const byVideo = new Map();
+    for (const frame of pool) {
+      if (!byVideo.has(frame.videoKey)) byVideo.set(frame.videoKey, []);
+      byVideo.get(frame.videoKey).push(frame);
+    }
+    const videos = [...byVideo.keys()]
+      .sort((a, b) => hashString(context + a) - hashString(context + b))
+      .slice(0, Math.min(Math.max(Number(topk) || 20, 1), 12));
+
+    const sequences = videos
+      .map((videoKey, vi) => {
+        const frames = byVideo.get(videoKey).slice().sort((a, b) => a.timestamp - b.timestamp);
+        if (frames.length < eventList.length) return null;
+        const step = Math.floor(frames.length / (eventList.length + 1)) || 1;
+        const picked = eventList.map((eventQuery, ei) => {
+          const frame = frames[Math.min(frames.length - 1, step * (ei + 1))];
+          const submissionFrameId = Number.parseInt(frame.frameKey, 10) || frame.gid;
+          return {
+            id: `mock-seq-${vi}:e${ei + 1}`,
+            eventIndex: ei + 1,
+            eventQuery,
+            eventQueryEn: eventQuery,
+            videoKey,
+            folderKey: frame.folderKey,
+            camera: "TRAKE",
+            frameKey: frame.frameKey,
+            frameName: frame.frameName,
+            submissionFrameId,
+            globalFrameId: submissionFrameId,
+            timestamp: frame.timestamp,
+            timecode: frame.timecode,
+            fps: frame.fps,
+            image: frame.image,
+            link: frame.link,
+            evidence: { scores: {}, text: {} },
+            score: +(0.55 + (hashString(eventQuery + frame.id) % 40) / 100).toFixed(3),
+            real: false,
+            unresolved: false,
+          };
+        });
+        return {
+          id: `mock-seq-${vi}`,
+          videoKey,
+          score: +(0.6 + (hashString(context + videoKey) % 35) / 100).toFixed(3),
+          baseScore: 0.5,
+          timestamps: picked.map((frame) => frame.timestamp),
+          temporalGaps: picked.slice(1).map((frame, i) => +(frame.timestamp - picked[i].timestamp).toFixed(2)),
+          verification: {
+            method: "temporal_evidence",
+            status: "mock",
+            vlmDecision: null,
+            vlmScore: null,
+            vlmReason: "",
+            matchedEvents: [],
+            missingEvents: [],
+          },
+          valid: true,
+          orderOk: true,
+          sameVideo: true,
+          resolved: true,
+          edited: false,
+          rank: vi + 1,
+          frames: picked,
+        };
+      })
+      .filter(Boolean);
+
+    const latency = 160 + (hashString(context + eventList.join("|")) % 260);
+    setTimeout(() => {
+      resolve({
+        sequences,
+        items: [],
+        totalItems: sequences.length,
+        latency,
+        type: "TEMPORAL",
+        mode: "LOCAL MOCK ENGINE",
+        source: "demo",
+      });
     }, latency);
   });
 }

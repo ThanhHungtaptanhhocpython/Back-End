@@ -7,10 +7,7 @@ multiple modalities (Visual, OCR, ASR) to produce a single ranked list.
 import logging
 from typing import List, Dict, Any
 
-from src.services.user_service import (
-    get_cosine_faiss,
-    get_elastic_processor,
-)
+from src.services.user_service import get_elastic_processor
 from src.services.reranker_service import reranker_service
 from src.utils.nlp_processing import QueryPlanner
 import os
@@ -57,7 +54,7 @@ def reciprocal_rank_fusion(lists_of_results: List[List[Dict]], k: int = 60) -> L
     Formula: RRF_Score = sum(1 / (k + rank))
     
     Args:
-        lists_of_results: A list containing multiple result lists (e.g. [openclip_results, siglip_results, beit3_results]).
+        lists_of_results: A list containing multiple result lists (e.g. [visual_results, ocr_results, asr_results]).
         k: Smoothing constant (typically 60).
         
     Returns:

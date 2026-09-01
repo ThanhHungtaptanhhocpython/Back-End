@@ -19,6 +19,19 @@ import {
   shouldUseQaDemoFallback,
 } from "../services/backendSearch.js";
 import { mockSearch } from "../mocks/searchEngine.js";
+import { getSearchConfig, isTransportError, runBackendAgentSearch, runBackendSearch } from "../services/backendSearch.js";
+import { mockSearch, mockTemporalSearch } from "../mocks/searchEngine.js";
+import { parseTemporalQuery, buildTemporalEventQueries } from "./temporalQuery.js";
+
+function mockTemporalForTab(tab) {
+  const parsed = parseTemporalQuery(tab?.query || "");
+  return mockTemporalSearch({
+    events: parsed.events,
+    context: parsed.context,
+    topk: tab?.params?.topk || 100,
+    folded: buildTemporalEventQueries(parsed),
+  });
+}
 
 async function runQaDemoFallback(tab, pivot, { reason, liveMeta } = {}) {
   const fallback = await mockSearch(tab, pivot);
@@ -45,8 +58,9 @@ async function runQaDemoFallback(tab, pivot, { reason, liveMeta } = {}) {
  */
 export async function runSearch(tab, pivot) {
   const config = getSearchConfig();
+  const isTemporal = tab?.searchType === "TEMPORAL";
   if (config.mode === "demo" || (config.mode === "auto" && !config.baseUrl)) {
-    return mockSearch(tab, pivot);
+    return isTemporal ? mockTemporalForTab(tab) : mockSearch(tab, pivot);
   }
 
   try {
@@ -61,6 +75,7 @@ export async function runSearch(tab, pivot) {
         return runQaDemoFallback(tab, pivot, { reason: error.message });
       }
       const fallback = await mockSearch(tab, pivot);
+      const fallback = isTemporal ? await mockTemporalForTab(tab) : await mockSearch(tab, pivot);
       return {
         ...fallback,
         mode: "FALLBACK DEMO - FASTAPI UNAVAILABLE",

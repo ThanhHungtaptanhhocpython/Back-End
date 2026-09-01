@@ -7,6 +7,16 @@ Start with:
 
 import logging
 import os
+import sys
+
+# Vietnamese query text is logged/printed all over the search path. On Windows a
+# cp1252 stdout/stderr raises UnicodeEncodeError on those characters, which would
+# turn a normal log line into an unhandled 500. Force UTF-8 with a safe fallback.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+    except Exception:
+        pass
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,6 +26,8 @@ from fastapi.exceptions import RequestValidationError
 from src.api.routers.health_router import router as health_router
 from src.api.routers.search_router import router as search_router
 from src.api.routers.chat_router import router as chat_router
+from src.api.routers.video_router import router as video_router
+from src.api.routers.settings_router import router as settings_router
 from src.api.middleware import RequestLoggingMiddleware, global_exception_handler
 from src.config.settings import get_settings
 
@@ -29,7 +41,7 @@ logging.basicConfig(
 
 app = FastAPI(
     title="AIC Search API",
-    description="Multimodal video keyframe retrieval backend powered by OpenCLIP and Faiss.",
+    description="Multimodal video keyframe retrieval backend powered by BEiT-3 and Faiss.",
     version="1.0.0",
 )
 
@@ -55,7 +67,9 @@ async def validation_exception_handler(
 ) -> JSONResponse:
     """Return a standard error response for Pydantic validation failures."""
     print(f"Validation Error: {exc.errors()}")
-    print(f"Request body: {await request.body()}")
+    # Never echo the body of a management-API request: it may carry secrets.
+    if not request.url.path.startswith(("/settings", "/users/settings")):
+        print(f"Request body: {await request.body()}")
     return JSONResponse(
         status_code=400,
         content={
@@ -79,7 +93,15 @@ app.include_router(health_router, prefix="")
 # paths. Removing either registration will break one of those clients.
 app.include_router(search_router, prefix="/users")
 app.include_router(search_router, prefix="")
+# Video playback / frame capture: same dual-prefix treatment so the frontend
+# works whether or not its API base URL ends in "/users".
+app.include_router(video_router, prefix="/users")
+app.include_router(video_router, prefix="")
 app.include_router(chat_router)
+# Local management API (loopback-only). Dual-prefixed like the search router so
+# it works whether or not the frontend API base URL ends in "/users".
+app.include_router(settings_router, prefix="/users")
+app.include_router(settings_router, prefix="")
 
 
 keyframes_root = settings.get_keyframes_root()
@@ -244,6 +266,17 @@ async def serve_keyframe(image_path: str):
                 all_frames = sorted([f for f in vdir.iterdir() if f.is_file()])
                 if all_frames:
                     return FileResponse(str(all_frames[0]))
+
+    # Last resort before the placeholder: if cloud assets are configured, fetch
+    # this keyframe on demand and LRU-cache it locally.
+    try:
+        from src.services.assets import resolve_keyframe_file
+
+        cloud_file = resolve_keyframe_file(image_path)
+        if cloud_file is not None and cloud_file.is_file():
+            return FileResponse(str(cloud_file))
+    except Exception:  # noqa: BLE001 - never let this break image serving
+        pass
 
     svg_content = _make_svg_placeholder(video_id, f"Frame {stem}")
     return Response(content=svg_content, media_type="image/svg+xml")

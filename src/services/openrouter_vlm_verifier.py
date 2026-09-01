@@ -154,6 +154,16 @@ def resolve_keyframe_path(item: Dict[str, Any]) -> Path | None:
                 return candidate
         except OSError:
             continue
+
+    # Cloud-assets mode: fetch + LRU-cache the keyframe on demand.
+    try:
+        from src.services.assets import resolve_keyframe_file
+
+        cloud_file = resolve_keyframe_file(item)
+        if cloud_file is not None and cloud_file.is_file():
+            return cloud_file
+    except Exception:  # noqa: BLE001
+        pass
     return None
 
 
@@ -242,8 +252,43 @@ def _normalise_vlm_items(
     return output, errors
 
 
+def vision_gateway_available(settings: Any = None) -> bool:
+    """True when the AI gateway is on and has at least one usable Vision provider."""
+    settings = settings or get_settings()
+    if not getattr(settings, "ai_gateway_enabled", False):
+        return False
+    try:
+        from src.services.ai import gateway as ai_gateway
+
+        return ai_gateway.vision_available(settings)
+    except Exception:
+        return False
+
+
+def _request_vlm_via_gateway(messages: List[Dict[str, Any]], max_tokens: int) -> Dict[str, Any]:
+    from src.services.ai import gateway as ai_gateway
+    from src.services.ai.base import AllProvidersFailed
+
+    try:
+        payload, _attempts, _provider = ai_gateway.vision_completion(
+            messages,
+            max_tokens=max_tokens,
+            response_format={"type": "json_schema", "json_schema": VERDICT_JSON_SCHEMA},
+        )
+    except AllProvidersFailed as exc:
+        # Surface as a network-style error so the caller records a batch failure
+        # and returns a no-VLM result with a clear status.
+        raise urllib.error.URLError(f"vision chain exhausted: {exc}") from exc
+    content = (((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
+    if isinstance(content, list):
+        content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+    return _extract_json_object(content)
+
+
 def _request_openrouter_vlm(messages: List[Dict[str, Any]], model: str, max_tokens: int, timeout: float) -> Dict[str, Any]:
     settings = get_settings()
+    if vision_gateway_available(settings):
+        return _request_vlm_via_gateway(messages, max_tokens)
     body = {
         "model": model,
         "temperature": 0,
@@ -423,7 +468,10 @@ def _select_candidate_frames(
 
 def verify_frames_with_openrouter_vlm(frames: List[Dict[str, Any]], plan: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     settings = get_settings()
-    if not settings.agent_vlm_enabled or not settings.openrouter_api_key or not frames:
+    _gateway_ready = vision_gateway_available(settings)
+    if not settings.agent_vlm_enabled or not frames or (
+        not settings.openrouter_api_key and not _gateway_ready
+    ):
         return frames, {"enabled": False, "method": "none", "evaluated": 0}
 
     candidate_limit = max(1, min(int(settings.agent_vlm_max_candidates or 12), len(frames), 50))

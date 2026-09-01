@@ -480,13 +480,13 @@ def _vqa_query_for(item: Dict[str, Any], queries: List[Dict[str, str]], matched_
 
 def _rerank_with_vqa(ranked: List[Dict[str, Any]], queries: List[Dict[str, str]]) -> int:
     """Validate the best KIS candidates against the action that retrieved them."""
-    enabled = os.getenv("KIS_VQA_RERANK", "true").strip().lower()
-    if enabled not in {"1", "true", "yes", "on"}:
+    settings = get_settings()
+    if not settings.kis_vqa_rerank:
         return 0
 
     try:
-        limit = max(1, min(int(os.getenv("KIS_VQA_RERANK_CANDIDATES", "24")), 60))
-    except ValueError:
+        limit = max(1, min(int(settings.kis_vqa_rerank_candidates), 60))
+    except (TypeError, ValueError):
         limit = 24
 
     validated = 0
@@ -597,9 +597,10 @@ def _ordered_evidence(candidates_by_event: List[List[Dict[str, Any]]]) -> Tuple[
 
 def _event_video_search(events: List[str], topk: int, per_query: int) -> Dict[str, Any]:
     """KIS multi-scene retrieval: recall frames, rank videos, then validate evidence."""
+    settings = get_settings()
     try:
-        recall_k = max(per_query, min(int(os.getenv("KIS_EVENT_RECALL_K", "300")), 1000))
-    except ValueError:
+        recall_k = max(per_query, min(int(settings.kis_event_recall_k), 1000))
+    except (TypeError, ValueError):
         recall_k = max(per_query, 300)
 
     queries = [
@@ -646,16 +647,16 @@ def _event_video_search(events: List[str], topk: int, per_query: int) -> Dict[st
 
     requested_videos = max(1, (topk + len(events) - 1) // len(events))
     try:
-        rerank_videos = min(max(requested_videos, int(os.getenv("KIS_VIDEO_RERANK_VIDEOS", "8"))), 16)
-    except ValueError:
+        rerank_videos = min(max(requested_videos, int(settings.kis_video_rerank_videos)), 16)
+    except (TypeError, ValueError):
         rerank_videos = min(max(requested_videos, 8), 16)
     try:
-        frames_per_event = max(1, min(int(os.getenv("KIS_VQA_FRAMES_PER_EVENT", "2")), 4))
-    except ValueError:
+        frames_per_event = max(1, min(int(settings.kis_vqa_frames_per_event), 4))
+    except (TypeError, ValueError):
         frames_per_event = 2
     try:
-        vqa_threshold = float(os.getenv("KIS_VQA_THRESHOLD", "0.55"))
-    except ValueError:
+        vqa_threshold = float(settings.kis_vqa_threshold)
+    except (TypeError, ValueError):
         vqa_threshold = 0.55
 
     preferred = [record for record in preliminary if record["coverage"] == len(events) and record["ordered"]]

@@ -1,6 +1,10 @@
-import { ReloadOutlined } from "@ant-design/icons";
+import { ReloadOutlined, SettingOutlined } from "@ant-design/icons";
 
-export default function StatusBar({ view, onSwitchView, clock, backend, onPing, onShortcuts }) {
+const openSettings = () => {
+  window.location.hash = "#/settings";
+};
+
+export default function StatusBar({ clock, backend, onPing, onShortcuts }) {
   const isDemo = backend.demo !== false;
   return (
     <header className="ws-topbar">
@@ -51,6 +55,9 @@ export default function StatusBar({ view, onSwitchView, clock, backend, onPing, 
       </div>
 
       <div className="ws-topright">
+        <button className="ws-status-btn" onClick={openSettings} title="Open Settings">
+          <SettingOutlined /> Settings
+        </button>
         <button className="ws-status-btn" onClick={onShortcuts} title="Keyboard shortcuts">
           Shortcuts
         </button>
@@ -58,15 +65,6 @@ export default function StatusBar({ view, onSwitchView, clock, backend, onPing, 
         <div className="ws-clock">
           <div className="ws-clock-time">{clock.time}</div>
           <div className="ws-clock-date">{clock.date}</div>
-        </div>
-
-        <div className="ws-viewtoggle">
-          <button className={view === "preview" ? "active" : ""} onClick={() => onSwitchView("preview")}>
-            Preview
-          </button>
-          <button className={view === "legacy" ? "active" : ""} onClick={() => onSwitchView("legacy")}>
-            Legacy
-          </button>
         </div>
       </div>
     </header>

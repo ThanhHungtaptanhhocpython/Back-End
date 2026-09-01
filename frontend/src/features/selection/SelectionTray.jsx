@@ -29,7 +29,16 @@ export default function SelectionTray({ keptItems, onRemove, onClear, onExport, 
         <div className="ws-tray-strip">
           {keptItems.map((item) => (
             <div key={item.id} className="ws-tray-thumb" onClick={() => onOpen(item)}>
-              <img src={item.image} alt={item.frameName} />
+              {item.image ? (
+                <img src={item.image} alt={item.frameName} />
+              ) : (
+                <div
+                  className="ws-tray-thumb-missing"
+                  title={item.previewError || "Exact preview unavailable — the frame is still export-ready."}
+                >
+                  Preview unavailable
+                </div>
+              )}
               <button className="ws-tray-x" onClick={(e) => { e.stopPropagation(); onRemove(item.id); }} title="Remove from tray">
                 <CloseOutlined />
               </button>

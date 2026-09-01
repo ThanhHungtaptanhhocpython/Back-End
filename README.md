@@ -92,12 +92,72 @@ Before running the backend, you must build the local data assets. Ensure your so
 2. **Build Faiss Index:** `python scripts/indexing/build_clip_faiss_index.py`
 3. **Index Elasticsearch:** Ensure Elasticsearch is running, then bulk insert OCR/ASR data.
 
+#### Video playback / frame capture assets
+
+The `/users/videos/{video_id}/playback` and `/users/videos/{video_id}/capture`
+endpoints need two per-video assets:
+
+| Asset | Env var | Default |
+| --- | --- | --- |
+| `media-info` (YouTube `watch_url` + `length`) | `MEDIA_INFO_PATH` | `media-info-aic25-b1.zip` at repo root, then `src/dict/media-info/` |
+| `map-keyframes` (authoritative FPS) | `MAP_KEYFRAMES_PATH` | `src/dict/map-keyframes/`, then existing `src/dict/map-keyframes.zip` |
+
+`media-info-aic25-b1.zip` is a large runtime asset and is **git-ignored** —
+copy it onto the machine (or set `MEDIA_INFO_PATH` to wherever it lives). Both
+values accept either a ZIP archive or an extracted directory, with or without a
+wrapping top-level folder.
+
+The YouTube timeline is assumed to be aligned with the dataset timeline, so the
+playback offset defaults to `0` for every video. If a specific video is
+verified to be shifted, add it to `PLAYBACK_OFFSETS_JSON`, e.g.
+`PLAYBACK_OFFSETS_JSON={"L21_V029": -172}` (`source_time = playback_time - offset`).
+
+#### Captured-frame previews (optional)
+
+On success, `POST /users/videos/{video_id}/capture` also tries to attach an
+**exact** still for the submitted frame (`preview_url`), extracted from the
+YouTube `watch_url` in `media-info`. This needs:
+
+* the `yt-dlp` Python dependency (in `requirements.txt`), and an **FFmpeg
+  binary** on `PATH` (or set `VIDEO_CAPTURE_FFMPEG_BIN` to its path);
+* **outbound network access to YouTube** from the server.
+
+Only the generated WebP is stored, under `.cache/video-captures/<video_id>/<frame_idx>.webp`
+(`VIDEO_CAPTURE_CACHE_PATH`); repeated captures reuse it and least-recently-used
+stills are evicted once the cache passes `VIDEO_CAPTURE_CACHE_MAX_BYTES`
+(500 MB default). `VIDEO_CAPTURE_EXTRACT_TIMEOUT_SECONDS` (90s) bounds one
+extraction. All of this is optional — when the tools, network, or source video
+are unavailable the frame index is still returned and remains exportable, just
+with `preview_url: null` and a `preview_error` reason; app startup is unaffected.
+
 ## 🏃‍♂️ Running the Server
 
-### Step 1: Start Elasticsearch
+### Recommended: the local launcher
+
+```bash
+python -m launcher            # backend (+ frontend, if LAUNCHER_FRONTEND_ENABLED)
+python -m launcher --no-frontend
+```
+
+The launcher reads the **active runtime-config revision**, starts the FastAPI
+backend, and watches for restart requests from the Settings UI. On a config
+change it applies the new revision, polls `/health`, and — if the app does not
+come up healthy within `LAUNCHER_HEALTH_TIMEOUT_SECONDS` — automatically
+restores the previous revision and starts again. When `HOST`/`PORT` change it
+also restarts the local frontend with the new API base URL.
+
+Runtime configuration lives in a per-user SQLite store
+(`<app-data>/HCMAI2026/config.db`), seeded from `.env` on first run. After that,
+edit configuration through the loopback-only Settings API / UI
+(`/settings/...`), not `.env`. Set `HCMAI_DISABLE_CONFIG_STORE=1` to fall back
+to pure `.env` behaviour.
+
+### Manual (no launcher)
+
+#### Step 1: Start Elasticsearch
 - **Via Docker:** `docker run -d -p 9200:9200 -e "discovery.type=single-node" elasticsearch:8.15.0`
 
-### Step 2: Start FastAPI
+#### Step 2: Start FastAPI
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```

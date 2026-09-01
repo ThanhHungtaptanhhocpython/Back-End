@@ -2,10 +2,12 @@ import { useRef } from "react";
 import { SearchOutlined, UploadOutlined, VideoCameraOutlined } from "@ant-design/icons";
 import { SEARCH_TYPES } from "../../shared/constants";
 import Keycap from "../../components/Keycap";
+import TemporalEditor from "./TemporalEditor";
 
 export default function SearchBar({ tab, onPatch, onRun, onAgentRun, searchRef, toast }) {
   const fileRef = useRef(null);
   const isImage = tab.searchType === "IMAGE";
+  const isTemporal = tab.searchType === "TEMPORAL";
   return (
     <div className="ws-searchbar">
       <div className="ws-panel-tag">
@@ -24,6 +26,17 @@ export default function SearchBar({ tab, onPatch, onRun, onAgentRun, searchRef, 
         ))}
       </div>
 
+      {isTemporal ? (
+        <>
+          <TemporalEditor tab={tab} onPatch={onPatch} onRun={onRun} />
+          <div className="ws-runbar">
+            <button className="ws-btn" onClick={onAgentRun} disabled={tab.status === "running" || !String(tab.query || "").trim()} title="Run AI Query Coordinator">
+              <SearchOutlined /> Agent Search
+            </button>
+          </div>
+        </>
+      ) : (
+      <>
       <div className="ws-query-wrap">
         <input
           ref={searchRef}
@@ -81,14 +94,6 @@ export default function SearchBar({ tab, onPatch, onRun, onAgentRun, searchRef, 
             onChange={(e) => onPatch({ params: { ...tab.params, topk: Number(e.target.value) } })}
           />
         </div>
-        <div className="ws-param">
-          <label className="ws-param-label">Clip</label>
-          <button className={`ws-switch ${tab.params.clip ? "on" : ""}`} onClick={() => onPatch({ params: { ...tab.params, clip: !tab.params.clip } })} />
-        </div>
-        <div className="ws-param">
-          <label className="ws-param-label">CLIPv2</label>
-          <button className={`ws-switch ${tab.params.clipv2 ? "on" : ""}`} onClick={() => onPatch({ params: { ...tab.params, clipv2: !tab.params.clipv2 } })} />
-        </div>
       </div>
 
       <div className="ws-runbar">
@@ -99,6 +104,8 @@ export default function SearchBar({ tab, onPatch, onRun, onAgentRun, searchRef, 
           <SearchOutlined /> Agent Search
         </button>
       </div>
+      </>
+      )}
     </div>
   );
 }

@@ -37,8 +37,8 @@ class TRAKE:
         self.keyframes_base_path = str(settings.get_keyframes_root())
         self.map_keyframes_dir = os.path.join(str(settings.src_dir), "dict", "map-keyframes")
         self._keyframe_map_cache: Dict[str, Dict[int, int]] = {}
-        self.enable_vqa = os.getenv("TRAKE_ENABLE_VQA", "false").strip().lower() in {"1", "true", "yes", "on"}
-        self.vqa_max_sequences = int(os.getenv("TRAKE_VQA_MAX_SEQUENCES", "5"))
+        self.enable_vqa = bool(settings.trake_enable_vqa)
+        self.vqa_max_sequences = int(settings.trake_vqa_max_sequences)
         self.min_event_gap = max(0.0, float(settings.trake_min_event_gap_seconds))
         self.max_event_gap = max(self.min_event_gap, float(settings.trake_max_event_gap_seconds))
         self.max_sequence_span = max(self.max_event_gap, float(settings.trake_max_sequence_span_seconds))
@@ -166,9 +166,13 @@ class TRAKE:
             path_parts = frame_path.split("/")
             namespace = str(result.get("namespace") or (path_parts[0] if path_parts else ""))
             split = namespace
-            frame_id = result.get("frame_idx", result.get("frame_id"))
+            # ``frame_idx`` from the BEiT3 retriever is the *original per-video
+            # frame index* (map-keyframes ``frame_idx`` column), already stripped
+            # of zero padding. It is never the FAISS/vector id -- that lives in
+            # ``vector_id`` and must not reach the submission.
+            frame_idx_value = result.get("frame_idx", result.get("frame_id"))
             try:
-                global_frame_id = int(frame_id)
+                global_frame_id = int(frame_idx_value)
             except (TypeError, ValueError):
                 continue
 
@@ -176,6 +180,8 @@ class TRAKE:
                 "faiss_idx": int(result.get("vector_id", -1)),
                 "vector_id": int(result.get("vector_id", -1)),
                 "global_frame_id": global_frame_id,
+                "submission_frame_id": global_frame_id,
+                "frame_id": result.get("frame_id"),
                 "timestamp": result.get("timestamp", 0.0) or 0.0,
                 "frame_name": Path(frame_path).name or str(result.get("frame_name") or ""),
                 "video_id": str(result.get("video_id") or ""),
@@ -339,7 +345,7 @@ class TRAKE:
                 for row in csv.DictReader(handle):
                     mapping[int(row["n"])] = int(row["frame_idx"])
         except Exception as exc:
-            print(f"Error loading keyframe map {map_path}: {exc}")
+            logger.warning("Error loading keyframe map %s: %s", map_path, exc)
 
         self._keyframe_map_cache[video_key] = mapping
         return mapping
@@ -373,6 +379,79 @@ class TRAKE:
                 return candidate
         return candidates[-1] if candidates else raw_path
 
+    @staticmethod
+    def _digits_to_int(value: Any) -> Any:
+        text = re.sub(r"[^\d]", "", str(value if value is not None else ""))
+        if not text:
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            return None
+
+    def _resolve_submission_frame_id(self, frame_detail: Dict) -> Any:
+        """Original per-video frame index for the submission CSV.
+
+        Resolution order, none of which is the FAISS/vector id:
+          1. the explicit ``submission_frame_id`` carried since retrieval,
+          2. digits of the resolved keyframe filename (``000123.webp``),
+          3. ``global_frame_id`` (retriever's normalized ``frame_idx``),
+          4. the map-keyframes ``frame_idx`` for the legacy ``n`` in the name.
+        Returns ``None`` when nothing trustworthy resolves.
+        """
+        explicit = frame_detail.get("submission_frame_id")
+        if isinstance(explicit, int):
+            return explicit
+        parsed = self._digits_to_int(explicit)
+        if parsed is not None:
+            return parsed
+
+        resolved_path = self._resolve_image_path(frame_detail)
+        if resolved_path:
+            stem_digits = self._digits_to_int(os.path.splitext(os.path.basename(resolved_path))[0])
+            if stem_digits is not None:
+                return stem_digits
+
+        gid = frame_detail.get("global_frame_id")
+        if isinstance(gid, int):
+            return gid
+        parsed_gid = self._digits_to_int(gid)
+        if parsed_gid is not None:
+            return parsed_gid
+
+        match = re.search(r"_(\d+)\.[^.]+$", str(frame_detail.get("frame_name", "")))
+        if match:
+            video_key = self._normalize_video_key(
+                frame_detail.get("split", ""), frame_detail.get("video_id", "")
+            )
+            mapped = self._load_keyframe_map(video_key).get(int(match.group(1)))
+            if mapped is not None:
+                return int(mapped)
+        return None
+
+    def _sequence_is_valid(self, sequence: Dict, n_events: int) -> bool:
+        frame_details = sequence.get("frame_details") or []
+        if len(frame_details) != n_events or n_events < 2:
+            return False
+
+        video_key = self._normalize_video_key(sequence.get("video_id", ""), "") or str(
+            sequence.get("video_id") or ""
+        )
+        last_ts = None
+        for frame in frame_details:
+            frame_video = self._normalize_video_key(
+                frame.get("split", ""), frame.get("video_id", "")
+            )
+            if video_key and frame_video and frame_video != sequence.get("video_id") and frame_video != video_key:
+                return False
+            if self._resolve_submission_frame_id(frame) is None:
+                return False
+            ts = self._float(frame.get("timestamp"))
+            if last_ts is not None and ts <= last_ts:
+                return False
+            last_ts = ts
+        return True
+
     def _get_image_base64(self, frame_detail: Dict) -> str:
         """
         Get base64 encoded image.
@@ -382,7 +461,7 @@ class TRAKE:
             with open(full_image_path, "rb") as image_file:
                 return base64.b64encode(image_file.read()).decode("utf-8")
         except Exception as e:
-            print(f"Error loading image {frame_detail.get('image_path', '')}: {e}")
+            logger.warning("Error loading image %s: %s", frame_detail.get("image_path", ""), e)
             return ""
 
     def format_response(self, sequences: List[Dict]) -> List[Dict]:
@@ -393,26 +472,44 @@ class TRAKE:
 
         for seq_id, sequence in enumerate(sequences):
             frames = []
+            submission_ids = []
 
             for frame_id, frame_detail in enumerate(sequence["frame_details"]):
                 folder_key = self._split_to_folder(frame_detail.get("split", ""))
                 video_key = self._normalize_video_key(frame_detail.get("split", ""), frame_detail.get("video_id", ""))
                 resolved_path = self._resolve_image_path(frame_detail)
-                frame_key = os.path.splitext(os.path.basename(resolved_path))[0] if resolved_path else frame_detail["global_frame_id"]
+                submission_frame_id = self._resolve_submission_frame_id(frame_detail)
+                submission_ids.append(submission_frame_id)
+                frame_key = os.path.splitext(os.path.basename(resolved_path))[0] if resolved_path else frame_detail.get("global_frame_id")
                 image_b64 = self._get_image_base64(frame_detail)
 
                 frames.append({
                     "id": frame_id,
+                    "event_index": frame_id + 1,
+                    "event_query": frame_detail.get("query"),
+                    "event_query_en": frame_detail.get("query_en"),
                     "folder_key": folder_key,
                     "video_key": video_key,
                     "frame_key": frame_key,
+                    "submission_frame_id": submission_frame_id,
                     "timestamp": frame_detail.get("timestamp", 0.0),
                     "image": image_b64,
+                    "evidence": {
+                        "scores": frame_detail.get("evidence_scores", {}),
+                        "text": frame_detail.get("evidence_text", {}),
+                    },
                 })
+
+            sequence_video = sequence.get("video_id")
+            sequence_key = "{}#{}".format(
+                sequence_video,
+                "-".join("?" if value is None else str(value) for value in submission_ids),
+            )
 
             response.append({
                 "id": seq_id,
-                "video_id": sequence.get("video_id"),
+                "sequence_id": sequence.get("sequence_id") or sequence_key,
+                "video_id": sequence_video,
                 "frame_names": [frame.get("frame_name") for frame in sequence["frame_details"]],
                 "timestamps": [frame.get("timestamp", 0.0) for frame in sequence["frame_details"]],
                 "score": sequence.get("total_score", 0.0),
@@ -445,32 +542,42 @@ class TRAKE:
         """
         events = [q["query"] for q in queries]
 
-        print(f"Processing {len(events)} events...")
+        # NOTE: use ``logger`` here, never ``print``. Event text is Vietnamese and
+        # a bare ``print`` to a cp1252 Windows stdout raises UnicodeEncodeError,
+        # which would surface as an unhandled 500 (and, lacking CORS headers, as a
+        # "service unavailable" transport error in the browser).
+        logger.info("TRAKE processing %d events", len(events))
 
         candidates_list = []
         for i, event in enumerate(events):
-            print(f"Retrieving candidates for event {i + 1}: {event[:50]}...")
+            logger.info("Retrieving candidates for event %d: %.60s", i + 1, event)
             retrieval_top_k = max(top_k, int(self.settings.trake_retrieval_top_k))
             candidates = self.retrieve_top_k(event, retrieval_top_k)
             candidates_list.append(candidates)
-            print(f"Found {len(candidates)} candidates for event {i + 1}")
+            logger.info("Found %d candidates for event %d", len(candidates), i + 1)
 
-        print("Grouping candidates by video...")
         video_groups = self.group_by_video(candidates_list)
-        print(f"Found candidates in {len(video_groups)} videos")
+        logger.info("Grouped candidates into %d videos", len(video_groups))
 
-        print("Finding valid temporal sequences...")
         valid_sequences = self.find_valid_sequences(video_groups, len(events))
-        print(f"Found {len(valid_sequences)} valid sequences")
+        logger.info("Beam search produced %d candidate sequences", len(valid_sequences))
+
+        n_events = len(events)
+        valid_sequences = [
+            sequence for sequence in valid_sequences if self._sequence_is_valid(sequence, n_events)
+        ]
+        logger.info(
+            "%d sequences pass the contract (all events, one video, ordered, resolvable frame ids)",
+            len(valid_sequences),
+        )
 
         if not valid_sequences:
             return []
 
-        print("Ranking sequences...")
         ranked_sequences = self.rank_sequences(valid_sequences, top_results)
 
         if self.enable_vqa:
-            print("Validating Top sequences with BLIP-VQA...")
+            logger.info("Validating top sequences with BLIP-VQA")
             for seq in ranked_sequences[: self.vqa_max_sequences]:
                 vqa_scores = []
                 for i, frame_detail in enumerate(seq["frame_details"]):
@@ -491,7 +598,7 @@ class TRAKE:
 
             ranked_sequences.sort(key=lambda x: x["total_score"], reverse=True)
         else:
-            print("Skipping BLIP-VQA validation (set TRAKE_ENABLE_VQA=true to enable).")
+            logger.debug("Skipping BLIP-VQA validation (set TRAKE_ENABLE_VQA=true to enable).")
 
         try:
             from src.services.openrouter_trake_verifier import verify_trake_sequences
@@ -510,5 +617,5 @@ class TRAKE:
                 "summary": vlm_summary,
             }
 
-        print("Formatting response...")
+        logger.info("Formatting %d ranked TRAKE sequences", len(ranked_sequences))
         return self.format_response(ranked_sequences)

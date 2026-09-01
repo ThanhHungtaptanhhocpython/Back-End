@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { Dropdown } from "antd";
 import {
   CloseOutlined,
   CopyOutlined,
+  DownOutlined,
   EditOutlined,
   ExpandOutlined,
   MessageOutlined,
@@ -12,6 +14,7 @@ import {
   VideoCameraOutlined,
 } from "@ant-design/icons";
 import { translateTextDetailed } from "../../services/translateService";
+import { canTargetTranslation, TRANSLATION_TARGETS } from "../../shared/translationTarget";
 import useDialogFocus from "../../hooks/useDialogFocus";
 
 async function copyText(text) {
@@ -282,12 +285,30 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
   const [translating, setTranslating] = useState(false);
   const [translationLive, setTranslationLive] = useState(false);
   const [translationProvider, setTranslationProvider] = useState("none");
+  const [translationStatus, setTranslationStatus] = useState("");
   const [editing, setEditing] = useState(false);
   const [editBuf, setEditBuf] = useState("");
 
   const out = override !== null ? override : translated;
   const showOut = src.trim() !== "";
-  const canUseAsQuery = Boolean(out.trim()) && (translationLive || override !== null);
+  const canUseAsQuery = canTargetTranslation({ text: out, live: translationLive, edited: override !== null });
+
+  const translationBadge = translating
+    ? "LIVE..."
+    : override !== null
+      ? "EDITED"
+      : translationLive
+        ? "LIVE"
+        : translationStatus === "backend_unreachable"
+          ? "OFFLINE"
+          : "UNAVAILABLE";
+
+  const translationNote =
+    translationLive || override !== null
+      ? "Original text is always preserved."
+      : translationStatus === "backend_unreachable"
+        ? "Translation service could not be reached. The original text was kept and cannot be used as a translated search query."
+        : "Translation is unavailable. The original text was kept and cannot be used as a translated search query.";
 
   useEffect(() => {
     const text = src.trim();
@@ -295,6 +316,7 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
       setTranslated("");
       setTranslationLive(false);
       setTranslationProvider("none");
+      setTranslationStatus("");
       setTranslating(false);
       return;
     }
@@ -308,11 +330,13 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
           setTranslated(result?.text || "");
           setTranslationLive(Boolean(result?.live));
           setTranslationProvider(result?.provider || "none");
+          setTranslationStatus(result?.status || "");
         }
       } catch {
         if (!cancelled) {
           setTranslated("");
           setTranslationProvider("unavailable");
+          setTranslationStatus("backend_unreachable");
         }
       } finally {
         if (!cancelled) setTranslating(false);
@@ -375,6 +399,7 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
               <span className="ws-demo-badge">
                 {translating ? "LIVE..." : translationLive ? `LIVE · ${translationProvider.toUpperCase()}` : override !== null ? "EDITED" : "UNAVAILABLE"}
               </span>
+              <span className="ws-demo-badge">{translationBadge}</span>
             </div>
             {editing ? (
               <textarea
@@ -401,19 +426,27 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
             <button className="ws-btn small" onClick={() => copy(editing ? editBuf : out)} title="Copy translated text">
               <CopyOutlined /> Copy
             </button>
-            <button
-              className="ws-btn small"
-              onClick={() => onUseInSearch(editing ? editBuf : out)}
+            <Dropdown
+              trigger={["click"]}
               disabled={!canUseAsQuery}
-              title={canUseAsQuery ? "Use translated text as search query" : "Translation is unavailable. Edit it into the target language before searching."}
+              menu={{
+                items: TRANSLATION_TARGETS.map((t) => ({ key: t.value, label: t.label })),
+                onClick: ({ key }) => onUseInSearch(editing ? editBuf : out, key),
+              }}
             >
-              <SearchOutlined /> Use as query
-            </button>
+              <button
+                className="ws-btn small"
+                disabled={!canUseAsQuery}
+                title={canUseAsQuery ? "Open the translated text in a new Text, Q&A, or Temporal tab" : "Translation is unavailable. Edit it into the target language before searching."}
+              >
+                <SearchOutlined /> Use as query <DownOutlined />
+              </button>
+            </Dropdown>
             <button className="ws-btn small" onClick={() => onUseInChat(editing ? editBuf : out)} title="Send translated text to the copilot">
               <MessageOutlined /> Use as prompt
             </button>
           </div>
-          <p className="ws-tr-note">{translationLive || override !== null ? "Original text is always preserved." : "Translation is unavailable. The original text was kept and cannot be used as a translated search query."}</p>
+          <p className="ws-tr-note">{translationNote}</p>
         </div>
       ) : (
         <div className="ws-tr-empty">Enter text above to see a clearly-labelled live translation preview. The original text is never silently replaced.</div>

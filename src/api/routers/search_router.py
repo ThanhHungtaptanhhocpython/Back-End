@@ -1,7 +1,12 @@
 import logging
 from typing import Optional
 from fastapi import APIRouter, Form, UploadFile, File, Response, status
-from src.schemas.search import TextSearchRequest, TranslateRequest, TranslateResponse
+from src.schemas.search import (
+    CaptureSimilarRequest,
+    TextSearchRequest,
+    TranslateRequest,
+    TranslateResponse,
+)
 from src.schemas.temporal import TemporalSearchRequest
 from src.schemas.results import AgentSearchResponse, BaseResponse, DataResponse
 
@@ -11,17 +16,40 @@ def _empty_query_response() -> BaseResponse:
     return BaseResponse(success=True, message="Empty query ignored.", data=DataResponse(items=[], total_items=0))
 
 @router.post("/translate", response_model=TranslateResponse)
-def handle_translate(request: TranslateRequest):
+def handle_translate(request: TranslateRequest, response: Response):
+    """Translate ``text`` from ``from_lang`` to ``to_lang``.
+
+    The HTTP status and body together make the outcome unambiguous:
+    - 200 + ``status="ok"``: a real translation (or a same-language identity).
+    - 400 + ``status="invalid_input"``: the text was blank.
+    - 503 + ``status="provider_unavailable"``: no provider produced a
+      translation. The original text is echoed back in ``translated_text`` so
+      the UI can keep the query, but ``success`` is ``False`` -- it is never
+      disguised as a successful translation.
+    """
     from src.utils.nlp_processing import Translation
+
     translator = Translation(from_lang=request.from_lang, to_lang=request.to_lang)
     translated_text = translator(request.text)
+    result = translator.last_result
+
+    status_by_outcome = {
+        "invalid_input": status.HTTP_400_BAD_REQUEST,
+        "provider_unavailable": status.HTTP_503_SERVICE_UNAVAILABLE,
+    }
+    if result.status in status_by_outcome:
+        response.status_code = status_by_outcome[result.status]
+
     return TranslateResponse(
-        success=True,
+        success=result.status == "ok",
         translated_text=translated_text,
         from_lang=request.from_lang,
         to_lang=request.to_lang,
-        translated=translator.last_translated,
-        provider=translator.last_provider
+        translated=result.translated,
+        provider=result.provider,
+        status=result.status,
+        error_code=result.error_code,
+        detail=result.detail,
     )
 
 
@@ -55,11 +83,15 @@ def handle_qna_search(request: TextSearchRequest):
 def handle_image_search(
     response: Response,
     topk: Optional[str] = Form("100"),
-    clip: Optional[str] = Form(None),
-    clipv2: Optional[str] = Form(None),
     faiss_index: Optional[str] = Form("default"),
     image: Optional[UploadFile] = File(None)
 ):
+    """Image pivot search, entirely on the BEiT-3 1024-d index.
+
+    An uploaded ``image`` is encoded with BEiT-3's vision tower; a
+    ``faiss_index`` is an existing BEiT-3 vector id. Either way the results
+    carry real FAISS vector ids.
+    """
     try:
         topk_int = int(topk) if topk is not None else 100
         if topk_int <= 0:
@@ -87,13 +119,76 @@ def handle_image_search(
 
     return BaseResponse(success=True, data=DataResponse(items=res, total_items=len(res)))
 
+
+@router.post("/videos/captures/{video_id}/{frame_idx}/similar", response_model=BaseResponse)
+def handle_capture_similar_search(
+    video_id: str,
+    frame_idx: int,
+    request: CaptureSimilarRequest,
+    response: Response,
+):
+    """Find keyframes similar to a captured frame's exact extracted still.
+
+    A captured frame has no global FAISS vector id -- its ``frame_idx`` is a
+    per-video index -- so this re-encodes the cached WebP preview with BEiT3's
+    vision tower and searches the same 1024-d index used by visual text search.
+
+    The cached preview is the only image source. If it is missing (never
+    extracted, or LRU-evicted) this returns a clear "re-capture" error and does
+    NOT fall back to another keyframe or to ``search_by_vector_id``.
+    """
+    from src.services.video_frame_preview_service import (
+        FramePreviewError,
+        get_video_frame_preview_service,
+    )
+
+    try:
+        still_path = get_video_frame_preview_service().get_existing(video_id, frame_idx)
+    except FramePreviewError:
+        still_path = None
+
+    if still_path is None:
+        response.status_code = status.HTTP_404_NOT_FOUND
+        return BaseResponse(
+            success=False,
+            message=(
+                f"No captured preview image is cached for {video_id} frame {frame_idx}. "
+                "Re-capture the frame, then run Similar again."
+            ),
+            data=DataResponse(items=[], total_items=0),
+        )
+
+    from src.services.user_service import getCaptureSimilarSearch
+
+    try:
+        res = getCaptureSimilarSearch(str(still_path), request.topk)
+    except Exception as exc:  # noqa: BLE001 - surface a clear message, never a random result set
+        logging.error("Captured-frame Similar search failed for %s#%s: %s", video_id, frame_idx, exc)
+        response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+        return BaseResponse(
+            success=False,
+            message=f"Similar search failed: {exc}",
+            data=DataResponse(items=[], total_items=0),
+        )
+
+    return BaseResponse(success=True, data=DataResponse(items=res, total_items=len(res)))
+
+
 @router.post("/trakesearch", response_model=BaseResponse)
 @router.post("/temporalsearch", response_model=BaseResponse)
 def handle_trake_search(request: TemporalSearchRequest):
     from src.services.user_service import GetImageDataTrakeSearch
-    
-    query_dicts = [{"query": ev.query} for ev in request.query]
-    
+
+    context = (request.context or "").strip()
+
+    def _fold(event_query: str) -> str:
+        text = (event_query or "").strip()
+        if not context or context.lower() in text.lower():
+            return text
+        return f"{context}\n{text}"
+
+    query_dicts = [{"query": _fold(ev.query)} for ev in request.query]
+
     res = GetImageDataTrakeSearch(query_dicts, top_results=request.topk)
     return BaseResponse(
         success=True,

@@ -9,6 +9,7 @@ import {
   indexFields,
   initialFormState,
   isHiddenByCondition,
+  partitionAiFields,
   validateAll,
   validateField,
   visibleGroups,
@@ -128,6 +129,63 @@ test("buildSavePayload drops empty numerics, keeps empty strings, splits secrets
     { OPENROUTER_API_KEY: { value: "", clear: true, configured: true } },
   );
   assert.deepEqual(cleared.secret_clear, ["OPENROUTER_API_KEY"]);
+});
+
+test("buildSavePayload with onlyKeys sends just the changed non-secret fields", () => {
+  const fields = indexFields(SCHEMA);
+  const values = { PORT: "4000", HOST: "1.2.3.4", ENV: "production", AI_GATEWAY_ENABLED: "true" };
+  const payload = buildSavePayload(fields, values, {}, "", { onlyKeys: ["PORT", "AI_GATEWAY_ENABLED"] });
+  assert.deepEqual(Object.keys(payload.values).sort(), ["AI_GATEWAY_ENABLED", "PORT"]);
+  assert.equal(payload.values.PORT, "4000");
+});
+
+const AI_SCHEMA = {
+  groups: [
+    {
+      group: "AI",
+      fields: [
+        { key: "AI_GATEWAY_ENABLED", kind: "bool" },
+        { key: "AI_TEXT_PRIORITY", kind: "csv" },
+        { key: "AI_VISION_PRIORITY", kind: "csv" },
+        { key: "AI_LOCAL_FALLBACK_ENABLED", kind: "bool" },
+        { key: "AI_GATEWAY_MAX_TOKENS", kind: "int" },
+        { key: "NIM_ENABLED", kind: "bool" },
+        { key: "NIM_API_KEY", kind: "secret", secret: true },
+        { key: "NIM_TEXT_MODEL", kind: "str" },
+        { key: "KILO_ENABLED", kind: "bool" },
+        { key: "KILO_API_KEY", kind: "secret", secret: true },
+        { key: "OPENROUTER_ENABLED", kind: "bool" },
+        { key: "OPENROUTER_API_KEY", kind: "secret", secret: true },
+        { key: "OPENROUTER_MODEL", kind: "str" },
+        { key: "OPENROUTER_SITE_URL", kind: "url" }, // legacy
+        { key: "LLM_PROVIDER", kind: "choice" }, // legacy
+        { key: "ANTHROPIC_API_KEY", kind: "secret", secret: true }, // legacy
+      ],
+    },
+    { group: "Server", fields: [{ key: "PORT", kind: "int" }] },
+  ],
+};
+
+test("partitionAiFields splits gateway / provider cards / legacy", () => {
+  const p = partitionAiFields(AI_SCHEMA);
+  assert.deepEqual(p.gateway.map((f) => f.key), [
+    "AI_GATEWAY_ENABLED", "AI_TEXT_PRIORITY", "AI_VISION_PRIORITY",
+    "AI_LOCAL_FALLBACK_ENABLED", "AI_GATEWAY_MAX_TOKENS",
+  ]);
+  assert.deepEqual(p.providers.nim.map((f) => f.key), ["NIM_ENABLED", "NIM_API_KEY", "NIM_TEXT_MODEL"]);
+  assert.deepEqual(p.providers.kilo.map((f) => f.key), ["KILO_ENABLED", "KILO_API_KEY"]);
+  // OpenRouter card gets its gateway fields but NOT the legacy identity knob
+  assert.deepEqual(p.providers.openrouter.map((f) => f.key), [
+    "OPENROUTER_ENABLED", "OPENROUTER_API_KEY", "OPENROUTER_MODEL",
+  ]);
+  assert.deepEqual(p.legacy.map((f) => f.key).sort(), [
+    "ANTHROPIC_API_KEY", "LLM_PROVIDER", "OPENROUTER_SITE_URL",
+  ]);
+});
+
+test("visibleGroups excludeGroups hides the AI group from Configuration", () => {
+  const groups = visibleGroups(AI_SCHEMA, { excludeGroups: ["AI"] });
+  assert.deepEqual(groups.map((g) => g.group), ["Server"]);
 });
 
 test("formatBytes is human readable", () => {

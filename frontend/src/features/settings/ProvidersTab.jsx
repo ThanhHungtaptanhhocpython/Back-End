@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
-import { Alert, Button, Collapse, Space, Spin, Table, Tag, Typography, message } from "antd";
+import { useEffect, useMemo, useState } from "react";
+import { Alert, Button, Collapse, Space, Spin, Tag, Typography, message } from "antd";
 
 import { discoverModels, fetchProviders, testProvider } from "../../services/settingsApi.js";
+import FieldRow from "./FieldRow.jsx";
+import { partitionAiFields } from "./settingsModel.js";
 
 const { Text, Paragraph } = Typography;
 
@@ -23,54 +25,22 @@ function ProviderExplainer({ gatewayEnabled }) {
                 below. When the gateway is off, or every provider in a chain fails, the app
                 falls back to local behaviour — never a hard error.
               </Paragraph>
-
               <Paragraph>
-                <b>Text chain</b> — <code>AI_TEXT_PRIORITY</code>. Tried in order for:
+                <b>Text chain</b> — <code>AI_TEXT_PRIORITY</code>. Tried in order for query
+                translation (Vietnamese → English) and the Agent Search planner (rich English
+                scene queries + a visual checklist). Failure → Google Translate / the local
+                planner.
               </Paragraph>
-              <ul className="set-explainer-list">
-                <li>
-                  <b>Query translation</b> (<code>/users/translate</code>): Vietnamese → English
-                  for the search box. Order: Google Translate → Text chain → keep your original
-                  text (honest failure, never a silent echo).
-                </li>
-                <li>
-                  <b>Agent Search planner</b>: turns a vague description into rich English scene
-                  queries + a visual checklist before retrieval. Failure → the deterministic
-                  local planner.
-                </li>
-              </ul>
-
               <Paragraph>
-                <b>Vision chain</b> — <code>AI_VISION_PRIORITY</code>. Tried in order for:
+                <b>Vision chain</b> — <code>AI_VISION_PRIORITY</code>. Tried in order for
+                grounded video Q&amp;A, the Agent Search VLM frame verifier, and the TRAKE
+                verifier. Failure → a non-VLM result with a clear status / retrieval order
+                kept.
               </Paragraph>
-              <ul className="set-explainer-list">
-                <li>
-                  <b>Grounded video Q&amp;A</b>: reads the retrieved keyframes to answer a
-                  question with a confidence score. Failure → a non-VLM “uncertain” result
-                  with a clear status.
-                </li>
-                <li>
-                  <b>Agent Search VLM verifier</b>: looks at the top candidate frames and
-                  re-scores / reranks them for visual match. Failure → retrieval order kept.
-                </li>
-                <li>
-                  <b>TRAKE verifier</b>: checks ordered-event sequences frame by frame.
-                </li>
-              </ul>
-
               <Paragraph type="secondary" style={{ marginBottom: 0 }}>
                 Fallover triggers on timeout, rate limit / quota, unknown model, or upstream
-                error. API keys stay entirely server-side — this screen only shows
-                configured / not-configured. Model IDs are never hard-coded: set them per
-                provider and confirm with <b>Test</b>. Free tiers (e.g. NVIDIA NIM) are fine
-                for prototyping but rate-limited.
-              </Paragraph>
-
-              <Paragraph style={{ marginTop: 12, marginBottom: 0 }}>
-                <b>To enable:</b> in <i>Configuration → AI</i>, turn on a provider, add its API
-                key + text/vision model, put its id in <code>AI_TEXT_PRIORITY</code> /
-                <code> AI_VISION_PRIORITY</code>, set <code>AI_GATEWAY_ENABLED = true</code>,
-                then Save &amp; Restart.
+                error. API keys stay server-side. Model IDs are never hard-coded — set them
+                per provider below and confirm with <b>Test</b>. Free tiers are rate-limited.
               </Paragraph>
             </div>
           ),
@@ -80,15 +50,18 @@ function ProviderExplainer({ gatewayEnabled }) {
   );
 }
 
-export default function ProvidersTab({ active }) {
-  const [data, setData] = useState(null);
+export default function ProvidersTab({ schema, config, form, active, reloadToken }) {
+  const { values, secrets, errors, setValue, setSecret } = form;
+  const partition = useMemo(() => partitionAiFields(schema), [schema]);
+
+  const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [row, setRow] = useState({}); // id -> { testing, result, models }
+  const [row, setRow] = useState({}); // id -> { testing, result, models, ... }
 
   async function load() {
     setLoading(true);
     try {
-      setData(await fetchProviders());
+      setStatus(await fetchProviders());
     } catch (err) {
       message.error(err.message);
     } finally {
@@ -98,7 +71,7 @@ export default function ProvidersTab({ active }) {
 
   useEffect(() => {
     if (active) load();
-  }, [active]);
+  }, [active, reloadToken]);
 
   async function runTest(id, mode) {
     setRow((r) => ({ ...r, [id]: { ...r[id], testing: true } }));
@@ -114,108 +87,124 @@ export default function ProvidersTab({ active }) {
     setRow((r) => ({ ...r, [id]: { ...r[id], loadingModels: true } }));
     try {
       const res = await discoverModels(id);
-      setRow((r) => ({ ...r, [id]: { ...r[id], loadingModels: false, models: res.models || [], modelsError: res.ok ? "" : res.detail } }));
+      setRow((r) => ({
+        ...r,
+        [id]: { ...r[id], loadingModels: false, models: res.models || [], modelsError: res.ok ? "" : res.detail },
+      }));
     } catch (err) {
       setRow((r) => ({ ...r, [id]: { ...r[id], loadingModels: false, modelsError: err.message } }));
     }
   }
 
-  if (loading || !data) return <Spin style={{ display: "block", margin: "48px auto" }} />;
+  if (loading || !status || !schema) return <Spin style={{ display: "block", margin: "48px auto" }} />;
 
-  const columns = [
-    {
-      title: "Provider",
-      dataIndex: "label",
-      render: (label, r) => (
-        <div>
-          <div><Text strong>{label}</Text></div>
-          <code className="set-dim">{r.id}</code>
-        </div>
-      ),
-    },
-    {
-      title: "State",
-      render: (_, r) => (
-        <Space size={4} wrap>
-          <Tag color={r.enabled ? "blue" : "default"}>{r.enabled ? "enabled" : "disabled"}</Tag>
-          <Tag color={r.configured ? "success" : "error"}>{r.configured ? "key set" : "no key"}</Tag>
-          {r.missing_requirements?.map((m) => <Tag key={m} color="warning">{m}</Tag>)}
-          {r.in_text_chain && <Tag color="geekblue">text #{(r.text_priority_index ?? 0) + 1}</Tag>}
-          {r.in_vision_chain && <Tag color="purple">vision #{(r.vision_priority_index ?? 0) + 1}</Tag>}
-        </Space>
-      ),
-    },
-    {
-      title: "Models",
-      render: (_, r) => (
-        <div>
-          <div>text: <code className="set-dim">{r.text_model || "—"}</code></div>
-          <div>vision: <code className="set-dim">{r.vision_model || "—"}</code></div>
-        </div>
-      ),
-    },
-    {
-      title: "Test",
-      render: (_, r) => {
-        const state = row[r.id] || {};
-        return (
-          <div>
-            <Space>
-              <Button size="small" loading={state.testing} onClick={() => runTest(r.id, "text")}>
-                Text
-              </Button>
-              <Button size="small" loading={state.testing} onClick={() => runTest(r.id, "vision")}>
-                Vision
-              </Button>
-              <Button size="small" loading={state.loadingModels} onClick={() => runDiscover(r.id)}>
-                Models
-              </Button>
-            </Space>
-            {state.result && (
-              <div className={`set-test ${state.result.ok ? "ok" : "bad"}`}>
-                {state.result.ok
-                  ? `ok · ${state.result.model} · ${state.result.latency_ms}ms · "${state.result.sample}"`
-                  : `${state.result.category || "error"} · ${state.result.detail || ""}`}
-              </div>
-            )}
-            {state.models && (
-              <div className="set-dim set-test">
-                {state.models.length} models{state.modelsError ? ` · ${state.modelsError}` : ""}
-                {state.models.length > 0 && `: ${state.models.slice(0, 6).join(", ")}${state.models.length > 6 ? "…" : ""}`}
-              </div>
-            )}
-          </div>
-        );
-      },
-    },
-  ];
+  const statusById = Object.fromEntries((status.providers || []).map((p) => [p.id, p]));
+  const orderedIds = (status.providers || []).map((p) => p.id).filter((id) => partition.providers[id]);
+
+  function renderFields(specs) {
+    return specs.map((spec) => (
+      <FieldRow
+        key={spec.key}
+        spec={spec}
+        value={values[spec.key]}
+        secretEntry={secrets[spec.key]}
+        resolved={config.resolved?.[spec.key]}
+        error={errors[spec.key]}
+        onChange={(next) => setValue(spec.key, next)}
+        onSecret={(entry) => setSecret(spec.key, entry)}
+      />
+    ));
+  }
 
   return (
-    <div>
-      <ProviderExplainer gatewayEnabled={data.gateway_enabled} />
+    <div className="set-providers">
+      <ProviderExplainer gatewayEnabled={status.gateway_enabled} />
+
       <Alert
-        type={data.gateway_enabled ? "success" : "info"}
+        type={status.gateway_enabled ? "success" : "info"}
         showIcon
         style={{ marginBottom: 16 }}
         message={
-          data.gateway_enabled
-            ? "AI gateway is ON — translation / Agent planner use the Text chain; Q&A / VLM use the Vision chain."
-            : "AI gateway is OFF — set AI_GATEWAY_ENABLED in the Configuration tab to use these chains."
+          status.gateway_enabled
+            ? "AI gateway is ON."
+            : "AI gateway is OFF — enable it below to route translation / Agent / VLM through these providers."
         }
         description={
           <Space direction="vertical" size={2}>
-            <span>Text chain: {(data.text_chain || []).join(" → ") || "(empty)"}</span>
-            <span>Vision chain: {(data.vision_chain || []).join(" → ") || "(empty)"}</span>
-            <span className="set-dim">
-              Priority order is edited via AI_TEXT_PRIORITY / AI_VISION_PRIORITY in Configuration.
-            </span>
+            <span>Text chain: {(status.text_chain || []).join(" → ") || "(empty)"}</span>
+            <span>Vision chain: {(status.vision_chain || []).join(" → ") || "(empty)"}</span>
+            <span className="set-dim">Edits here need Save + Restart before a provider becomes active; Test works right after Save.</span>
           </Space>
         }
       />
-      <div style={{ marginBottom: 12 }}>
-        <Button onClick={load}>Refresh</Button>
-      </div>
-      <Table rowKey="id" size="small" pagination={false} columns={columns} dataSource={data.providers || []} />
+
+      <section className="set-group" style={{ marginBottom: 16 }}>
+        <h3 className="set-group-title">Gateway</h3>
+        <div className="set-group-help">
+          Master switch and the two ordered fallback lists (comma-separated provider ids).
+        </div>
+        {renderFields(partition.gateway)}
+      </section>
+
+      {orderedIds.map((id) => {
+        const st = statusById[id] || {};
+        const rs = row[id] || {};
+        return (
+          <section key={id} className="set-provider-card">
+            <div className="set-provider-head">
+              <div>
+                <Text strong>{st.label || id}</Text> <code className="set-dim">{id}</code>
+              </div>
+              <Space size={4} wrap>
+                <Tag color={st.enabled ? "blue" : "default"}>{st.enabled ? "enabled" : "disabled"}</Tag>
+                <Tag color={st.configured ? "success" : "error"}>{st.configured ? "key set" : "no key"}</Tag>
+                {(st.missing_requirements || []).map((m) => (
+                  <Tag key={m} color="warning">{m}</Tag>
+                ))}
+                {st.in_text_chain && <Tag color="geekblue">text #{(st.text_priority_index ?? 0) + 1}</Tag>}
+                {st.in_vision_chain && <Tag color="purple">vision #{(st.vision_priority_index ?? 0) + 1}</Tag>}
+              </Space>
+            </div>
+
+            {renderFields(partition.providers[id])}
+
+            <div className="set-provider-actions">
+              <Space wrap>
+                <Button size="small" loading={rs.testing} onClick={() => runTest(id, "text")}>Test text</Button>
+                <Button size="small" loading={rs.testing} onClick={() => runTest(id, "vision")}>Test vision</Button>
+                <Button size="small" loading={rs.loadingModels} onClick={() => runDiscover(id)}>Discover models</Button>
+              </Space>
+              {rs.result && (
+                <div className={`set-test ${rs.result.ok ? "ok" : "bad"}`}>
+                  {rs.result.ok
+                    ? `ok · ${rs.result.model} · ${rs.result.latency_ms}ms · "${rs.result.sample}"`
+                    : `${rs.result.category || "error"} · ${rs.result.detail || ""}`}
+                </div>
+              )}
+              {rs.models && (
+                <div className="set-dim set-test">
+                  {rs.models.length} models{rs.modelsError ? ` · ${rs.modelsError}` : ""}
+                  {rs.models.length > 0 &&
+                    `: ${rs.models.slice(0, 8).join(", ")}${rs.models.length > 8 ? "…" : ""}`}
+                </div>
+              )}
+            </div>
+          </section>
+        );
+      })}
+
+      {partition.legacy.length > 0 && (
+        <Collapse
+          style={{ marginTop: 8 }}
+          items={[
+            {
+              key: "legacy",
+              label: `Legacy single-provider settings (${partition.legacy.length}) — used only when the gateway is OFF`,
+              children: renderFields(partition.legacy),
+            },
+          ]}
+        />
+      )}
     </div>
   );
 }

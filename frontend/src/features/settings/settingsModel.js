@@ -102,15 +102,19 @@ export function validateAll(fields, values) {
 
 /**
  * Build the POST /settings/config body.
- * - `values`: every non-secret, non-locked field (empty numeric/bool/choice
- *   dropped so the backend keeps its default).
+ * - `values`: non-secret, non-locked fields (empty numeric/bool/choice dropped
+ *   so the backend keeps its default). With `onlyKeys`, restricted to those
+ *   keys — the store then records just what the user actually changed and code
+ *   defaults keep applying to everything else.
  * - `secret_set`: secrets with a non-blank new value.
  * - `secret_clear`: secrets explicitly marked for deletion.
  */
-export function buildSavePayload(fields, values, secrets, note = "") {
+export function buildSavePayload(fields, values, secrets, note = "", { onlyKeys } = {}) {
+  const limit = onlyKeys ? new Set(onlyKeys) : null;
   const outValues = {};
   for (const [key, spec] of Object.entries(fields)) {
     if (spec.secret || spec.locked) continue;
+    if (limit && !limit.has(key)) continue;
     const text = String(values[key] ?? "").trim();
     if (text === "" && SKIP_EMPTY_KINDS.has(spec.kind)) continue;
     outValues[key] = text;
@@ -152,12 +156,21 @@ export function isHiddenByCondition(spec, values = {}) {
  */
 export function visibleGroups(
   schema,
-  { query = "", showAdvanced = false, modifiedOnly = false, changedKeys = [], values = {} } = {},
+  {
+    query = "",
+    showAdvanced = false,
+    modifiedOnly = false,
+    changedKeys = [],
+    values = {},
+    excludeGroups = [],
+  } = {},
 ) {
   const changed = new Set(changedKeys);
+  const skip = new Set(excludeGroups);
   const searching = String(query || "").trim() !== "";
   const out = [];
   for (const group of schema?.groups || []) {
+    if (skip.has(group.group)) continue;
     let hidden = 0;
     const fields = (group.fields || []).filter((spec) => {
       // A field made irrelevant by another toggle is always hidden.
@@ -174,6 +187,64 @@ export function visibleGroups(
     if (fields.length) out.push({ group: group.group, help: group.help || "", fields, hiddenCount: hidden });
   }
   return out;
+}
+
+// -- AI Providers tab -----------------------------------------------------
+export const AI_GATEWAY_KEYS = [
+  "AI_GATEWAY_ENABLED",
+  "AI_TEXT_PRIORITY",
+  "AI_VISION_PRIORITY",
+  "AI_LOCAL_FALLBACK_ENABLED",
+  "AI_GATEWAY_MAX_TOKENS",
+];
+
+// AI-group keys that belong to the legacy pre-gateway path, not a provider card.
+const AI_LEGACY_KEYS = new Set([
+  "LLM_PROVIDER",
+  "OPENAI_API_KEY", "OPENAI_MODEL",
+  "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "ANTHROPIC_MAX_TOKENS",
+  "NVIDIA_API_KEY", "NVIDIA_MODEL", "NVIDIA_MAX_TOKENS", "NVIDIA_TOP_P",
+  "GOOGLE_API_KEY", "GOOGLE_MODEL",
+  "OPENROUTER_SITE_URL", "OPENROUTER_APP_NAME", "OPENROUTER_MAX_TOKENS",
+  "OPENROUTER_TRANSLATE_MODEL", "OPENROUTER_TRANSLATE_MAX_TOKENS",
+]);
+
+const AI_PROVIDER_PREFIX = {
+  nim: "NIM_",
+  cerebras: "CEREBRAS_",
+  groq: "GROQ_",
+  openrouter: "OPENROUTER_",
+  gemini: "GEMINI_",
+  cloudflare: "CLOUDFLARE_",
+  kilo: "KILO_",
+};
+
+/**
+ * Split the schema's "AI" group into { gateway, providers: {id: [specs]}, legacy }
+ * so the AI Providers tab can render the gateway controls, one card per
+ * provider, and a collapsible legacy block.
+ */
+export function partitionAiFields(schema) {
+  const ai = (schema?.groups || []).find((g) => g.group === "AI");
+  const fields = ai ? ai.fields : [];
+  const byKey = Object.fromEntries(fields.map((f) => [f.key, f]));
+
+  const gateway = AI_GATEWAY_KEYS.map((k) => byKey[k]).filter(Boolean);
+
+  const providers = {};
+  const claimed = new Set(AI_GATEWAY_KEYS);
+  for (const [id, prefix] of Object.entries(AI_PROVIDER_PREFIX)) {
+    const specs = fields.filter(
+      (f) => f.key.startsWith(prefix) && !AI_LEGACY_KEYS.has(f.key),
+    );
+    if (specs.length) {
+      providers[id] = specs;
+      specs.forEach((s) => claimed.add(s.key));
+    }
+  }
+
+  const legacy = fields.filter((f) => !claimed.has(f.key));
+  return { gateway, providers, legacy };
 }
 
 export function formatBytes(bytes) {

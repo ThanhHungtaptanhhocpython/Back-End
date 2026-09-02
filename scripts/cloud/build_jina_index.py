@@ -10,7 +10,15 @@ Reads the per-video artifacts the Azure Jina embedding pipeline produces
 and an optional map-keyframes directory (``<video_id>.csv`` with columns
 ``n, pts_time, fps, frame_idx``, one-based ``n``) used only to fill in a
 missing timestamp/source_frame_idx -- never to override a value the record
-JSON already carries.
+JSON already carries. ``n`` is matched to the 1-based *embedding row order*
+(``.npy`` row order == metadata order), never to digits parsed out of a
+``frame_id`` string.
+
+``keyframe_ordinal`` is the 1-based position of a keyframe in its video's
+extracted set: an explicit, validated ``record["keyframe_ordinal"]`` if
+present, otherwise ``embedding_row + 1``. It is never derived from the
+trailing digits of ``frame_id`` (which is often an original *video* frame
+number, unrelated to extraction position).
 
 The whole corpus's embeddings are never loaded into RAM at once: each video's
 ``.npy`` is opened with ``mmap_mode='r'`` and added to the FAISS index one
@@ -31,11 +39,14 @@ Validates (raises SystemExit with a precise message on failure):
 Produces, under ``--out-dir``:
 
     jina_faiss.index
-    jina_global_ids.parquet   (vector_id, split, video_id, embedding_row,
-                                keyframe_ordinal, timestamp_ms, asset_key,
-                                frame_path, source_frame_id)
-    jina_index_meta.json      (model provenance, dimension, metric, counts)
-    jina_build_report.json    (per-video counts, warnings, elapsed time)
+    jina_global_ids.parquet     (vector_id, split, video_id, embedding_row,
+                                  keyframe_ordinal, timestamp_ms, asset_key,
+                                  frame_path, source_frame_id)
+    jina_video_metadata.parquet (video_id, parent_namespace, split,
+                                  frame_count, embedding_dim, first_vector_id,
+                                  last_vector_id)
+    jina_index_meta.json        (model provenance, dimension, metric, counts)
+    jina_build_report.json      (per-video counts, warnings, elapsed time)
 
 Usage
 -----
@@ -48,7 +59,9 @@ Usage
         --out-dir ./jina_runtime
 
 Then publish the manifest for it with scripts/cloud/build_asset_manifest.py
-(artifact names ``jina_faiss_index`` / ``jina_global_ids`` / ``jina_index_meta``).
+(artifact names ``jina_faiss_index`` / ``jina_global_ids`` /
+``jina_video_metadata`` / ``jina_index_meta`` -- the full runtime profile
+``BACKEND_ARTIFACT_NAMES["jina_clip_v2"]``).
 """
 
 from __future__ import annotations
@@ -68,7 +81,6 @@ import numpy as np
 import pandas as pd
 
 EXPECTED_DIM = 1024
-_FRAME_NUMBER_RE = re.compile(r"(\d+)(?!.*\d)")
 _UNSAFE_ID_RE = re.compile(r"[\\/]|\.\.")
 _NORM_ATOL = 2e-3  # matches the tolerance the Azure merge notebook validates with
 
@@ -79,11 +91,6 @@ def _now() -> str:
 
 def _fail(message: str) -> "SystemExit":
     return SystemExit(f"build_jina_index: {message}")
-
-
-def _frame_number(frame_id: str) -> int | None:
-    match = _FRAME_NUMBER_RE.search(frame_id or "")
-    return int(match.group(1)) if match else None
 
 
 @dataclass
@@ -237,9 +244,32 @@ def build_index(
                     f"metadata order exactly"
                 )
 
-            frame_number = _frame_number(frame_id)
-            keyframe_ordinal = (frame_number + 1) if frame_number is not None else (embedding_row + 1)
-            csv_row = namespace_map.get(keyframe_ordinal)
+            # `keyframe_ordinal` is the 1-based position of this keyframe in the
+            # video's extracted keyframe set. Trailing digits of `frame_id`
+            # (e.g. an original *video* frame number like "keyframe_015530")
+            # are NOT that position, so never derive it from them. Use an
+            # explicit, validated record value if given; otherwise the
+            # embedding row (== extraction order, enforced above).
+            explicit_ordinal = record.get("keyframe_ordinal")
+            if explicit_ordinal is not None:
+                try:
+                    keyframe_ordinal = int(explicit_ordinal)
+                except (TypeError, ValueError):
+                    raise _fail(
+                        f"{job.namespace}/{job.video_id}#{frame_id}: keyframe_ordinal="
+                        f"{explicit_ordinal!r} is not an integer"
+                    )
+                if keyframe_ordinal < 1:
+                    raise _fail(
+                        f"{job.namespace}/{job.video_id}#{frame_id}: keyframe_ordinal="
+                        f"{keyframe_ordinal} must be >= 1"
+                    )
+            else:
+                keyframe_ordinal = embedding_row + 1
+            # map-keyframes `n` is 1-based over the same extracted keyframe set,
+            # i.e. the embedding row order -- key the lookup on that, not on a
+            # frame_id-derived number.
+            csv_row = namespace_map.get(embedding_row + 1)
 
             timestamp = record.get("timestamp")
             source_fps = record.get("source_fps")
@@ -308,6 +338,31 @@ def build_index(
     return BuildResult(df=df, index=index, videos=len(jobs), warnings=warnings)
 
 
+def _build_video_metadata(df: pd.DataFrame) -> pd.DataFrame:
+    """Per-video rollup published as ``jina_video_metadata.parquet``.
+
+    One row per (split, video_id): frame count, contiguous vector-id range,
+    and the embedding dimension. Emitted so the builder output, the manifest
+    (``jina_video_metadata`` artifact) and the runtime profile agree.
+    """
+    grouped = (
+        df.groupby(["split", "video_id"], as_index=False)
+        .agg(
+            frame_count=("vector_id", "size"),
+            first_vector_id=("vector_id", "min"),
+            last_vector_id=("vector_id", "max"),
+        )
+        .sort_values(["split", "video_id"])
+        .reset_index(drop=True)
+    )
+    grouped["parent_namespace"] = grouped["split"]
+    grouped["embedding_dim"] = EXPECTED_DIM
+    return grouped[
+        ["video_id", "parent_namespace", "split", "frame_count", "embedding_dim",
+         "first_vector_id", "last_vector_id"]
+    ]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--embeddings-root", type=Path, required=True,
@@ -333,6 +388,7 @@ def main(argv: list[str] | None = None) -> int:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     index_path = args.out_dir / "jina_faiss.index"
     parquet_path = args.out_dir / "jina_global_ids.parquet"
+    video_meta_path = args.out_dir / "jina_video_metadata.parquet"
     meta_path = args.out_dir / "jina_index_meta.json"
     report_path = args.out_dir / "jina_build_report.json"
 
@@ -340,6 +396,7 @@ def main(argv: list[str] | None = None) -> int:
 
     faiss.write_index(result.index, str(index_path))
     result.df.to_parquet(parquet_path, index=False)
+    _build_video_metadata(result.df).to_parquet(video_meta_path, index=False)
 
     elapsed = time.perf_counter() - started
     meta = {
@@ -368,6 +425,7 @@ def main(argv: list[str] | None = None) -> int:
         "files": {
             "index": str(index_path),
             "global_ids": str(parquet_path),
+            "video_metadata": str(video_meta_path),
             "index_meta": str(meta_path),
         },
     }
@@ -377,6 +435,7 @@ def main(argv: list[str] | None = None) -> int:
           f"in {elapsed:.1f}s ({len(result.warnings)} warnings)")
     print(f"  {index_path}")
     print(f"  {parquet_path}")
+    print(f"  {video_meta_path}")
     print(f"  {meta_path}")
     print(f"  {report_path}")
     return 0

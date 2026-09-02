@@ -50,6 +50,8 @@ def _write_video(
     dim: int = DIM,
     with_timestamp: bool = True,
     local_position_offset: int = 0,
+    frame_id_fn=None,
+    keyframe_ordinal_fn=None,
 ) -> None:
     emb_dir = tmp_path / "embeddings" / namespace
     rec_dir = tmp_path / "records" / namespace
@@ -61,16 +63,19 @@ def _write_video(
 
     records = []
     for i in range(n_frames):
+        frame_id = frame_id_fn(i) if frame_id_fn else f"keyframe_{i:04d}"
         rec = {
             "parent_namespace": namespace,
             "video_id": video_id,
-            "frame_id": f"keyframe_{i:04d}",
-            "frame_path": f"{namespace}/{video_id}/keyframe_{i:04d}.jpg",
+            "frame_id": frame_id,
+            "frame_path": f"{namespace}/{video_id}/{frame_id}.jpg",
             "timestamp": float(i) if with_timestamp else None,
             "source_fps": 25.0,
             "source_frame_idx": i * 8,
             "local_position": i + local_position_offset,
         }
+        if keyframe_ordinal_fn is not None:
+            rec["keyframe_ordinal"] = keyframe_ordinal_fn(i)
         records.append(rec)
     (rec_dir / f"{video_id}.json").write_text(json.dumps({"records": records}), encoding="utf-8")
 
@@ -120,6 +125,84 @@ class TestHappyPath:
         index = faiss.read_index(str(out_dir / "jina_faiss.index"))
         df = pd.read_parquet(out_dir / "jina_global_ids.parquet")
         assert index.ntotal == len(df)
+
+
+class TestKeyframeOrdinal:
+    """Fix 7 -- keyframe_ordinal is the extraction position, never digits
+    parsed out of an arbitrary frame_id (often an original video-frame number).
+    """
+
+    def test_ordinal_is_embedding_position_not_frame_id_digits(self, tmp_path: Path):
+        # frame_id values look like original video frame numbers, far apart,
+        # and NOT 1..n. local embedding position is 0,1,2.
+        _write_video(
+            tmp_path, "L21_a", "L21_V001", 3, seed=21,
+            frame_id_fn=lambda i: f"{1234 + i * 777:06d}",
+        )
+        result = bji.build_index(tmp_path / "embeddings", tmp_path / "records", None)
+        assert result.df["keyframe_ordinal"].tolist() == [1, 2, 3]
+        # asset_key still tracks the real frame_id-based filename.
+        assert result.df.iloc[1]["asset_key"] == "L21_a/L21_V001/002011.jpg"
+
+    def test_explicit_valid_ordinal_is_honoured(self, tmp_path: Path):
+        _write_video(
+            tmp_path, "L21_a", "L21_V001", 3, seed=22,
+            keyframe_ordinal_fn=lambda i: 10 + i,
+        )
+        result = bji.build_index(tmp_path / "embeddings", tmp_path / "records", None)
+        assert result.df["keyframe_ordinal"].tolist() == [10, 11, 12]
+
+    def test_bad_explicit_ordinal_is_rejected(self, tmp_path: Path):
+        _write_video(
+            tmp_path, "L21_a", "L21_V001", 2, seed=23,
+            keyframe_ordinal_fn=lambda i: 0,  # < 1
+        )
+        with pytest.raises(SystemExit, match="keyframe_ordinal"):
+            bji.build_index(tmp_path / "embeddings", tmp_path / "records", None)
+
+    def test_map_keyframes_fill_keys_on_embedding_position_not_frame_id(self, tmp_path: Path):
+        # No timestamps in the records; frame_id digits are large + misleading.
+        _write_video(
+            tmp_path, "L21_a", "L21_V001", 2, seed=24, with_timestamp=False,
+            frame_id_fn=lambda i: f"{99000 + i:06d}",
+        )
+        mk_dir = tmp_path / "map-keyframes"
+        mk_dir.mkdir(parents=True, exist_ok=True)
+        with (mk_dir / "L21_V001.csv").open("w", encoding="utf-8", newline="") as f:
+            f.write("n,pts_time,fps,frame_idx\n")
+            f.write("1,0.5,25.0,12\n")
+            f.write("2,2.0,25.0,50\n")
+        result = bji.build_index(tmp_path / "embeddings", tmp_path / "records", mk_dir)
+        # keyed on embedding_row+1 (1, 2), NOT on 99001 / 99002.
+        assert result.df["timestamp_ms"].tolist() == [500, 2000]
+
+
+class TestVideoMetadataOutput:
+    def test_main_emits_jina_video_metadata_parquet(self, tmp_path: Path):
+        _write_video(tmp_path, "L21_a", "L21_V001", 3, seed=31)
+        _write_video(tmp_path, "L21_a", "L21_V002", 2, seed=32)
+        out_dir = tmp_path / "out"
+        rc = bji.main([
+            "--embeddings-root", str(tmp_path / "embeddings"),
+            "--records-root", str(tmp_path / "records"),
+            "--out-dir", str(out_dir),
+            "--model-revision", "deadbeef1234",
+        ])
+        assert rc == 0
+        vmeta_path = out_dir / "jina_video_metadata.parquet"
+        assert vmeta_path.is_file()
+        vmeta = pd.read_parquet(vmeta_path)
+        assert set(vmeta["video_id"]) == {"L21_V001", "L21_V002"}
+        assert set(vmeta.columns) >= {
+            "video_id", "parent_namespace", "frame_count", "embedding_dim", "first_vector_id",
+        }
+        row = vmeta[vmeta["video_id"] == "L21_V001"].iloc[0]
+        assert row["frame_count"] == 3
+        assert row["embedding_dim"] == DIM
+        assert row["first_vector_id"] == 0
+
+        report = json.loads((out_dir / "jina_build_report.json").read_text(encoding="utf-8"))
+        assert report["files"]["video_metadata"].endswith("jina_video_metadata.parquet")
 
 
 class TestValidationCatchesRowMismatch:

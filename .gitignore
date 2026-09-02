@@ -61,3 +61,6 @@ src/dict/*.json.bak_*
 .terraform/
 .terraform.lock.hcl
 crash.log
+
+# Generated cloud-asset manifest (ops artifact, per dataset version)
+hcmai-assets.json

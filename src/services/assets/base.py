@@ -33,6 +33,7 @@ ARTIFACT_NAMES = (
     "map_keyframes",
     "jina_faiss_index",
     "jina_global_ids",
+    "jina_video_metadata",
     "jina_index_meta",
 )
 
@@ -42,7 +43,7 @@ ARTIFACT_NAMES = (
 # (possibly much larger) BEiT3 checkpoint + FAISS index, and vice versa.
 BACKEND_ARTIFACT_NAMES: dict[str, tuple[str, ...]] = {
     "beit3": ("faiss_index", "global_ids", "video_metadata", "index_meta", "checkpoint", "tokenizer"),
-    "jina_clip_v2": ("jina_faiss_index", "jina_global_ids", "jina_index_meta"),
+    "jina_clip_v2": ("jina_faiss_index", "jina_global_ids", "jina_video_metadata", "jina_index_meta"),
 }
 
 

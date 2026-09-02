@@ -37,9 +37,12 @@ logger = logging.getLogger(__name__)
 
 EXPECTED_DIM = 1024
 
-# The exact column contract produced by scripts/cloud/build_jina_index.py.
-# Unlike BEiT3's global_ids.parquet (which has to tolerate several legacy
-# schemas), this schema is entirely ours, so it is not auto-detected.
+# Canonical internal column contract. Two on-disk parquet schemas normalize to
+# it (see `_normalize_global_ids`):
+#   1. the canonical one produced by scripts/cloud/build_jina_index.py, and
+#   2. the schema the Azure merge pipeline already publishes
+#      (parent_namespace / timestamp-in-seconds / frame_path-as-key /
+#       local_position, no asset_key / timestamp_ms / keyframe_ordinal columns).
 _COL_VECTOR_ID = "vector_id"
 _COL_SPLIT = "split"
 _COL_VIDEO_ID = "video_id"
@@ -49,6 +52,7 @@ _COL_TIMESTAMP_MS = "timestamp_ms"
 _COL_ASSET_KEY = "asset_key"
 _COL_FRAME_PATH = "frame_path"
 _COL_SOURCE_FRAME_ID = "source_frame_id"
+_COL_RAW_FRAME_ID = "raw_frame_id"  # e.g. "keyframe_0000" -- display/debug only
 
 _REQUIRED_COLUMNS = (
     _COL_VECTOR_ID,
@@ -60,6 +64,58 @@ _REQUIRED_COLUMNS = (
     _COL_ASSET_KEY,
     _COL_FRAME_PATH,
 )
+
+
+def _to_float(value: Any) -> float:
+    """NaN/None/pd.NA -> 0.0; used only for sort keys, never for output."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return f if np.isfinite(f) else 0.0
+
+
+def _normalize_global_ids(df: pd.DataFrame, source: Path) -> pd.DataFrame:
+    """Return a DataFrame with the canonical internal columns.
+
+    Accepts either the canonical `build_jina_index.py` schema or the schema
+    the Azure merge notebook publishes today, so a member can sync the
+    already-published `global_ids.parquet` with no rebuild.
+    """
+    cols = set(df.columns)
+    if _COL_ASSET_KEY in cols and _COL_TIMESTAMP_MS in cols and _COL_SPLIT in cols:
+        return df  # already canonical
+
+    merge_schema = {"parent_namespace", "video_id", "frame_path", "timestamp", "local_position", "vector_id"}
+    if merge_schema.issubset(cols):
+        out = pd.DataFrame(
+            {
+                _COL_VECTOR_ID: df["vector_id"].astype("int64"),
+                _COL_SPLIT: df["parent_namespace"].astype(str),
+                _COL_VIDEO_ID: df["video_id"].astype(str),
+                _COL_EMBEDDING_ROW: df["local_position"].astype("int64"),
+                _COL_KEYFRAME_ORDINAL: df["local_position"].astype("int64") + 1,
+                # seconds -> ms, kept as a nullable float so a missing
+                # timestamp stays missing (never invented as 0).
+                _COL_TIMESTAMP_MS: pd.to_numeric(df["timestamp"], errors="coerce") * 1000.0,
+                _COL_ASSET_KEY: df["frame_path"].astype(str),
+                _COL_FRAME_PATH: df["frame_path"].astype(str),
+                _COL_SOURCE_FRAME_ID: (
+                    pd.to_numeric(df["source_frame_idx"], errors="coerce")
+                    if "source_frame_idx" in cols
+                    else None
+                ),
+                _COL_RAW_FRAME_ID: df["frame_id"].astype(str) if "frame_id" in cols else None,
+            }
+        )
+        return out
+
+    raise JinaRetrieverError(
+        f"jina global_ids parquet at {source} has an unrecognized schema "
+        f"(columns={sorted(cols)}). Expected the canonical build_jina_index.py "
+        f"columns or the Azure merge schema (parent_namespace, timestamp, "
+        f"local_position, frame_path, vector_id)."
+    )
 
 
 class JinaRetrieverError(RuntimeError):
@@ -165,14 +221,16 @@ class JinaRetriever:
         resolved = self._require_path(path, "JINA_GLOBAL_IDS_PATH")
         df = pd.read_parquet(resolved)
         if df.empty:
-            raise JinaRetrieverError(f"jina_global_ids.parquet at {resolved} is empty.")
+            raise JinaRetrieverError(f"jina global_ids parquet at {resolved} is empty.")
+        df = _normalize_global_ids(df, resolved)
         missing = [c for c in _REQUIRED_COLUMNS if c not in df.columns]
         if missing:
             raise JinaRetrieverError(
-                f"jina_global_ids.parquet at {resolved} is missing required columns: {missing}."
+                f"jina global_ids parquet at {resolved} is missing required columns after "
+                f"normalization: {missing}."
             )
         if not df[_COL_VECTOR_ID].is_unique:
-            raise JinaRetrieverError(f"jina_global_ids.parquet at {resolved} has duplicate vector_id values.")
+            raise JinaRetrieverError(f"jina global_ids parquet at {resolved} has duplicate vector_id values.")
         return df
 
     def _load_optional_json(self, path: Path | None) -> dict | None:
@@ -201,7 +259,9 @@ class JinaRetriever:
             if video_id:
                 lookup.setdefault(video_id, []).append(row)
         for video_id in lookup:
-            lookup[video_id].sort(key=lambda r: (r.get(_COL_TIMESTAMP_MS) or 0, r.get(_COL_EMBEDDING_ROW) or 0))
+            lookup[video_id].sort(
+                key=lambda r: (_to_float(r.get(_COL_TIMESTAMP_MS)), _to_float(r.get(_COL_EMBEDDING_ROW)))
+            )
         return lookup
 
     def _load_model(self) -> Any:
@@ -315,8 +375,13 @@ class JinaRetriever:
         asset_key = self._to_json_safe(row.get(_COL_ASSET_KEY))
         frame_path = self._to_json_safe(row.get(_COL_FRAME_PATH)) or asset_key
         source_frame_id = self._to_json_safe(row.get(_COL_SOURCE_FRAME_ID))
+        if isinstance(source_frame_id, float):
+            source_frame_id = int(source_frame_id)
         keyframe_ordinal = self._to_json_safe(row.get(_COL_KEYFRAME_ORDINAL))
+        raw_frame_id = self._to_json_safe(row.get(_COL_RAW_FRAME_ID))
         timestamp_ms = self._to_json_safe(row.get(_COL_TIMESTAMP_MS))
+        if isinstance(timestamp_ms, float):
+            timestamp_ms = int(round(timestamp_ms))
         timestamp = (timestamp_ms / 1000.0) if timestamp_ms is not None else None
 
         # `frame_idx` is the per-video submission id: prefer the real source
@@ -332,7 +397,7 @@ class JinaRetriever:
             "faiss_id": vector_id,
             "global_frame_id": frame_idx,
             "frame_idx": frame_idx,
-            "frame_id": source_frame_id if source_frame_id is not None else keyframe_ordinal,
+            "frame_id": raw_frame_id if raw_frame_id is not None else frame_idx,
             "video_id": video_id,
             "split": split,
             "namespace": split,
@@ -407,9 +472,9 @@ class JinaRetriever:
         best_delta = float("inf")
         for row in rows:
             row_ts_ms = row.get(_COL_TIMESTAMP_MS)
-            if row_ts_ms is None:
+            if row_ts_ms is None or not np.isfinite(_to_float(row_ts_ms)):
                 continue
-            delta = abs(float(row_ts_ms) - target_ms)
+            delta = abs(_to_float(row_ts_ms) - target_ms)
             if delta < best_delta:
                 best_delta = delta
                 best_result = row
@@ -435,11 +500,19 @@ class JinaRetriever:
             return []
 
         if around_frame_id:
-            target = str(around_frame_id).strip().lstrip("0") or "0"
+            target = str(around_frame_id).strip()
+            target_num = target.lstrip("0") or "0"
             match_idx = -1
             for i, row in enumerate(rows):
-                candidate = str(row.get(_COL_SOURCE_FRAME_ID) or row.get(_COL_KEYFRAME_ORDINAL) or "").lstrip("0") or "0"
-                if candidate == target:
+                candidates = set()
+                for col in (_COL_RAW_FRAME_ID, _COL_SOURCE_FRAME_ID, _COL_KEYFRAME_ORDINAL, _COL_EMBEDDING_ROW):
+                    value = row.get(col)
+                    if value is None or (isinstance(value, float) and not np.isfinite(value)):
+                        continue
+                    text = str(int(value)) if isinstance(value, float) else str(value)
+                    candidates.add(text)
+                    candidates.add(text.lstrip("0") or "0")
+                if target in candidates or target_num in candidates:
                     match_idx = i
                     break
             if match_idx != -1:

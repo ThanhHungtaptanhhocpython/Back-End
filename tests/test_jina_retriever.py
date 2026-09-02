@@ -16,6 +16,7 @@ import importlib
 import os
 import sys
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -32,6 +33,7 @@ from src.services.jina_retriever import (
     EXPECTED_DIM,
     JinaRetriever,
     JinaRetrieverError,
+    _normalize_global_ids,
 )
 
 
@@ -138,6 +140,80 @@ class SearchVisualIntegrationTests(unittest.TestCase):
         self.assertEqual(len(timeline), 5)
         timestamps = [row["timestamp"] for row in timeline]
         self.assertEqual(timestamps, sorted(timestamps))
+
+
+class MergeSchemaNormalizationTests(unittest.TestCase):
+    """The retriever must consume the parquet schema the Azure merge pipeline
+    already publishes (parent_namespace / timestamp-in-seconds / frame_path /
+    local_position), so a member can sync it with no rebuild."""
+
+    def _published_df(self):
+        # Column layout + a real row, taken verbatim from the live Azure
+        # `indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/global_ids.parquet`.
+        return pd.DataFrame(
+            {
+                "parent_namespace": ["L21_a", "L21_a", "L21_a"],
+                "video_id": ["L21_V001", "L21_V001", "L21_V001"],
+                "frame_id": ["keyframe_0000", "keyframe_0001", "keyframe_0002"],
+                "frame_path": [
+                    "L21_a/L21_V001/keyframe_0000.jpg",
+                    "L21_a/L21_V001/keyframe_0001.jpg",
+                    "L21_a/L21_V001/keyframe_0002.jpg",
+                ],
+                "timestamp": [0.133333, 0.3, 1.033333],
+                "source_fps": [30.0, 30.0, 30.0],
+                "source_frame_idx": [4, 9, 31],
+                "local_position": [0, 1, 2],
+                "vector_id": [0, 1, 2],
+            }
+        )
+
+    def test_normalizes_published_schema_to_canonical(self):
+        out = _normalize_global_ids(self._published_df(), Path("global_ids.parquet"))
+        assert out["split"].tolist() == ["L21_a", "L21_a", "L21_a"]
+        assert out["asset_key"].tolist()[0] == "L21_a/L21_V001/keyframe_0000.jpg"
+        assert out["frame_path"].tolist()[0] == out["asset_key"].tolist()[0]
+        assert out["embedding_row"].tolist() == [0, 1, 2]
+        assert out["keyframe_ordinal"].tolist() == [1, 2, 3]
+        assert round(out["timestamp_ms"].tolist()[0]) == 133  # 0.133333 s -> ms
+        assert out["source_frame_id"].tolist() == [4, 9, 31]
+        assert out["raw_frame_id"].tolist()[0] == "keyframe_0000"
+
+    def test_canonical_schema_passes_through_unchanged(self):
+        _idx, df, _v = _synthetic_index_and_rows(0, [10, 20])
+        out = _normalize_global_ids(df, Path("x"))
+        assert out is df
+
+    def test_unknown_schema_raises(self):
+        bad = pd.DataFrame({"vector_id": [0], "something_else": ["?"]})
+        with self.assertRaises(JinaRetrieverError):
+            _normalize_global_ids(bad, Path("x"))
+
+    def test_search_over_published_schema_maps_ids_and_paths(self):
+        published = self._published_df()
+        norm = _normalize_global_ids(published, Path("x"))
+        dim = EXPECTED_DIM
+        rng = np.random.default_rng(3)
+        vectors = rng.normal(size=(3, dim)).astype(np.float32)
+        vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)
+        index = faiss.IndexIDMap2(faiss.IndexFlatIP(dim))
+        index.add_with_ids(vectors, np.array([0, 1, 2], dtype=np.int64))
+
+        r = _bare_retriever()
+        r._index = index
+        r._global_ids = norm
+        r._id_to_row = {int(row["vector_id"]): row for row in norm.to_dict(orient="records")}
+        r._video_to_rows = r._build_video_to_rows()
+        r.encode_text = lambda q: vectors[1:2].copy()
+
+        top = r.search_visual("người đàn ông", top_k=2)[0]
+        assert top["vector_id"] == 1
+        assert top["asset_key"] == "L21_a/L21_V001/keyframe_0001.jpg"
+        assert top["frame_path"] == top["asset_key"]
+        assert top["frame_id"] == "keyframe_0001"
+        assert top["frame_idx"] == 9  # source_frame_idx, the submission id
+        assert abs(top["timestamp"] - 0.3) < 1e-6
+        assert top["split"] == "L21_a"
 
 
 class QueryVectorValidationTests(unittest.TestCase):

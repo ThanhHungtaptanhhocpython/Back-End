@@ -1,6 +1,6 @@
 {
   "_comment": "Copy to manifest_spec.json and set every 'local' path to your built runtime artifacts, then: python scripts/cloud/build_asset_manifest.py --spec manifest_spec.json --out hcmai-assets.json [--upload]",
-  "_comment_jina": "The jina_* entries below are only needed when publishing the Jina CLIP v2 backend (see docs/CLOUD_ASSETS.md); built by scripts/cloud/build_jina_index.py. Remove that whole block if you only run BEiT3.",
+  "_comment_jina": "The jina_* entries below publish the Jina CLIP v2 backend (see docs/CLOUD_ASSETS.md). The index is ALREADY built + uploaded on Azure at these keys; a ready-to-use hcmai-assets.json for it (version fine_keyframes_jina_clip_v2_1024d_v2) is documented there, so you normally only run build_asset_manifest.py to publish a NEW/rebuilt corpus. Remove this block if you only run BEiT3.",
   "version": "2026-09-01",
   "artifacts": {
     "faiss_index": {
@@ -41,12 +41,17 @@
     "jina_global_ids": {
       "local": "E:/GitHub/HCMAI2026/jina_runtime/jina_global_ids.parquet",
       "container": "embeddings",
-      "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/jina_global_ids.parquet"
+      "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/global_ids.parquet"
+    },
+    "jina_video_metadata": {
+      "local": "E:/GitHub/HCMAI2026/jina_runtime/jina_video_metadata.parquet",
+      "container": "embeddings",
+      "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/video_metadata.parquet"
     },
     "jina_index_meta": {
       "local": "E:/GitHub/HCMAI2026/jina_runtime/jina_index_meta.json",
       "container": "embeddings",
-      "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/jina_index_meta.json"
+      "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/index_meta.json"
     }
   },
   "keyframes": {

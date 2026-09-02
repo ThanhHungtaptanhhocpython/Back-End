@@ -29,6 +29,7 @@ _DEFAULT_CONTAINER = {
     "map_keyframes": CONTAINER_METADATA,
     "jina_faiss_index": CONTAINER_EMBEDDINGS,
     "jina_global_ids": CONTAINER_EMBEDDINGS,
+    "jina_video_metadata": CONTAINER_EMBEDDINGS,
     "jina_index_meta": CONTAINER_EMBEDDINGS,
 }
 

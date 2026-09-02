@@ -29,17 +29,27 @@ the **metadata** container/bucket:
 
     {"name": "jina_faiss_index", "container": "embeddings",
      "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/jina_faiss.index",
-     "size": 1176325506, "sha256": "…64 hex…"},
+     "size": 2844580986, "sha256": "…64 hex…"},
     {"name": "jina_global_ids", "container": "embeddings",
-     "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/jina_global_ids.parquet",
-     "size": 61234567, "sha256": "…"},
+     "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/global_ids.parquet",
+     "size": 10721963, "sha256": "…"},
+    {"name": "jina_video_metadata", "container": "embeddings",
+     "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/video_metadata.parquet",
+     "size": 22265, "sha256": "…"},
     {"name": "jina_index_meta", "container": "embeddings",
-     "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/jina_index_meta.json",
-     "size": 512, "sha256": "…"}
+     "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/index_meta.json",
+     "size": 249, "sha256": "…"}
   ],
   "keyframes": {"container": "keyframes", "prefix": "", "layout": "{namespace}/{video_id}/{frame_id}.webp"}
 }
 ```
+
+> The Jina index above is **already built and uploaded** on the shared account
+> (693,124 vectors / 873 videos, 1024-d, `fine_keyframes_jina_clip_v2_1024d_v2`).
+> Its per-blob sizes + SHA-256 are stamped in each blob's metadata, so a
+> ready-to-publish `hcmai-assets.json` can be generated without downloading the
+> ~2.65 GiB index — regenerate it from blob properties and upload it once to
+> `metadata/hcmai-assets.json`.
 
 `sync_artifacts` streams each blob, checks **size + SHA-256**, and only promotes
 a version once **every requested artifact** is present and verified — a
@@ -50,17 +60,30 @@ container and LRU-cached locally.
 
 ## Jina CLIP v2 artifact set
 
-| Artifact name (manifest) | File | Contains |
+| Artifact name (manifest) | Published blob (key basename) | Contains |
 | --- | --- | --- |
 | `jina_faiss_index` | `jina_faiss.index` | `IndexIDMap2(IndexFlatIP(1024))` |
-| `jina_global_ids` | `jina_global_ids.parquet` | one row per keyframe: `vector_id`, `split`, `video_id`, `embedding_row`, `keyframe_ordinal`, `timestamp_ms`, `asset_key`, `frame_path` (alias of `asset_key`), `source_frame_id` |
-| `jina_index_meta` | `jina_index_meta.json` | model id + pinned revision, dimension, metric, normalization, vector count, metadata schema version |
+| `jina_global_ids` | `global_ids.parquet` | one row per keyframe (schema below) |
+| `jina_video_metadata` | `video_metadata.parquet` | per-video: `video_id`, `parent_namespace`, `frame_count`, `embedding_dim`, `first_vector_id`, `artifact_blob` |
+| `jina_index_meta` | `index_meta.json` | `embedding_run`, `model`, `embedding_dim`, `metric`, `vector_count`, `video_count` |
 
-`asset_key` is the real, literal keyframe object key inside the `keyframes`
-container, e.g. `L21_a/L21_V001/keyframe_0000.jpg` — never a path guessed from
-a numeric frame id. The keyframe resolver (`src/services/assets/__init__.py`)
-looks at `asset_key` first, then `frame_path`, before falling back to
-anything else (see [Keyframe resolution](#keyframe-resolution)).
+**`jina_global_ids` parquet — two accepted schemas.** `JinaRetriever` reads
+either and normalizes internally (`_normalize_global_ids`):
+
+* **Canonical** (produced by `scripts/cloud/build_jina_index.py`): `vector_id`,
+  `split`, `video_id`, `embedding_row`, `keyframe_ordinal`, `timestamp_ms`,
+  `asset_key`, `frame_path` (alias of `asset_key`), `source_frame_id`.
+* **Azure merge schema** (what is published today): `parent_namespace`,
+  `video_id`, `frame_id`, `frame_path`, `timestamp` (seconds), `source_fps`,
+  `source_frame_idx`, `local_position`, `vector_id`. Here `frame_path` is
+  already the literal keyframe key, so it is used as `asset_key`.
+
+`asset_key` (or, in the merge schema, `frame_path`) is the real, literal
+keyframe object key inside the `keyframes` container, e.g.
+`L21_a/L21_V001/keyframe_0000.jpg` — never a path guessed from a numeric frame
+id. The keyframe resolver (`src/services/assets/__init__.py`) looks at
+`asset_key` first, then `frame_path`, before falling back to anything else
+(see [Keyframe resolution](#keyframe-resolution)).
 
 There is no `jina_checkpoint`/`jina_tokenizer` artifact: the Jina CLIP v2
 model itself is loaded from a **local, pinned** HuggingFace snapshot
@@ -74,25 +97,44 @@ The Kaggle notebooks under `scripts/notebooks/` (`embed-jina-upload-azure-*`,
 `embeddings` container:
 
 ```text
-<embedding_run>/jina/<namespace>/<video_id>.npy          # per-video (N,1024) embeddings
-<embedding_run>/records/<namespace>/<video_id>.json      # per-video {"records": [...]}
-indexes/<embedding_run>/jina/jina_faiss.index             # merged/built index (see below)
-indexes/<embedding_run>/jina/jina_global_ids.parquet
-indexes/<embedding_run>/jina/jina_index_meta.json
+embeddings/<embedding_run>/jina/<namespace>/<video_id>.npy       # per-video (N,1024) float16
+embeddings/<embedding_run>/records/<namespace>/<video_id>.json   # per-video {"records": [...]}
+embeddings/checkpoints/<embedding_run>/<part>/<ns>/<vid>.json    # per-video resume marker + sha256
+embeddings/indexes/<embedding_run>/jina/jina_faiss.index         # merged/built index
+embeddings/indexes/<embedding_run>/jina/global_ids.parquet
+embeddings/indexes/<embedding_run>/jina/video_metadata.parquet
+embeddings/indexes/<embedding_run>/jina/index_meta.json
+metadata/map-keyframes/<video_id>.csv                            # n,pts_time,fps,frame_idx (n is 1-based)
 ```
 
 Keyframes themselves live in the `keyframes` container at
-`<namespace>/<video_id>/<frame_file>` (e.g. `L21_a/L21_V001/keyframe_0000.jpg`) —
-this is exactly the value stored in `asset_key`.
+`<namespace>/<video_id>/<frame_file>` (e.g. `L21_a/L21_V001/keyframe_0000.jpg`,
+namespaces `L21_a`…`L30_a`) — this is exactly the value stored in `frame_path`
+/ `asset_key`.
 
-## Build the Jina runtime artifacts
+## Go live on the existing Jina index (no rebuild)
 
+The `fine_keyframes_jina_clip_v2_1024d_v2` index is already published. To use it:
+
+1. Generate `hcmai-assets.json` for it (sizes + SHA-256 come from blob
+   metadata, so the ~2.65 GiB index is never downloaded to build the
+   manifest), then upload it once to `metadata/hcmai-assets.json`.
+2. Per member: `CLOUD_ASSETS_ENABLED=true`, `CLOUD_ASSETS_PROVIDER=azure_blob`,
+   `AZURE_STORAGE_CONNECTION_STRING=…`, `RETRIEVAL_BACKEND=jina_clip_v2`,
+   `JINA_MODEL_PATH=jinaai/jina-clip-v2`, `JINA_MODEL_REVISION=<pinned sha>`.
+   Save → restart → Cloud Assets tab → **Sync artifacts** (pulls only the four
+   `jina_*` artifacts) → the retriever picks up the synced FAISS index +
+   parquet automatically.
+
+## (Re)build the Jina runtime artifacts
+
+Only needed for a *new* corpus (different keyframes / model / preprocessing).
 `scripts/cloud/build_jina_index.py` reads the per-video `.npy` + records JSON
 (downloaded locally from the `embeddings` container ahead of time) and an
-optional map-keyframes directory, validates them, and writes the four files
-above plus a build report. It never loads the whole corpus into RAM — each
-video's `.npy` is opened with `mmap_mode='r'` and added to the FAISS index one
-video at a time.
+optional map-keyframes directory, validates them, and writes the artifacts
+plus a build report in the **canonical** schema. It never loads the whole
+corpus into RAM — each video's `.npy` is opened with `mmap_mode='r'` and added
+to the FAISS index one video at a time.
 
 ```bash
 python scripts/cloud/build_jina_index.py \

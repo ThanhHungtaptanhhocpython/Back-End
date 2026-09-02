@@ -16,6 +16,7 @@ import {
 import { translateTextDetailed } from "../../services/translateService";
 import { canTargetTranslation, TRANSLATION_TARGETS } from "../../shared/translationTarget";
 import useDialogFocus from "../../hooks/useDialogFocus";
+import QaCandidateList from "../results/QaCandidateList";
 
 async function copyText(text) {
   try {
@@ -132,7 +133,7 @@ function InteractiveMessage({ text }) {
   );
 }
 /* ---------- Q&A tab ---------- */
-function QaTab({ messages, status, input, setInput, onSend, ctxFrame, onClearCtx, composerRef }) {
+function QaTab({ messages, status, input, setInput, onSend, ctxFrame, onClearCtx, composerRef, onSelectCandidate }) {
   const listRef = useRef(null);
   useEffect(() => {
     const el = listRef.current;
@@ -158,6 +159,14 @@ function QaTab({ messages, status, input, setInput, onSend, ctxFrame, onClearCtx
               ) : null}
               {m.role === "assistant" ? <span className="ws-demo-badge">{m.demo ? "DEMO" : "LIVE"}</span> : null}
               <InteractiveMessage text={m.text} />
+              {m.role === "assistant" ? (
+                <QaCandidateList
+                  candidates={m.answerCandidates}
+                  frames={m.allFrames}
+                  onSelect={onSelectCandidate}
+                  compact
+                />
+              ) : null}
               <RoutingSummary routing={m.routing} />
               <SearchChecklist checks={m.mustHaveChecks} />
               <QueryList queries={m.queriesUsed} title={m.queryTitle || "Queries used"} />
@@ -460,6 +469,7 @@ export default function ChatPanel({
   open, width, chatTab, setChatTab, messages, status, input, setInput,
   onSend, ctxFrame, onClearCtx, composerRef, onToggleOpen, onExpand, onStartResize,
   onUseInSearch, onUseInChat, agentMessages = [], agentStatus = "idle", agentInput = "", setAgentInput = () => {}, onAgentSearch = () => {}, agentComposerRef,
+  onSelectQaCandidate = () => {},
 }) {
   if (!open) return null;
   return (
@@ -498,6 +508,7 @@ export default function ChatPanel({
           ctxFrame={ctxFrame}
           onClearCtx={onClearCtx}
           composerRef={composerRef}
+          onSelectCandidate={onSelectQaCandidate}
         />
       </div>
       <div className="ws-chat-pane" hidden={chatTab !== "agent"}>

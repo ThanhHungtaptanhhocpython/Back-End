@@ -178,9 +178,13 @@ class Settings(BaseSettings):
     qa_max_evidence_groups: int = 8
     qa_context_frames_per_group: int = 3
     qa_text_evidence_top_k: int = 12
+    qa_text_retrieval_pool: int = 32
     qa_evidence_window_seconds: float = 15.0
     qa_vlm_enabled: bool = True
     qa_answer_model: str = "qwen/qwen3-vl-32b-instruct"
+    qa_candidate_answers_enabled: bool = True
+    qa_candidate_max_videos: int = 4
+    qa_candidate_frames_per_video: int = 3
     qa_detail_pass_enabled: bool = True
     qa_detail_model: str = "qwen/qwen3-vl-32b-instruct"
     qa_detail_max_frames: int = 2

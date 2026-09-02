@@ -51,6 +51,47 @@ ANSWER_SCHEMA = {
     },
 }
 
+CANDIDATE_ANSWER_SCHEMA = {
+    "name": "grounded_video_answer_candidates",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "candidates": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "candidate_id": {"type": "string"},
+                        "status": {"type": "string", "enum": ["answered", "uncertain"]},
+                        "answer": {"type": "string"},
+                        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                        "reason": {"type": "string"},
+                        "supporting_frame_ids": {"type": "array", "items": {"type": "string"}},
+                        "used_ocr_evidence": {"type": "boolean"},
+                        "used_asr_evidence": {"type": "boolean"},
+                        "answer_language": {"type": "string", "enum": ["vi"]},
+                    },
+                    "required": [
+                        "candidate_id",
+                        "status",
+                        "answer",
+                        "confidence",
+                        "reason",
+                        "supporting_frame_ids",
+                        "used_ocr_evidence",
+                        "used_asr_evidence",
+                        "answer_language",
+                    ],
+                },
+            },
+        },
+        "required": ["candidates"],
+    },
+}
+
 VERIFICATION_SCHEMA = {
     "name": "grounded_video_answer_verification",
     "strict": True,
@@ -89,6 +130,9 @@ For counting, colors, identities, actions, spatial relations, and visible object
 For spoken content, rely on ASR snippets. For written text, rely on OCR snippets.
 Event groups are alternative candidate moments unless the question explicitly asks about a sequence.
 Use one coherent event group for a factual answer.
+For a question describing multiple events, every event used for the answer must belong to the same video id.
+Never combine a matching scene from one video with OCR, ASR, a title, or another scene from a different video.
+Prefer a video that covers all described events over a higher-scoring video that covers only one event.
 Never add counts across event groups or across duplicate timeline frames.
 The answer field is the competition answer: concise, no explanation or prefix, at most 100 characters.
 Put explanations in reason, not answer. Only cite frame ids that are attached. Return strict JSON only, no markdown.
@@ -115,6 +159,16 @@ reading but is not perfectly sharp, return that single most likely concise value
 low confidence instead of a generic refusal. The answer and reason must be natural Vietnamese with correct
 diacritics; exact numbers and OCR strings must be preserved. Only cite the supplied frame ids. Return strict
 JSON matching the requested schema, without markdown.
+"""
+
+CANDIDATE_SYSTEM_PROMPT = """You independently answer the same video question for several candidate videos.
+Treat every candidate video as a separate hypothesis. Never transfer visual, OCR, ASR, title, or answer evidence
+between candidate ids or video ids. A description with multiple events is matched only when the same candidate
+video covers those events. For every supplied candidate, return the single most likely concise answer even when
+the evidence is weak; use status=uncertain and low confidence for a partial match. Use a generic insufficient-
+evidence answer only when that candidate has no meaningful answer at all. Answers and reasons must be natural
+Vietnamese with correct diacritics. Preserve exact visible proper names, numbers, units, and OCR spelling.
+Only cite frame ids listed inside that candidate. Return every supplied candidate id exactly once as strict JSON.
 """
 
 OCR_INTENT = re.compile(
@@ -435,6 +489,16 @@ def _split_visual_events(query: str) -> List[str]:
     text = re.sub(
         r"\s*(?:[.!?]\s*)?(?:,\s*)?(?:followed by|after that|afterwards|then|next|finally)"
         r"(?:\s*,)?\s+",
+        " || ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    # Competition prompts often describe each must-have visual event in its
+    # own declarative sentence without an explicit "then" connector.  Treat
+    # those sentence boundaries as event boundaries, while leaving the final
+    # interrogative to the removal step below.
+    text = re.sub(
+        r"[.!?]\s+(?=(?!(?:what|which|who|where|how|is|are|does|do|did)\b)[A-Z])",
         " || ",
         text,
         flags=re.IGNORECASE,
@@ -910,10 +974,12 @@ def _build_evidence_groups(candidates: List[Dict[str, Any]], window_seconds: flo
     video_query_coverage: Dict[str, set[int]] = {}
     video_event_coverage: Dict[str, set[str]] = {}
     video_event_best_ranks: Dict[str, Dict[str, int]] = {}
+    video_event_best_timestamps: Dict[str, Dict[str, float]] = {}
     for video_id, frames in by_video.items():
         query_ids: set[int] = set()
         event_ids: set[str] = set()
         event_best_ranks: Dict[str, int] = {}
+        event_best_timestamps: Dict[str, float] = {}
         for frame in frames:
             for hit in frame.get("qa_query_hits") or []:
                 try:
@@ -927,13 +993,15 @@ def _build_evidence_groups(candidates: List[Dict[str, Any]], window_seconds: flo
                         query_rank = int(hit.get("rank"))
                     except (TypeError, ValueError):
                         continue
-                    event_best_ranks[event_id] = min(
-                        event_best_ranks.get(event_id, query_rank),
-                        query_rank,
-                    )
+                    if query_rank < event_best_ranks.get(event_id, 100000):
+                        event_best_ranks[event_id] = query_rank
+                        timestamp = _float(frame.get("timestamp"), float("nan"))
+                        if math.isfinite(timestamp):
+                            event_best_timestamps[event_id] = timestamp
         video_query_coverage[video_id] = query_ids
         video_event_coverage[video_id] = event_ids
         video_event_best_ranks[video_id] = event_best_ranks
+        video_event_best_timestamps[video_id] = event_best_timestamps
 
     raw_groups: List[Dict[str, Any]] = []
     for video_id, frames in by_video.items():
@@ -986,7 +1054,10 @@ def _build_evidence_groups(candidates: List[Dict[str, Any]], window_seconds: flo
         query_coverage = len(video_query_coverage.get(video_id, set()))
         event_coverage = len(video_event_coverage.get(video_id, set()))
         event_best_ranks = video_event_best_ranks.get(video_id, {})
+        event_best_timestamps = video_event_best_timestamps.get(video_id, {})
         event_worst_rank = max(event_best_ranks.values(), default=100000)
+        event_times = list(event_best_timestamps.values())
+        event_span_seconds = max(event_times) - min(event_times) if len(event_times) > 1 else 0.0
         # Multiple phrasings of one event are useful, but covering two distinct
         # events in one video is a much stronger signal for temporal QA.  The
         # weakest event matters: rank 3 + rank 9 is better sequence evidence
@@ -995,15 +1066,22 @@ def _build_evidence_groups(candidates: List[Dict[str, Any]], window_seconds: flo
         group["score"] += max(0, event_coverage - 1) * 0.45
         if event_coverage > 1 and event_worst_rank < 100000:
             group["score"] += 0.8 / max(1.0, math.log2(event_worst_rank + 1))
+            # A compact cluster of matching events is more likely to be the
+            # described clip than coincidental matches scattered across a
+            # long news programme.
+            group["score"] += 0.35 / (1.0 + event_span_seconds / 60.0)
         group["video_query_coverage"] = query_coverage
         group["video_event_coverage"] = event_coverage
         group["video_event_best_ranks"] = dict(event_best_ranks)
         group["video_event_worst_rank"] = event_worst_rank
+        group["video_event_best_timestamps"] = dict(event_best_timestamps)
+        group["video_event_span_seconds"] = event_span_seconds
         for frame in group_frames:
             frame["qa_video_query_coverage"] = query_coverage
             frame["qa_video_event_coverage"] = event_coverage
             frame["qa_video_event_best_ranks"] = dict(event_best_ranks)
             frame["qa_video_event_worst_rank"] = event_worst_rank
+            frame["qa_video_event_span_seconds"] = event_span_seconds
         timestamps = [
             _float(frame.get("timestamp"))
             for frame in group_frames
@@ -1019,6 +1097,119 @@ def _build_evidence_groups(candidates: List[Dict[str, Any]], window_seconds: flo
         for frame in group["frames"]:
             frame["qa_group_id"] = group_id
     return raw_groups
+
+
+def _rank_video_hypotheses(
+    groups: Sequence[Dict[str, Any]],
+    plan: Dict[str, Any],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """Rank coherent video candidates instead of treating every frame alike."""
+    by_video: Dict[str, List[Dict[str, Any]]] = {}
+    for group in groups:
+        video_id = _clean(group.get("video_id")) or "unknown"
+        by_video.setdefault(video_id, []).append(group)
+
+    event_total = len(plan.get("event_queries") or [])
+    hypotheses: List[Dict[str, Any]] = []
+    query_total = max(1, len(plan.get("visual_queries") or []))
+    for video_id, video_groups in by_video.items():
+        ranked_groups = sorted(video_groups, key=lambda group: _float(group.get("score")), reverse=True)
+        strongest = ranked_groups[0]
+        event_coverage = int(strongest.get("video_event_coverage") or 0)
+        if event_total > 0:
+            coverage_ratio = min(1.0, event_coverage / event_total)
+        else:
+            # Non-temporal questions have one implicit scene rather than
+            # explicit event ids, so query agreement is their coverage cue.
+            coverage_ratio = min(
+                1.0,
+                int(strongest.get("video_query_coverage") or 0) / query_total,
+            )
+        query_coverage = int(strongest.get("video_query_coverage") or 0)
+        worst_rank = int(strongest.get("video_event_worst_rank") or 100000)
+        event_span = _float(strongest.get("video_event_span_seconds"), 0.0)
+        text_priority = max(
+            (
+                _float(frame.get("qa_evidence_priority"))
+                for group in ranked_groups
+                for frame in group.get("frames") or []
+            ),
+            default=0.0,
+        )
+        complete = bool(event_total > 1 and event_coverage >= event_total)
+        score = _float(strongest.get("score"))
+        score += coverage_ratio * (1.4 if event_total > 1 else 0.35)
+        score += min(query_coverage, query_total) / query_total * 0.25
+        score += math.log1p(max(0.0, text_priority)) * 0.32
+        if complete:
+            score += 0.75
+        if event_coverage > 1 and worst_rank < 100000:
+            score += 0.6 / max(1.0, math.log2(worst_rank + 1))
+            score += 0.25 / (1.0 + event_span / 60.0)
+        hypotheses.append({
+            "video_id": video_id,
+            "score": score,
+            "retrieval_score": _float(strongest.get("score")),
+            "event_coverage": event_coverage,
+            "event_total": event_total,
+            "event_coverage_ratio": coverage_ratio,
+            "event_best_ranks": strongest.get("video_event_best_ranks") or {},
+            "event_worst_rank": worst_rank,
+            "event_span_seconds": event_span,
+            "query_coverage": query_coverage,
+            "text_evidence_priority": text_priority,
+            "complete_event_match": complete,
+            "groups": ranked_groups,
+        })
+
+    hypotheses.sort(
+        key=lambda hypothesis: (
+            bool(hypothesis.get("complete_event_match")),
+            _float(hypothesis.get("event_coverage_ratio")),
+            -int(hypothesis.get("event_worst_rank") or 100000),
+            -_float(hypothesis.get("event_span_seconds")),
+            _float(hypothesis.get("retrieval_score")),
+            _float(hypothesis.get("score")),
+        ),
+        reverse=True,
+    )
+    return hypotheses[: max(1, limit)]
+
+
+def _prioritize_hypothesis_groups(
+    diversified: Sequence[Dict[str, Any]],
+    hypotheses: Sequence[Dict[str, Any]],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """Guarantee VLM evidence for several distinct video hypotheses."""
+    selected: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(group: Dict[str, Any]) -> None:
+        key = str(group.get("id") or id(group))
+        if key in seen or len(selected) >= max(1, limit):
+            return
+        selected.append(group)
+        seen.add(key)
+
+    # One strong moment from each candidate lets the candidate-answer pass
+    # inspect lower-ranked videos instead of seeing only near-duplicates from
+    # the global top result.
+    for hypothesis in hypotheses:
+        groups = list(hypothesis.get("groups") or [])
+        if groups:
+            add(groups[0])
+
+    # The strongest video receives an additional event/text moment when
+    # available, which helps a multi-event description stay coherent.
+    if hypotheses:
+        for group in list(hypotheses[0].get("groups") or [])[1:3]:
+            add(group)
+
+    for group in diversified:
+        add(group)
+    return selected
 
 
 def _diversify_evidence_groups(
@@ -1272,6 +1463,54 @@ def _select_grouped_frames(
     return selected
 
 
+def _build_candidate_bundles(
+    hypotheses: Sequence[Dict[str, Any]],
+    selected_ids: Dict[str, Dict[str, Any]],
+    max_videos: int,
+    frames_per_video: int,
+) -> List[Dict[str, Any]]:
+    """Attach a small, independent frame bundle to each video hypothesis."""
+    by_video: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}
+    for frame_id, frame in selected_ids.items():
+        by_video.setdefault(_clean(frame.get("video_id")) or "unknown", []).append((frame_id, frame))
+
+    bundles: List[Dict[str, Any]] = []
+    for hypothesis in hypotheses:
+        video_id = _clean(hypothesis.get("video_id")) or "unknown"
+        available = by_video.get(video_id) or []
+        if not available:
+            continue
+        # Text anchors and genuine retrieval hits are more informative than
+        # timeline context, while still preserving the selected order.
+        available = sorted(
+            available,
+            key=lambda pair: (
+                bool(pair[1].get("qa_text_evidence")),
+                not bool(pair[1].get("qa_context_frame")),
+                _frame_priority(pair[1]),
+            ),
+            reverse=True,
+        )
+        chosen = available[: max(1, frames_per_video)]
+        bundles.append({
+            "candidate_id": f"c{len(bundles) + 1}",
+            "video_id": video_id,
+            "frame_ids": [frame_id for frame_id, _frame in chosen],
+            "frames": {frame_id: frame for frame_id, frame in chosen},
+            "score": _float(hypothesis.get("score")),
+            "retrieval_score": _float(hypothesis.get("retrieval_score")),
+            "event_coverage": int(hypothesis.get("event_coverage") or 0),
+            "event_total": int(hypothesis.get("event_total") or 0),
+            "event_coverage_ratio": _float(hypothesis.get("event_coverage_ratio")),
+            "event_span_seconds": _float(hypothesis.get("event_span_seconds")),
+            "query_coverage": int(hypothesis.get("query_coverage") or 0),
+            "complete_event_match": bool(hypothesis.get("complete_event_match")),
+        })
+        if len(bundles) >= max(1, max_videos):
+            break
+    return bundles
+
+
 def _select_frames(candidates: List[Dict[str, Any]], limit: int, per_video_limit: int) -> List[Dict[str, Any]]:
     ranked = sorted(
         candidates,
@@ -1375,6 +1614,15 @@ def _request_verification(
     max_tokens: int,
 ) -> Dict[str, Any]:
     return _request_structured(messages, model, timeout, max_tokens, VERIFICATION_SCHEMA)
+
+
+def _request_candidate_answers(
+    messages: List[Dict[str, Any]],
+    model: str,
+    timeout: float,
+    max_tokens: int,
+) -> Dict[str, Any]:
+    return _request_structured(messages, model, timeout, max_tokens, CANDIDATE_ANSWER_SCHEMA)
 
 
 def _encode_detail_image(image: Image.Image, max_side: int, *, allow_upscale: bool) -> str:
@@ -1562,6 +1810,71 @@ def _normalise_answer(
     }, errors
 
 
+def _normalise_candidate_answers(
+    payload: Dict[str, Any],
+    bundles: Sequence[Dict[str, Any]],
+    answer_type: str,
+    answer_max_chars: int = 100,
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Validate candidate answers and keep citations inside their own video."""
+    rows = payload.get("candidates")
+    if not isinstance(rows, list):
+        return [], ["candidate answers must be a list"]
+    bundle_by_id = {str(bundle.get("candidate_id")): bundle for bundle in bundles}
+    row_by_id = {
+        _clean(row.get("candidate_id")): row
+        for row in rows
+        if isinstance(row, dict) and _clean(row.get("candidate_id"))
+    }
+    output: List[Dict[str, Any]] = []
+    errors: List[str] = []
+    for bundle in bundles:
+        candidate_id = str(bundle.get("candidate_id"))
+        row = row_by_id.get(candidate_id)
+        if row is None:
+            errors.append(f"missing candidate answer: {candidate_id}")
+            continue
+        allowed = set(bundle.get("frame_ids") or [])
+        parsed, row_errors = _normalise_answer(
+            row,
+            allowed,
+            answer_type,
+            answer_max_chars,
+        )
+        if row_errors:
+            errors.extend(f"{candidate_id}: {error}" for error in row_errors)
+            continue
+        supporting_names = [
+            _clean((bundle.get("frames") or {}).get(frame_id, {}).get("frame_name"))
+            for frame_id in parsed.get("supporting_frame_ids") or []
+        ]
+        supporting_names = [name for name in supporting_names if name]
+        representative_id = next(
+            iter(parsed.get("supporting_frame_ids") or bundle.get("frame_ids") or []),
+            None,
+        )
+        representative_frame = (bundle.get("frames") or {}).get(representative_id, {})
+        output.append({
+            "candidate_id": candidate_id,
+            "video_id": bundle.get("video_id"),
+            **parsed,
+            "retrieval_score": round(_float(bundle.get("retrieval_score")), 6),
+            "hypothesis_score": round(_float(bundle.get("score")), 6),
+            "event_coverage": int(bundle.get("event_coverage") or 0),
+            "event_total": int(bundle.get("event_total") or 0),
+            "event_coverage_ratio": round(_float(bundle.get("event_coverage_ratio")), 4),
+            "event_span_seconds": round(_float(bundle.get("event_span_seconds")), 3),
+            "query_coverage": int(bundle.get("query_coverage") or 0),
+            "complete_event_match": bool(bundle.get("complete_event_match")),
+            "supporting_frame_names": supporting_names,
+            "representative_frame_name": _clean(representative_frame.get("frame_name")),
+        })
+    unexpected = sorted(set(row_by_id) - set(bundle_by_id))
+    if unexpected:
+        errors.append(f"unexpected candidate ids: {unexpected}")
+    return output, errors
+
+
 def _normalise_verification(
     payload: Dict[str, Any],
     frame_ids: set[str],
@@ -1650,7 +1963,14 @@ def grounded_video_qa(question: str, top_k: int) -> Tuple[List[Dict[str, Any]], 
         pool_size,
         plan.get("visual_query_event_ids"),
     )
-    text_evidence = _collect_text_evidence(plan, max(1, int(settings.qa_text_evidence_top_k)))
+    text_evidence = _collect_text_evidence(
+        plan,
+        max(
+            1,
+            int(settings.qa_text_evidence_top_k),
+            int(getattr(settings, "qa_text_retrieval_pool", 32)),
+        ),
+    )
     evidence_frames: List[Dict[str, Any]] = []
     for modality in ("ocr", "asr"):
         for row in text_evidence[modality]:
@@ -1668,11 +1988,22 @@ def grounded_video_qa(question: str, top_k: int) -> Tuple[List[Dict[str, Any]], 
         candidates,
         max(0.0, float(getattr(settings, "qa_event_window_seconds", 8.0))),
     )
+    candidate_video_limit = max(1, int(getattr(settings, "qa_candidate_max_videos", 4)))
+    video_hypotheses = _rank_video_hypotheses(
+        evidence_groups,
+        plan,
+        candidate_video_limit,
+    )
     selection_groups = _diversify_evidence_groups(
         evidence_groups,
         plan["visual_queries"],
         max(1, int(getattr(settings, "qa_max_evidence_groups", 4))),
         plan.get("visual_query_priorities"),
+    )
+    selection_groups = _prioritize_hypothesis_groups(
+        selection_groups,
+        video_hypotheses,
+        max(1, int(getattr(settings, "qa_max_evidence_groups", 4))),
     )
     selection_limit = max(1, min(int(settings.qa_max_frames), 16))
     selected = _select_grouped_frames(
@@ -1691,6 +2022,12 @@ def grounded_video_qa(question: str, top_k: int) -> Tuple[List[Dict[str, Any]], 
         selection_limit,
     )
     selected_ids = {f"f{index}": frame for index, frame in enumerate(selected, 1)}
+    candidate_bundles = _build_candidate_bundles(
+        video_hypotheses,
+        selected_ids,
+        candidate_video_limit,
+        max(1, int(getattr(settings, "qa_candidate_frames_per_video", 3))),
+    )
     prompt_text_evidence = _relevant_text_evidence(
         text_evidence,
         selected,
@@ -1702,6 +2039,8 @@ def grounded_video_qa(question: str, top_k: int) -> Tuple[List[Dict[str, Any]], 
     retries = 0
     verification_status = "not_run"
     detail_pass_status = "not_run"
+    candidate_answers: List[Dict[str, Any]] = []
+    promoted_candidate_id = ""
     prompt_evidence_sent = {"ocr": 0, "asr": 0}
     answer_max_chars = max(20, min(int(getattr(settings, "qa_answer_max_chars", 100)), 500))
     return_best_guess = bool(getattr(settings, "qa_return_best_guess", True))
@@ -1726,6 +2065,16 @@ def grounded_video_qa(question: str, top_k: int) -> Tuple[List[Dict[str, Any]], 
                         f"time={_evidence_timestamp(row, modality):.3f}: {text}"
                     )
         metadata_lines = _video_metadata_lines(selected)
+        hypothesis_lines = [
+            (
+                f"video={hypothesis.get('video_id')} "
+                f"event_coverage={hypothesis.get('event_coverage')}/{hypothesis.get('event_total')} "
+                f"coverage_ratio={_float(hypothesis.get('event_coverage_ratio')):.2f} "
+                f"event_span_seconds={_float(hypothesis.get('event_span_seconds')):.1f} "
+                f"retrieval_score={_float(hypothesis.get('retrieval_score')):.3f}"
+            )
+            for hypothesis in video_hypotheses
+        ]
         set_comparison_lines: List[str] = []
         if plan.get("requires_set_comparison"):
             set_comparison_lines = [
@@ -1739,6 +2088,10 @@ def grounded_video_qa(question: str, top_k: int) -> Tuple[List[Dict[str, Any]], 
             f"Required answer format: {plan['expected_answer_format']}; maximum {answer_max_chars} characters.",
             f"Visual retrieval queries: {json.dumps(plan['visual_queries'], ensure_ascii=False)}",
             "Each event group is an alternative retrieved moment; use one group unless the question is temporal.",
+            "Never combine frames or text evidence from different video ids into one answer.",
+            "For a multi-event description, prefer one video that covers every event, even if another video's first frame score is higher.",
+            "Ranked coherent video hypotheses:",
+            *(hypothesis_lines or ["No coherent video hypothesis was available."]),
             "For counts, count subjects in one frame/event and do not add repeated subjects across frames.",
             *set_comparison_lines,
             "Text evidence:",
@@ -1985,6 +2338,127 @@ def grounded_video_qa(question: str, top_k: int) -> Tuple[List[Dict[str, Any]], 
             else:
                 verification_status = "unavailable"
 
+        if (
+            bool(getattr(settings, "qa_candidate_answers_enabled", True))
+            and len(candidate_bundles) > 1
+        ):
+            candidate_lines = [
+                f"Câu hỏi: {question}",
+                f"Loại câu trả lời: {plan['answer_type']}",
+                f"Định dạng: {plan['expected_answer_format']}; tối đa {answer_max_chars} ký tự.",
+                "Hãy trả lời độc lập cho từng candidate video dưới đây.",
+                "Không được lấy tên, số, OCR, ASR hay suy luận từ candidate khác.",
+            ]
+            for bundle in candidate_bundles:
+                candidate_lines.append(
+                    f"CANDIDATE {bundle['candidate_id']} video={bundle['video_id']} "
+                    f"event_coverage={bundle['event_coverage']}/{bundle['event_total']} "
+                    f"coverage_ratio={bundle['event_coverage_ratio']:.2f} "
+                    f"event_span_seconds={bundle['event_span_seconds']:.1f} "
+                    f"allowed_frames={json.dumps(bundle['frame_ids'], ensure_ascii=False)}"
+                )
+                bundle_metadata = _video_metadata_lines(list(bundle.get("frames", {}).values()))
+                for line in bundle_metadata:
+                    candidate_lines.append(f"{bundle['candidate_id']} METADATA {line}")
+                for modality in ("ocr", "asr"):
+                    for row in prompt_text_evidence[modality]:
+                        if _clean(row.get("video_id")) != bundle["video_id"]:
+                            continue
+                        evidence_text = _evidence_text(row, modality)
+                        if evidence_text:
+                            candidate_lines.append(
+                                f"{bundle['candidate_id']} {modality.upper()} "
+                                f"time={_evidence_timestamp(row, modality):.3f}: {evidence_text}"
+                            )
+
+            candidate_content: List[Dict[str, Any]] = [
+                {"type": "text", "text": "\n".join(candidate_lines)}
+            ]
+            for bundle in candidate_bundles:
+                for frame_id, frame in bundle.get("frames", {}).items():
+                    path = resolve_keyframe_path(frame)
+                    if path is None:
+                        continue
+                    candidate_content.append({
+                        "type": "text",
+                        "text": (
+                            f"{bundle['candidate_id']} {frame_id}: video={bundle['video_id']} "
+                            f"timestamp={frame.get('timestamp')} frame={frame.get('frame_name')}"
+                        ),
+                    })
+                    candidate_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": _image_to_data_url(Path(path), max_side)},
+                    })
+
+            candidate_payload: Dict[str, Any] = {}
+            for attempt in range(max_retries + 1):
+                try:
+                    candidate_payload = _request_candidate_answers(
+                        [
+                            {"role": "system", "content": CANDIDATE_SYSTEM_PROMPT},
+                            {"role": "user", "content": candidate_content},
+                        ],
+                        str(getattr(settings, "qa_answer_model", "") or settings.agent_vlm_model),
+                        float(settings.agent_vlm_timeout_seconds),
+                        min(1800, max(900, int(settings.qa_max_tokens) * 2)),
+                    )
+                    break
+                except Exception as exc:
+                    errors.append(f"candidates: {_clean(exc)[:150]}")
+                    logger.warning("Grounded Q&A candidate request failed: %s", exc)
+                    if attempt >= max_retries:
+                        break
+                    retries += 1
+                    time.sleep(
+                        max(0.0, float(settings.agent_vlm_retry_backoff_seconds)) * (2**attempt)
+                    )
+            candidate_answers, candidate_errors = _normalise_candidate_answers(
+                candidate_payload,
+                candidate_bundles,
+                plan["answer_type"],
+                answer_max_chars,
+            )
+            errors.extend(f"candidates: {error}" for error in candidate_errors)
+
+            # The independent candidate pass can still succeed when the main
+            # VLM call times out or returns an invalid contract.  In that
+            # situation, use the strongest coherent answered video instead
+            # of showing a generic 0% fallback above a valid candidate card.
+            primary_unresolved = bool(
+                verdict.get("status") == "uncertain"
+                and (
+                    _float(verdict.get("confidence")) <= 0.0
+                    or not verdict.get("supporting_frame_ids")
+                    or _is_unresolved_answer(verdict.get("answer"))
+                )
+            )
+            fallback_candidate = next(
+                (
+                    candidate
+                    for candidate in candidate_answers
+                    if candidate.get("status") == "answered"
+                    and candidate.get("supporting_frame_ids")
+                    and _float(candidate.get("confidence")) >= float(settings.qa_min_confidence)
+                ),
+                None,
+            )
+            if primary_unresolved and fallback_candidate is not None:
+                verdict = {
+                    key: fallback_candidate[key]
+                    for key in (
+                        "status",
+                        "answer",
+                        "confidence",
+                        "reason",
+                        "supporting_frame_ids",
+                        "used_ocr_evidence",
+                        "used_asr_evidence",
+                        "answer_language",
+                    )
+                }
+                promoted_candidate_id = str(fallback_candidate.get("candidate_id") or "")
+
     if verdict["status"] == "answered" and verdict["confidence"] < float(settings.qa_min_confidence):
         verdict = (
             _best_guess_answer(
@@ -2003,7 +2477,9 @@ def grounded_video_qa(question: str, top_k: int) -> Tuple[List[Dict[str, Any]], 
 
     supporting = set(verdict["supporting_frame_ids"])
     answer_mode = (
-        "verified"
+        "candidate"
+        if promoted_candidate_id
+        else "verified"
         if verdict["status"] == "answered"
         else "best_guess"
         if verdict["confidence"] > 0 and bool(verdict["supporting_frame_ids"])
@@ -2021,6 +2497,12 @@ def grounded_video_qa(question: str, top_k: int) -> Tuple[List[Dict[str, Any]], 
     ordered_candidates = supporting_selected + remaining_selected + [
         frame for frame in candidates if _identity(frame) not in selected_identity
     ]
+    candidate_ids_by_frame: Dict[str, List[str]] = {}
+    for bundle in candidate_bundles:
+        for frame in (bundle.get("frames") or {}).values():
+            candidate_ids_by_frame.setdefault(_identity(frame), []).append(
+                str(bundle.get("candidate_id"))
+            )
     output: List[Dict[str, Any]] = []
     for rank, frame in enumerate(ordered_candidates[: max(1, top_k)], 1):
         item = dict(frame)
@@ -2036,6 +2518,7 @@ def grounded_video_qa(question: str, top_k: int) -> Tuple[List[Dict[str, Any]], 
         item["qa_used_asr_evidence"] = verdict["used_asr_evidence"]
         item["qa_answer_language"] = "vi"
         item["qa_answer_mode"] = answer_mode
+        item["qa_candidate_ids"] = candidate_ids_by_frame.get(_identity(item), [])
         output.append(item)
 
     summary = {
@@ -2043,12 +2526,14 @@ def grounded_video_qa(question: str, top_k: int) -> Tuple[List[Dict[str, Any]], 
         "answer": verdict["answer"],
         "answer_language": "vi",
         "answer_mode": answer_mode,
+        "selected_candidate_id": promoted_candidate_id or None,
         "confidence": verdict["confidence"],
         "reason": verdict["reason"],
         "supporting_frame_ids": verdict["supporting_frame_ids"],
         "answer_type": plan["answer_type"],
         "expected_answer_format": plan["expected_answer_format"],
         "visual_queries": plan["visual_queries"],
+        "event_queries": plan.get("event_queries") or [],
         "retrieved_frames": len(visual_frames),
         "evaluated_frames": len(selected),
         "evidence_groups": len(evidence_groups),
@@ -2060,6 +2545,7 @@ def grounded_video_qa(question: str, top_k: int) -> Tuple[List[Dict[str, Any]], 
                 "video_event_coverage": int(group.get("video_event_coverage") or 0),
                 "video_event_best_ranks": group.get("video_event_best_ranks") or {},
                 "video_event_worst_rank": int(group.get("video_event_worst_rank") or 100000),
+                "video_event_span_seconds": round(_float(group.get("video_event_span_seconds")), 3),
                 "video_query_coverage": int(group.get("video_query_coverage") or 0),
                 "frame_ids": [
                     str(frame.get("frame_id") or frame.get("frame_name") or "")
@@ -2070,6 +2556,22 @@ def grounded_video_qa(question: str, top_k: int) -> Tuple[List[Dict[str, Any]], 
         ],
         "evaluated_groups": len({frame.get("qa_group_id") for frame in selected if frame.get("qa_group_id")}),
         "selected_group_ids": [str(group.get("id")) for group in selection_groups],
+        "video_hypotheses": [
+            {
+                "video_id": hypothesis.get("video_id"),
+                "score": round(_float(hypothesis.get("score")), 6),
+                "retrieval_score": round(_float(hypothesis.get("retrieval_score")), 6),
+                "event_coverage": int(hypothesis.get("event_coverage") or 0),
+                "event_total": int(hypothesis.get("event_total") or 0),
+                "event_coverage_ratio": round(_float(hypothesis.get("event_coverage_ratio")), 4),
+                "event_span_seconds": round(_float(hypothesis.get("event_span_seconds")), 3),
+                "event_worst_rank": int(hypothesis.get("event_worst_rank") or 100000),
+                "query_coverage": int(hypothesis.get("query_coverage") or 0),
+                "complete_event_match": bool(hypothesis.get("complete_event_match")),
+            }
+            for hypothesis in video_hypotheses
+        ],
+        "answer_candidates": candidate_answers,
         "ocr_evidence": len(text_evidence["ocr"]),
         "asr_evidence": len(text_evidence["asr"]),
         "ocr_evidence_sent": prompt_evidence_sent["ocr"],

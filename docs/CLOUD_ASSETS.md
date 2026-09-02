@@ -121,10 +121,14 @@ The `fine_keyframes_jina_clip_v2_1024d_v2` index is already published. To use it
    manifest), then upload it once to `metadata/hcmai-assets.json`.
 2. Per member: `CLOUD_ASSETS_ENABLED=true`, `CLOUD_ASSETS_PROVIDER=azure_blob`,
    `AZURE_STORAGE_CONNECTION_STRING=…`, `RETRIEVAL_BACKEND=jina_clip_v2`,
-   `JINA_MODEL_PATH=jinaai/jina-clip-v2`, `JINA_MODEL_REVISION=<pinned sha>`.
-   Save → restart → Cloud Assets tab → **Sync artifacts** (pulls only the four
-   `jina_*` artifacts) → the retriever picks up the synced FAISS index +
-   parquet automatically.
+   `JINA_MODEL_PATH=jinaai/jina-clip-v2` (leave `JINA_MODEL_REVISION` blank to
+   auto-load + log the commit). Save → restart.
+3. With `CLOUD_ASSETS_AUTOSYNC=true` (default) the app then syncs the four
+   `jina_*` artifacts and warms the retriever **in the background at
+   startup** — nothing to click. Watch it on the **Cloud Assets** tab: an
+   overall progress bar plus a per-artifact bar with byte counts. Or trigger
+   it yourself any time with **Sync artifacts**. The keyframe images stream
+   on demand (small, LRU-cached) once the index is live.
 
 ## (Re)build the Jina runtime artifacts
 

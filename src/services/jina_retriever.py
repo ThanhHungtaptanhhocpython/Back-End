@@ -14,22 +14,31 @@ one and scripts/model_encoding/run_beit3_encoder.py-derived pipelines for the
 BEiT3 one). Nothing in this module ever mixes a vector, a vector id, or a
 frame path from one into the other.
 
-The model is loaded from a local snapshot -- `JINA_LOCAL_FILES_ONLY` (default
-True) forces transformers to resolve it from the already-downloaded local
-HuggingFace cache instead of reaching the network at request time.
-`JINA_MODEL_REVISION` pins the exact checkpoint the FAISS index was built
-with; it is strongly recommended but not required (blank -> a loud one-time
-warning + the resolved commit is logged so it can be pinned afterwards).
-Nothing here imports `torch` or `transformers` at module scope, and the
-retriever singleton is only ever constructed from inside a request handler
-(see `get_jina_retriever`), so merely importing this module -- or starting
-the app -- loads nothing.
+An **immutable** commit revision (a git SHA -- never a branch/tag/'main') is
+**mandatory in every environment**: from `JINA_MODEL_REVISION` or the
+`model_revision` in `jina_index_meta.json`. The two are cross-checked at
+construction and the loaded model's commit is verified against the pin before
+the first query; any disagreement, or an unverifiable commit, is a hard
+error. `JINA_MODEL_PATH` may be:
+
+* an existing local directory -- loaded directly, no network. Its revision
+  must be provable (a `jina_model_revision` sidecar file, or an HF snapshot
+  dir named by its commit) and must match the pin.
+* a repo id -- the exact pinned commit is fetched once via
+  `huggingface_hub.snapshot_download` (`JINA_MODEL_AUTO_BOOTSTRAP`, default
+  on, needs `JINA_LOCAL_FILES_ONLY=false`); no manually pre-populated cache.
+
+Nothing here imports `torch`, `transformers` or `huggingface_hub` at module
+scope, and the retriever singleton is only ever constructed from inside a
+request handler / the startup warmer (see `get_jina_retriever`), so merely
+importing this module -- or starting the app -- loads nothing.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -42,6 +51,25 @@ from src.config.settings import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 EXPECTED_DIM = 1024
+
+# ENV values that additionally require a complete jina_index_meta.json.
+_RELEASE_ENVS = {"production", "prod", "release", "staging"}
+
+# An immutable model pin: a git commit SHA (7-64 hex). Branch/tag names and
+# moving refs are rejected -- Jina query embeddings must use the *exact*
+# commit that produced the cloud FAISS index, in every environment.
+_IMMUTABLE_REV_RE = re.compile(r"\A[0-9a-fA-F]{7,64}\Z")
+_MOVING_REFS = {"main", "master", "head", "latest", "dev", "develop", "stable"}
+_LOCAL_REVISION_SIDECARS = ("jina_model_revision", "jina_model_revision.txt", ".jina_model_revision")
+
+
+def _revisions_match(a: str, b: str) -> bool:
+    """True if two commit ids refer to the same commit, tolerating a short vs
+    full SHA (one is a hex prefix of the other)."""
+    a, b = a.strip().lower(), b.strip().lower()
+    if not a or not b:
+        return False
+    return a == b or a.startswith(b) or b.startswith(a)
 
 # Canonical internal column contract. Two on-disk parquet schemas normalize to
 # it (see `_normalize_global_ids`):
@@ -73,12 +101,34 @@ _REQUIRED_COLUMNS = (
 
 
 def _to_float(value: Any) -> float:
-    """NaN/None/pd.NA -> 0.0; used only for sort keys, never for output."""
+    """NaN/None/pd.NA -> 0.0; used only for order-of-magnitude sort tie-breaks
+    (e.g. embedding row), never for a timestamp and never for output."""
     try:
         f = float(value)
     except (TypeError, ValueError):
         return 0.0
     return f if np.isfinite(f) else 0.0
+
+
+def _to_float_or_none(value: Any) -> float | None:
+    """Nullable numeric parser for timestamp-sensitive code.
+
+    Unlike :func:`_to_float`, a missing / non-finite value stays missing
+    (``None``) instead of collapsing to ``0.0`` -- an untimestamped keyframe
+    must never look like a zero-second keyframe.
+    """
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if np.isfinite(f) else None
 
 
 def _normalize_global_ids(df: pd.DataFrame, source: Path) -> pd.DataFrame:
@@ -164,6 +214,10 @@ class JinaRetriever:
         self._index_meta = self._load_optional_json(
             self._artifact("jina_index_meta", self._settings.jina_index_meta_path)
         )
+        # Resolved *before* the consistency checks: a missing / non-immutable
+        # pin, or a model/index revision disagreement, must fail construction
+        # -- never surface at first query. Always a validated commit SHA.
+        self._expected_model_revision: str = self._resolve_expected_model_revision()
         self._validate_consistency()
 
         self._id_to_row: dict[int, dict] = {
@@ -249,14 +303,173 @@ class JinaRetriever:
             except json.JSONDecodeError as exc:
                 raise JinaRetrieverError(f"Failed to parse jina_index_meta.json at {resolved}: {exc}") from exc
 
-    def _validate_consistency(self) -> None:
-        ntotal = self._index.ntotal
-        n_rows = len(self._global_ids)
-        if ntotal != n_rows:
+    def _is_release_mode(self) -> bool:
+        return str(getattr(self._settings, "env", "") or "").strip().lower() in _RELEASE_ENVS
+
+    def _meta_get(self, *keys: str) -> Any:
+        meta = self._index_meta or {}
+        for key in keys:
+            if key in meta and meta[key] not in (None, ""):
+                return meta[key]
+        return None
+
+    @staticmethod
+    def _validate_immutable_revision(rev: str, where: str) -> str:
+        r = (rev or "").strip()
+        if r.lower() in _MOVING_REFS or not _IMMUTABLE_REV_RE.match(r):
             raise JinaRetrieverError(
-                f"Jina FAISS index ntotal={ntotal} does not match jina_global_ids.parquet "
-                f"row count={n_rows}. The index and metadata are out of sync."
+                f"{where}={rev!r} is not an immutable commit revision. Jina query "
+                f"embeddings must use the exact git commit SHA that produced the "
+                f"cloud FAISS index -- not a branch, tag, or moving ref like 'main'."
             )
+        return r
+
+    def _resolve_expected_model_revision(self) -> str:
+        """The exact Jina CLIP v2 commit the query encoder must resolve to.
+
+        Precedence: ``JINA_MODEL_REVISION`` (explicit operator pin) then the
+        ``model_revision`` stamped into ``jina_index_meta.json`` at build time.
+        Both are validated to be immutable commit SHAs; if both are set and
+        disagree, that is a hard build/config mismatch. A resolvable pin is
+        **mandatory in every environment** -- there is no unpinned dev path.
+        """
+        configured = (getattr(self._settings, "jina_model_revision", None) or "").strip() or None
+        meta_rev = self._meta_get("model_revision", "model_commit", "revision")
+        meta_rev = (str(meta_rev).strip() or None) if meta_rev is not None else None
+
+        if configured is not None:
+            configured = self._validate_immutable_revision(configured, "JINA_MODEL_REVISION")
+        if meta_rev is not None:
+            meta_rev = self._validate_immutable_revision(
+                meta_rev, "jina_index_meta.json model_revision"
+            )
+        if configured and meta_rev and not _revisions_match(configured, meta_rev):
+            raise JinaRetrieverError(
+                f"Jina model revision mismatch: JINA_MODEL_REVISION={configured!r} but "
+                f"jina_index_meta.json model_revision={meta_rev!r}. The FAISS index was "
+                f"built with a different checkpoint than the one pinned for querying."
+            )
+        expected = configured or meta_rev
+        if expected is None:
+            raise JinaRetrieverError(
+                "A pinned Jina model revision is required for "
+                "RETRIEVAL_BACKEND=jina_clip_v2: set JINA_MODEL_REVISION to the exact "
+                "commit SHA the cloud index was embedded with, or publish "
+                "`model_revision` in jina_index_meta.json. A published "
+                "jina_index_meta.json that lacks it must be rebuilt/republished "
+                "before deployment."
+            )
+        return expected
+
+    def _validate_consistency(self) -> None:
+        self._validate_index_semantics()
+        self._validate_id_map_matches_parquet()
+        self._validate_index_meta()
+
+    def _validate_index_semantics(self) -> None:
+        """The index must be an ``IndexIDMap2`` -- it is searched by, and
+        reconstructed from, explicit ``vector_id`` values (see
+        ``search_by_vector_id`` / ``_search``). A plain ``IndexFlat*`` returns
+        positional ids and cannot ``reconstruct`` by external id, which would
+        silently mis-map every hit."""
+        type_name = type(self._index).__name__
+        if type_name != "IndexIDMap2":
+            raise JinaRetrieverError(
+                f"Jina FAISS index type is {type_name!r}, expected 'IndexIDMap2'. "
+                f"The retriever searches and reconstructs by explicit vector_id."
+            )
+        try:
+            first_id = int(next(iter(self._global_ids[_COL_VECTOR_ID])))
+            self._index.reconstruct(first_id)
+        except StopIteration:
+            raise JinaRetrieverError("jina global_ids parquet has no rows.") from None
+        except Exception as exc:  # noqa: BLE001
+            raise JinaRetrieverError(
+                f"Jina FAISS index does not support reconstruct-by-id "
+                f"(IndexIDMap2 semantics): {type(exc).__name__}: {exc}"
+            ) from exc
+
+    def _validate_id_map_matches_parquet(self) -> None:
+        """Compare the *set* of FAISS ids against parquet ``vector_id`` -- not
+        just the counts. Equal counts with disjoint id sets means the index and
+        the metadata describe different corpora."""
+        import faiss
+
+        try:
+            id_array = faiss.vector_to_array(self._index.id_map)
+        except Exception as exc:  # noqa: BLE001
+            raise JinaRetrieverError(
+                f"Could not read the Jina FAISS id map for validation: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+        index_ids = {int(x) for x in id_array}
+        parquet_ids = {int(x) for x in self._global_ids[_COL_VECTOR_ID]}
+        if len(id_array) != len(self._global_ids):
+            raise JinaRetrieverError(
+                f"Jina FAISS id map has {len(id_array)} ids but "
+                f"jina_global_ids.parquet has {len(self._global_ids)} rows."
+            )
+        if index_ids != parquet_ids:
+            only_index = sorted(index_ids - parquet_ids)[:5]
+            only_parquet = sorted(parquet_ids - index_ids)[:5]
+            raise JinaRetrieverError(
+                "Jina FAISS id map and jina_global_ids.parquet vector_id set differ "
+                f"(same count). ids only in index: {only_index}; "
+                f"ids only in parquet: {only_parquet}."
+            )
+
+    def _validate_index_meta(self) -> None:
+        ntotal = self._index.ntotal
+        if self._index_meta is None:
+            if self._is_release_mode():
+                raise JinaRetrieverError(
+                    "jina_index_meta.json is required when ENV is a release "
+                    "environment (backend / dimension / vector count / model "
+                    "revision cannot be verified without it)."
+                )
+            logger.warning(
+                "jina_index_meta.json is absent; skipping backend/dimension/"
+                "metric/model-revision cross-checks (dev only)."
+            )
+            return
+
+        backend = self._meta_get("backend")
+        if backend is not None and str(backend) != self.backend_id:
+            raise JinaRetrieverError(
+                f"jina_index_meta.json backend={backend!r}, expected {self.backend_id!r}."
+            )
+
+        dim = self._meta_get("dimension", "embedding_dim", "dim")
+        if dim is not None and int(dim) != self._index.d:
+            raise JinaRetrieverError(
+                f"jina_index_meta.json dimension={dim} != FAISS index d={self._index.d}."
+            )
+        if int(getattr(self._settings, "jina_truncate_dim", EXPECTED_DIM)) != self._index.d:
+            raise JinaRetrieverError(
+                f"JINA_TRUNCATE_DIM={self._settings.jina_truncate_dim} != FAISS index "
+                f"d={self._index.d}; query vectors would not match the corpus."
+            )
+
+        count = self._meta_get("vector_count", "ntotal", "num_vectors")
+        if count is not None and int(count) != ntotal:
+            raise JinaRetrieverError(
+                f"jina_index_meta.json vector_count={count} != FAISS index ntotal={ntotal}."
+            )
+
+        metric = str(self._meta_get("metric") or "").strip().lower()
+        if metric and not any(t in metric for t in ("inner_product", "ip", "cosine", "dot")):
+            raise JinaRetrieverError(
+                f"jina_index_meta.json metric={metric!r} is not an inner-product / "
+                f"cosine metric; the retriever searches IndexFlatIP on L2-normalized vectors."
+            )
+        norm = str(self._meta_get("normalization", "norm") or "").strip().lower()
+        if norm and norm not in ("l2", "l2norm", "unit", "cosine"):
+            raise JinaRetrieverError(
+                f"jina_index_meta.json normalization={norm!r}; expected 'l2'."
+            )
+        # `_resolve_expected_model_revision` (run before this) has already
+        # guaranteed a validated, immutable pin exists and agrees with any
+        # `model_revision` in this file.
 
     def _build_video_to_rows(self) -> dict[str, list[dict]]:
         lookup: dict[str, list[dict]] = {}
@@ -265,21 +478,195 @@ class JinaRetriever:
             if video_id:
                 lookup.setdefault(video_id, []).append(row)
         for video_id in lookup:
-            lookup[video_id].sort(
-                key=lambda r: (_to_float(r.get(_COL_TIMESTAMP_MS)), _to_float(r.get(_COL_EMBEDDING_ROW)))
-            )
+            # Rows with a missing timestamp sort *after* every timestamped row
+            # (never before a 0.0s frame), then by embedding row for stability.
+            lookup[video_id].sort(key=self._chrono_sort_key)
         return lookup
+
+    @staticmethod
+    def _chrono_sort_key(row: dict) -> tuple[int, float, float]:
+        ts = _to_float_or_none(row.get(_COL_TIMESTAMP_MS))
+        return (1 if ts is None else 0, ts if ts is not None else 0.0, _to_float(row.get(_COL_EMBEDDING_ROW)))
+
+    # ------------------------------------------------------------------
+    # Model provisioning (deterministic, pinned)
+    # ------------------------------------------------------------------
+
+    def _model_source(self) -> str:
+        return self._settings.jina_model_path or "jinaai/jina-clip-v2"
+
+    def _is_local_model_dir(self) -> bool:
+        """``JINA_MODEL_PATH`` points at an existing directory (not a repo id)."""
+        try:
+            return Path(self._model_source()).is_dir()
+        except OSError:
+            return False
+
+    def _auto_bootstrap_allowed(self) -> bool:
+        return bool(getattr(self._settings, "jina_model_auto_bootstrap", True)) and not bool(
+            self._settings.jina_local_files_only
+        )
+
+    def _derive_local_revision(self, model_dir: Path) -> str | None:
+        """Durable commit id for a local model directory, or ``None``.
+
+        Order: a ``jina_model_revision`` sidecar file we define, then the
+        HuggingFace snapshot layout (``.../snapshots/<commit-sha>/``) where the
+        directory *is* named by its commit. Never guessed.
+        """
+        for sidecar in _LOCAL_REVISION_SIDECARS:
+            p = model_dir / sidecar
+            try:
+                if p.is_file():
+                    raw = p.read_text(encoding="utf-8").strip()
+                    if raw:
+                        return self._validate_immutable_revision(raw, str(p))
+            except OSError:
+                pass
+        name = model_dir.name.strip()
+        if name.lower() not in _MOVING_REFS and _IMMUTABLE_REV_RE.match(name):
+            return name
+        return None
+
+    def _resolve_local_model_dir(self) -> tuple[Path, str]:
+        """Validate a local ``JINA_MODEL_PATH`` and return ``(dir, revision)``,
+        raising if its revision cannot be proven or does not match the pin."""
+        model_dir = Path(self._model_source())
+        expected = getattr(self, "_expected_model_revision", None)
+        local_rev = self._derive_local_revision(model_dir)
+        if local_rev is None:
+            raise JinaRetrieverError(
+                f"JINA_MODEL_PATH={model_dir} is a local directory but its model "
+                f"revision cannot be proven. Write the exact commit SHA to "
+                f"'{model_dir / _LOCAL_REVISION_SIDECARS[0]}', or point JINA_MODEL_PATH "
+                f"at a HuggingFace snapshot directory named by its commit."
+            )
+        if expected and not _revisions_match(local_rev, expected):
+            raise JinaRetrieverError(
+                f"Local Jina model at {model_dir} is revision {local_rev!r} but the "
+                f"index/config pin is {expected!r}. Point JINA_MODEL_PATH at the "
+                f"matching snapshot or fix the pin."
+            )
+        return model_dir, local_rev
+
+    def _ensure_model_snapshot(self, *, provision: bool) -> Path:
+        """Return the local snapshot directory for the pinned revision of a
+        *remote* repo id, downloading it via ``huggingface_hub.snapshot_download``
+        when ``provision`` is set and auto-bootstrap is allowed. Raises a clear
+        :class:`JinaRetrieverError` otherwise -- never a bare stack trace.
+        """
+        expected = getattr(self, "_expected_model_revision", None)
+        source = self._model_source()
+        if not expected:  # defensive: construction already guarantees a pin
+            raise JinaRetrieverError("Jina model revision is not pinned.")
+
+        allow_download = provision and self._auto_bootstrap_allowed()
+        try:
+            from huggingface_hub import snapshot_download
+        except ImportError as exc:
+            raise JinaRetrieverError(
+                "huggingface_hub is required to provision / verify the pinned Jina "
+                "CLIP v2 model but is not installed."
+            ) from exc
+
+        try:
+            path = snapshot_download(source, revision=expected, local_files_only=not allow_download)
+        except Exception as exc:  # noqa: BLE001 - normalized into a clear typed error
+            if allow_download:
+                raise JinaRetrieverError(
+                    f"Could not download the pinned Jina CLIP v2 model {source}@{expected}: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
+            raise JinaRetrieverError(
+                f"Jina CLIP v2 model {source}@{expected} is not present locally and "
+                f"downloading is disabled (JINA_LOCAL_FILES_ONLY=true / "
+                f"JINA_MODEL_AUTO_BOOTSTRAP=false). Provision it once with "
+                f"JINA_LOCAL_FILES_ONLY=false, or pre-place the snapshot."
+            ) from exc
+        return Path(path)
+
+    def ensure_model_ready(self, *, provision: bool = False) -> None:
+        """Raise :class:`JinaRetrieverError` with a clear message if the query
+        encoder cannot be made available. Never loads weights. Safe to call
+        from a readiness probe (``provision=False``) or the startup warmer
+        (``provision=True``)."""
+        if self._model is not None:
+            return
+        if not getattr(self, "_expected_model_revision", None):
+            raise JinaRetrieverError("Jina model revision is not pinned.")
+        if self._is_local_model_dir():
+            self._resolve_local_model_dir()  # raises on unprovable / mismatched rev
+            return
+        self._ensure_model_snapshot(provision=provision)
+
+    def readiness(self) -> dict[str, Any]:
+        """Structured, non-throwing readiness snapshot for the settings API."""
+        state = {
+            "backend": self.backend_id,
+            "index_loaded": self._index is not None,
+            "rows": len(self._global_ids),
+            "model_loaded": self._model is not None,
+            "expected_model_revision": getattr(self, "_expected_model_revision", None),
+            "model_source": self._model_source(),
+            "model_source_is_local_dir": self._is_local_model_dir(),
+        }
+        if self._model is not None:
+            state["ready"] = True
+            return state
+        try:
+            self.ensure_model_ready(provision=False)
+        except JinaRetrieverError as exc:
+            # A remote pinned model that just is not on disk yet is "preparing"
+            # (auto-bootstrap will fetch it); everything else -- a local dir
+            # with no/wrong revision, bootstrap disabled -- is a real error.
+            can_bootstrap = not self._is_local_model_dir() and self._auto_bootstrap_allowed()
+            state.update(
+                ready=False,
+                state="preparing" if can_bootstrap else "error",
+                detail=str(exc),
+            )
+            return state
+        state["ready"] = True
+        return state
+
+    def warm_model(self) -> None:
+        """Explicit model warm for the startup path -- actually loads weights
+        (bootstrapping the pinned snapshot first if allowed)."""
+        self._load_model()
+
+    def _verify_resolved_commit(self, resolved: str | None) -> None:
+        """Fail closed unless the loaded model's commit is proven to match the
+        pin. A missing / unreadable commit is a failure, never a warning."""
+        expected = getattr(self, "_expected_model_revision", None)
+        if not expected:
+            raise JinaRetrieverError("Jina model revision is not pinned.")
+        if not resolved:
+            raise JinaRetrieverError(
+                f"Could not determine the loaded Jina CLIP v2 model's commit to verify "
+                f"it against the pinned revision {expected!r}. Refusing to serve queries "
+                f"with an unverifiable model."
+            )
+        if not _revisions_match(str(resolved), str(expected)):
+            raise JinaRetrieverError(
+                f"Loaded Jina CLIP v2 commit {resolved!r} != pinned revision "
+                f"{expected!r} (JINA_MODEL_REVISION / jina_index_meta.json). Query "
+                f"vectors would not match the FAISS index."
+            )
+        logger.info("Jina CLIP v2 model commit verified against the pin: %s", resolved)
 
     def _load_model(self) -> Any:
         """Load the Jina CLIP v2 model. Only ever called lazily, from inside
-        `encode_text` / `encode_image`, never at import or construction time.
+        `encode_text` / `encode_image` / `warm_model`, never at import or
+        construction time.
 
-        `JINA_MODEL_REVISION` pins the exact checkpoint the FAISS index was
-        built with. It is strongly recommended but not required: when blank,
-        the model resolves to whatever the local HF cache holds (or, with
-        `JINA_LOCAL_FILES_ONLY=false`, the current Hub HEAD) and a loud
-        one-time warning is logged with the resolved commit so it can be
-        pinned afterwards.
+        * ``JINA_MODEL_PATH`` = an existing directory -> load from it directly
+          (no snapshot download); its durable revision is checked against the
+          pin first.
+        * ``JINA_MODEL_PATH`` = a repo id -> provision the exact pinned commit
+          via ``huggingface_hub.snapshot_download`` and load that snapshot.
+
+        Either way the loaded commit is verified against the pin before the
+        model is usable (:meth:`_verify_resolved_commit`).
         """
         if self._model is not None:
             return self._model
@@ -288,31 +675,39 @@ class JinaRetriever:
                 return self._model
             from transformers import AutoModel
 
-            revision = (self._settings.jina_model_revision or "").strip() or None
-            source = self._settings.jina_model_path or "jinaai/jina-clip-v2"
-            if revision is None:
-                logger.warning(
-                    "JINA_MODEL_REVISION is not set: loading %s unpinned. Query "
-                    "vectors will only match the FAISS index while this resolves "
-                    "to the same checkpoint the corpus was embedded with. Pin it "
-                    "once the resolved commit (logged next) is confirmed.",
-                    source,
+            expected = getattr(self, "_expected_model_revision", None)
+            if not expected:
+                raise JinaRetrieverError(
+                    "Refusing to load the Jina CLIP v2 model without a pinned commit "
+                    "revision (JINA_MODEL_REVISION / jina_index_meta.json)."
                 )
-            logger.info(
-                "Loading Jina CLIP v2 from %s@%s (local_files_only=%s)",
-                source,
-                revision or "<unpinned>",
-                self._settings.jina_local_files_only,
-            )
-            model = AutoModel.from_pretrained(
-                source,
-                revision=revision,
-                trust_remote_code=bool(self._settings.jina_trust_remote_code),
-                local_files_only=bool(self._settings.jina_local_files_only),
-            )
-            resolved = getattr(getattr(model, "config", None), "_commit_hash", None)
-            if resolved:
-                logger.info("Jina CLIP v2 resolved commit: %s", resolved)
+
+            if self._is_local_model_dir():
+                model_dir, local_rev = self._resolve_local_model_dir()
+                logger.info("Loading Jina CLIP v2 from local dir %s (revision %s)", model_dir, local_rev)
+                model = AutoModel.from_pretrained(
+                    str(model_dir),
+                    local_files_only=True,
+                    trust_remote_code=bool(self._settings.jina_trust_remote_code),
+                )
+                resolved = getattr(getattr(model, "config", None), "_commit_hash", None) or local_rev
+            else:
+                snapshot = self._ensure_model_snapshot(provision=True)
+                logger.info(
+                    "Loading Jina CLIP v2 from snapshot %s (%s@%s)",
+                    snapshot, self._model_source(), expected,
+                )
+                model = AutoModel.from_pretrained(
+                    str(snapshot),
+                    local_files_only=True,
+                    trust_remote_code=bool(self._settings.jina_trust_remote_code),
+                )
+                resolved = (
+                    getattr(getattr(model, "config", None), "_commit_hash", None)
+                    or (snapshot.name if _IMMUTABLE_REV_RE.match(snapshot.name) else None)
+                )
+
+            self._verify_resolved_commit(resolved)
             model = model.eval().to(self._device)
             self._model = model
             return self._model
@@ -551,10 +946,10 @@ class JinaRetriever:
         best_result = None
         best_delta = float("inf")
         for row in rows:
-            row_ts_ms = row.get(_COL_TIMESTAMP_MS)
-            if row_ts_ms is None or not np.isfinite(_to_float(row_ts_ms)):
-                continue
-            delta = abs(_to_float(row_ts_ms) - target_ms)
+            row_ts_ms = _to_float_or_none(row.get(_COL_TIMESTAMP_MS))
+            if row_ts_ms is None:
+                continue  # untimestamped frame -- never a 0-second evidence match
+            delta = abs(row_ts_ms - target_ms)
             if delta < best_delta:
                 best_delta = delta
                 best_result = row

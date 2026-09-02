@@ -86,9 +86,24 @@ id. The keyframe resolver (`src/services/assets/__init__.py`) looks at
 (see [Keyframe resolution](#keyframe-resolution)).
 
 There is no `jina_checkpoint`/`jina_tokenizer` artifact: the Jina CLIP v2
-model itself is loaded from a **local, pinned** HuggingFace snapshot
-(`JINA_MODEL_PATH` + `JINA_MODEL_REVISION`, `JINA_LOCAL_FILES_ONLY=true`), not
-synced through this manifest.
+model itself is **not** synced through this manifest. It is loaded from a
+**pinned** HuggingFace snapshot and the pin is **mandatory in every
+environment** (`RETRIEVAL_BACKEND=jina_clip_v2`):
+
+* `JINA_MODEL_REVISION` must be an **immutable git commit SHA** — the exact
+  commit `jinaai/jina-clip-v2` was at when the cloud index was embedded — or
+  the published `jina_index_meta.json` must carry that SHA in `model_revision`.
+  A branch/tag/`main`, or a `jina_index_meta.json` with no `model_revision`,
+  is rejected: **rebuild and republish** such an `index_meta.json` (with
+  `scripts/cloud/build_jina_index.py --model-revision <sha>`) before deploy.
+* `JINA_MODEL_PATH` = a repo id → the pinned commit is fetched once via
+  `huggingface_hub` (`JINA_LOCAL_FILES_ONLY=false`, `JINA_MODEL_AUTO_BOOTSTRAP=true`).
+* `JINA_MODEL_PATH` = an existing local directory → loaded directly, offline;
+  its revision must be provable (a `jina_model_revision` file inside it, or an
+  HF snapshot directory named by its commit) and must match the pin.
+
+The loaded model's commit is verified against the pin before the first query;
+an unverifiable or mismatched commit fails closed.
 
 ### Azure object layout (as produced by the existing embedding pipeline)
 
@@ -121,8 +136,10 @@ The `fine_keyframes_jina_clip_v2_1024d_v2` index is already published. To use it
    manifest), then upload it once to `metadata/hcmai-assets.json`.
 2. Per member: `CLOUD_ASSETS_ENABLED=true`, `CLOUD_ASSETS_PROVIDER=azure_blob`,
    `AZURE_STORAGE_CONNECTION_STRING=…`, `RETRIEVAL_BACKEND=jina_clip_v2`,
-   `JINA_MODEL_PATH=jinaai/jina-clip-v2` (leave `JINA_MODEL_REVISION` blank to
-   auto-load + log the commit). Save → restart.
+   `JINA_MODEL_PATH=jinaai/jina-clip-v2`, and **`JINA_MODEL_REVISION=<the exact
+   `jinaai/jina-clip-v2` commit SHA the index was embedded with>`** — unless the
+   published `jina_index_meta.json` already carries that SHA in `model_revision`
+   (regenerate + reupload it if it does not). Save → restart.
 3. With `CLOUD_ASSETS_AUTOSYNC=true` (default) the app then syncs the four
    `jina_*` artifacts and warms the retriever **in the background at
    startup** — nothing to click. Watch it on the **Cloud Assets** tab: an
@@ -207,14 +224,21 @@ Switching backends is a config-only change — no code deploy:
    artifacts**, or `POST /settings/cloud/sync`) if not already local.
 2. Set `RETRIEVAL_BACKEND` to `beit3` or `jina_clip_v2` in Settings →
    Retrieval (or `.env`) and restart.
-3. Textual KIS, grounded Q&A candidate retrieval, and TRAKE per-event
-   retrieval now come from the new backend. Image-similarity endpoints
-   ('Similar' on a capture, search-by-uploaded-image) are unaffected — they
-   always use BEiT3, so its artifacts should stay configured/synced even
-   while `RETRIEVAL_BACKEND=jina_clip_v2`.
-4. Roll back by setting `RETRIEVAL_BACKEND` back to `beit3` and restarting;
-   nothing about the BEiT3 artifacts or index is touched by running with
-   Jina active, so this is always safe.
+3. **Every** retrieval path now comes from the new backend — textual KIS,
+   grounded Q&A candidate retrieval, TRAKE per-event retrieval, the video
+   timeline, and the image-similarity endpoints ('Similar' on a capture,
+   search-by-uploaded-image, similar-by-vector-id). A result card carries its
+   `retrieval_backend`; an image-pivot-by-id request sends it back and
+   `/imagesearch` returns **409** if it no longer matches the active backend
+   (a stale card from before the switch), so a mismatched id is never
+   reconstructed in the wrong index. Multimodal fusion joins OCR/ASR evidence
+   by `(video_id, timestamp)` rather than FAISS id whenever the active visual
+   backend is not BEiT3 (the OCR/ASR `faiss_id`/`nearest_faiss_id` fields are
+   BEiT3-space ids).
+4. Keep the BEiT3 artifacts configured/synced while Jina is active so a
+   rollback is instant. Roll back by setting `RETRIEVAL_BACKEND` back to
+   `beit3` and restarting; nothing about the BEiT3 artifacts or index is
+   touched by running with Jina active, so this is always safe.
 
 Because the two backends' FAISS indexes, vector-id spaces, and result rows
 never mix, a rollback (or a forward migration) is always a clean cut — there

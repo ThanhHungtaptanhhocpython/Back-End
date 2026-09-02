@@ -213,14 +213,17 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     # -- Retrieval: backend selection ----------------------------------------
     _f("RETRIEVAL_BACKEND", G_RETRIEVAL, CHOICE, choices=("beit3", "jina_clip_v2"),
        help="Which backend serves textual KIS, grounded Q&A candidate retrieval, "
-            "and TRAKE per-event retrieval. BEiT3 and Jina CLIP v2 are different "
-            "embedding spaces with independent FAISS indexes -- this never mixes "
-            "vectors from one into the other's search. Image-similarity endpoints "
-            "('Similar' on a capture, search-by-uploaded-image) always use BEiT3."),
+            "TRAKE per-event retrieval, the video timeline and the "
+            "image-similarity endpoints ('Similar' on a capture, "
+            "search-by-uploaded-image, similar-by-vector-id). BEiT3 and Jina "
+            "CLIP v2 are different embedding spaces with independent FAISS "
+            "indexes -- this never mixes vectors, or vector ids, from one into "
+            "the other's search."),
 
     # -- Retrieval (BEiT3) --------------------------------------------------
-    # Always needed for the image-similarity endpoints ('Similar' on a capture,
-    # search-by-uploaded-image), regardless of RETRIEVAL_BACKEND.
+    # Needed whenever RETRIEVAL_BACKEND=beit3 (every search path, image
+    # similarity included). Safe to leave configured while Jina is active so a
+    # rollback to beit3 is a config-only change.
     _f("BEIT3_FAISS_INDEX_PATH", G_RETRIEVAL, PATH, path_kind="file",
        help="FAISS index file for the BEiT3 visual-search path."),
     _f("BEIT3_GLOBAL_IDS_PATH", G_RETRIEVAL, PATH, path_kind="file", help="global_ids.parquet."),
@@ -261,6 +264,11 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
        hide_when={"RETRIEVAL_BACKEND": "beit3"},
        help="Never fetch the model from the network at request time; use only "
             "the already-downloaded local snapshot for JINA_MODEL_REVISION."),
+    _f("JINA_MODEL_AUTO_BOOTSTRAP", G_RETRIEVAL, BOOL,
+       hide_when={"RETRIEVAL_BACKEND": "beit3"},
+       help="On a clean machine, download the pinned JINA_MODEL_REVISION once "
+            "via huggingface_hub (needs JINA_LOCAL_FILES_ONLY=false). This is "
+            "the supported provisioning path -- no manual HF cache required."),
     _f("JINA_TRUST_REMOTE_CODE", G_RETRIEVAL, BOOL,
        hide_when={"RETRIEVAL_BACKEND": "beit3"},
        help="Jina CLIP v2 ships custom modeling code on the Hub; required True "

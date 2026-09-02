@@ -279,6 +279,351 @@ class ImageSearchTests(unittest.TestCase):
             self.retriever.search_by_vector_id(999999, top_k=2)
 
 
+# Realistic immutable commit ids (hex, >= 7 chars).
+_SHA_A = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+_SHA_B = "b0b0b0b0c1c1c1c1d2d2d2d2e3e3e3e3f4f4f4f4"
+
+
+def _good_meta(**over):
+    meta = {
+        "backend": "jina_clip_v2",
+        "dimension": EXPECTED_DIM,
+        "metric": "inner_product_on_l2_normalized_vectors",
+        "normalization": "l2",
+        "model_revision": _SHA_A,
+    }
+    meta.update(over)
+    return meta
+
+
+def _wire_for_validation(index, df, index_meta=None, settings=None):
+    """Hand-wire only what `_validate_consistency` / model-revision resolution
+    touch, then resolve the expected revision exactly as `__init__` does."""
+    r = _bare_retriever(settings or Settings(debug=False))
+    r._index = index
+    r._global_ids = df
+    r._index_meta = index_meta
+    r._expected_model_revision = r._resolve_expected_model_revision()
+    return r
+
+
+class IndexMetadataModelConsistencyTests(unittest.TestCase):
+    """Fix 5 -- construction-time validation must go beyond count-only equality:
+    IndexIDMap2 semantics, FAISS id-set == parquet vector_id set, and the
+    index_meta backend/dimension/metric/model-revision cross-checks."""
+
+    def test_accepts_a_fully_consistent_index(self):
+        index, df, _ = _synthetic_index_and_rows(0, [10, 20, 30])
+        r = _wire_for_validation(
+            index, df, _good_meta(vector_count=3),
+            Settings(debug=False, jina_model_revision=_SHA_A),
+        )
+        r._validate_consistency()  # must not raise
+
+    def test_wrong_index_type_is_rejected(self):
+        _idx, df, vectors = _synthetic_index_and_rows(1, [10, 20, 30])
+        plain = faiss.IndexFlatIP(EXPECTED_DIM)  # no IndexIDMap2 wrapper
+        plain.add(vectors)
+        r = _wire_for_validation(plain, df, _good_meta())
+        with self.assertRaises(JinaRetrieverError) as ctx:
+            r._validate_consistency()
+        self.assertIn("IndexIDMap2", str(ctx.exception))
+
+    def test_equal_count_but_different_id_sets_is_rejected(self):
+        index, _df, _ = _synthetic_index_and_rows(2, [10, 20, 30])
+        # Same row count (3), but vector_id 99 is not in the FAISS id map.
+        df = pd.DataFrame(
+            {
+                "vector_id": [10, 20, 99],
+                "split": ["L21"] * 3,
+                "video_id": ["L21_V001"] * 3,
+                "embedding_row": [0, 1, 2],
+                "keyframe_ordinal": [1, 2, 3],
+                "timestamp_ms": [0.0, 1000.0, 2000.0],
+                "asset_key": [f"L21/L21_V001/keyframe_{i:04d}.jpg" for i in range(3)],
+                "frame_path": [f"L21/L21_V001/keyframe_{i:04d}.jpg" for i in range(3)],
+                "source_frame_id": [0, 8, 16],
+            }
+        )
+        r = _wire_for_validation(index, df, _good_meta())
+        with self.assertRaises(JinaRetrieverError) as ctx:
+            r._validate_consistency()
+        self.assertIn("vector_id set differ", str(ctx.exception))
+
+    def test_wrong_model_revision_is_rejected_before_any_search(self):
+        index, df, _ = _synthetic_index_and_rows(3, [1, 2, 3])
+        # index_meta was built with one commit; the operator pinned another.
+        meta = _good_meta(model_revision=_SHA_A)
+        with self.assertRaises(JinaRetrieverError) as ctx:
+            _wire_for_validation(
+                index, df, meta,
+                Settings(debug=False, jina_model_revision=_SHA_B),
+            )
+        self.assertIn("revision mismatch", str(ctx.exception))
+
+    def test_index_meta_backend_mismatch_is_rejected(self):
+        index, df, _ = _synthetic_index_and_rows(4, [1, 2, 3])
+        r = _wire_for_validation(index, df, _good_meta(backend="beit3"))
+        with self.assertRaises(JinaRetrieverError):
+            r._validate_consistency()
+
+    def test_index_meta_dimension_mismatch_is_rejected(self):
+        index, df, _ = _synthetic_index_and_rows(5, [1, 2, 3])
+        r = _wire_for_validation(index, df, _good_meta(dimension=768))
+        with self.assertRaises(JinaRetrieverError):
+            r._validate_consistency()
+
+    def test_resolved_commit_mismatch_raises_on_model_load(self):
+        r = _bare_retriever(Settings(debug=False, jina_model_revision=_SHA_A))
+        r._expected_model_revision = _SHA_A
+        import threading as _t
+
+        r._model_lock = _t.Lock()
+        fake_model = MagicMock()
+        fake_model.config._commit_hash = _SHA_B  # the loaded weights are a different commit
+        fake_tf = MagicMock()
+        fake_tf.AutoModel.from_pretrained.return_value = fake_model
+        fake_hub = MagicMock()
+        fake_hub.snapshot_download.return_value = "/hf/snapshots/does-not-matter"
+        old_tf = sys.modules.get("transformers")
+        old_hub = sys.modules.get("huggingface_hub")
+        sys.modules["transformers"] = fake_tf
+        sys.modules["huggingface_hub"] = fake_hub
+        try:
+            with self.assertRaises(JinaRetrieverError) as ctx:
+                r._load_model()
+            self.assertIn("!= pinned revision", str(ctx.exception))
+        finally:
+            for name, old in (("transformers", old_tf), ("huggingface_hub", old_hub)):
+                if old is not None:
+                    sys.modules[name] = old
+                else:
+                    sys.modules.pop(name, None)
+
+    def test_missing_resolved_commit_is_a_failure_not_a_warning(self):
+        r = _bare_retriever(Settings(debug=False, jina_model_revision=_SHA_A))
+        r._expected_model_revision = _SHA_A
+        with self.assertRaises(JinaRetrieverError) as ctx:
+            r._verify_resolved_commit(None)
+        self.assertIn("Could not determine", str(ctx.exception))
+
+
+class _HubStub:
+    """Context-manager that installs a fake ``huggingface_hub`` module."""
+
+    def __init__(self, snapshot=None, side_effect=None):
+        self.calls = []
+        self.mod = MagicMock()
+
+        def _snap(source, revision=None, local_files_only=False):
+            self.calls.append({"source": source, "revision": revision,
+                               "local_files_only": local_files_only})
+            if side_effect is not None:
+                raise side_effect
+            return snapshot or f"/hf/cache/snapshots/{revision}"
+
+        self.mod.snapshot_download.side_effect = _snap
+
+    def __enter__(self):
+        self._old = sys.modules.get("huggingface_hub")
+        sys.modules["huggingface_hub"] = self.mod
+        return self
+
+    def __exit__(self, *a):
+        if self._old is not None:
+            sys.modules["huggingface_hub"] = self._old
+        else:
+            sys.modules.pop("huggingface_hub", None)
+
+
+class ModelProvisioningTests(unittest.TestCase):
+    """A clean machine must have a deterministic, pinned way to obtain the
+    model -- in every environment. No unpinned / moving-ref path."""
+
+    def test_missing_revision_rejected_in_every_env(self):
+        index, df, _ = _synthetic_index_and_rows(0, [1, 2])
+        meta = _good_meta()
+        meta.pop("model_revision")
+        for env in ("production", "development"):
+            with self.subTest(env=env):
+                with self.assertRaises(JinaRetrieverError) as ctx:
+                    _wire_for_validation(index, df, meta, Settings(debug=False, env=env))
+                self.assertIn("pinned Jina model revision is required", str(ctx.exception))
+
+    def test_moving_ref_revision_is_rejected(self):
+        index, df, _ = _synthetic_index_and_rows(0, [1, 2])
+        meta = _good_meta()
+        meta.pop("model_revision")
+        for bad in ("main", "master", "v2.0", "HEAD", "latest"):
+            with self.subTest(rev=bad):
+                with self.assertRaises(JinaRetrieverError) as ctx:
+                    _wire_for_validation(
+                        index, df, meta, Settings(debug=False, jina_model_revision=bad)
+                    )
+                self.assertIn("immutable commit revision", str(ctx.exception))
+
+    def test_meta_revision_used_when_env_var_absent(self):
+        index, df, _ = _synthetic_index_and_rows(0, [1, 2])
+        r = _wire_for_validation(index, df, _good_meta(), Settings(debug=False))
+        self.assertEqual(r._expected_model_revision, _SHA_A)
+
+    def test_remote_pinned_source_downloads_the_exact_revision(self):
+        r = _bare_retriever(
+            Settings(debug=False, jina_model_revision=_SHA_A,
+                     jina_local_files_only=False, jina_model_auto_bootstrap=True)
+        )
+        r._expected_model_revision = _SHA_A
+        with _HubStub() as hub:
+            r.ensure_model_ready(provision=True)
+        self.assertEqual(hub.calls[0]["revision"], _SHA_A)
+        self.assertEqual(hub.calls[0]["source"], "jinaai/jina-clip-v2")
+        self.assertFalse(hub.calls[0]["local_files_only"])  # download allowed
+
+    def test_remote_source_absent_and_locked_errors_clearly(self):
+        r = _bare_retriever(
+            Settings(debug=False, jina_model_revision=_SHA_A,
+                     jina_local_files_only=True, jina_model_auto_bootstrap=False)
+        )
+        r._expected_model_revision = _SHA_A
+        with _HubStub(side_effect=FileNotFoundError("not in cache")):
+            with self.assertRaises(JinaRetrieverError) as ctx:
+                r.ensure_model_ready(provision=False)
+        self.assertIn("not present locally", str(ctx.exception))
+
+    def test_readiness_reports_preparing_for_a_not_yet_downloaded_remote_model(self):
+        r = _bare_retriever(
+            Settings(debug=False, jina_model_revision=_SHA_A,
+                     jina_local_files_only=False, jina_model_auto_bootstrap=True)
+        )
+        r._expected_model_revision = _SHA_A
+        r._index = object()
+        r._global_ids = [0, 1, 2]
+        with _HubStub(side_effect=FileNotFoundError("not cached yet")):
+            state = r.readiness()
+        self.assertFalse(state["ready"])
+        self.assertEqual(state["state"], "preparing")
+
+    # -- local snapshot directory policy ---------------------------------
+
+    def _local_snapshot(self, tmp: Path, revision: str, *, sidecar: bool) -> Path:
+        d = tmp / (revision if not sidecar else "my-jina-model")
+        d.mkdir(parents=True)
+        (d / "config.json").write_text("{}", encoding="utf-8")
+        if sidecar:
+            (d / "jina_model_revision").write_text(revision + "\n", encoding="utf-8")
+        return d
+
+    def test_local_dir_loads_directly_without_snapshot_download(self):
+        import tempfile
+        import threading as _t
+
+        with tempfile.TemporaryDirectory() as tmp:
+            model_dir = self._local_snapshot(Path(tmp), _SHA_A, sidecar=True)
+            r = _bare_retriever(
+                Settings(debug=False, jina_model_revision=_SHA_A, jina_model_path=str(model_dir))
+            )
+            r._expected_model_revision = _SHA_A
+            r._model_lock = _t.Lock()
+
+            fake_model = MagicMock()
+            fake_model.config._commit_hash = None  # local dir: transformers won't set it
+            fake_tf = MagicMock()
+            fake_tf.AutoModel.from_pretrained.return_value = fake_model
+            old_tf = sys.modules.get("transformers")
+            sys.modules["transformers"] = fake_tf
+            try:
+                with _HubStub() as hub:
+                    r._load_model()
+                self.assertEqual(hub.calls, [])  # snapshot_download NEVER called
+                _args, kwargs = fake_tf.AutoModel.from_pretrained.call_args
+                self.assertEqual(_args[0], str(model_dir))
+                self.assertTrue(kwargs["local_files_only"])
+            finally:
+                if old_tf is not None:
+                    sys.modules["transformers"] = old_tf
+                else:
+                    sys.modules.pop("transformers", None)
+
+    def test_local_dir_revision_from_snapshot_folder_name(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            model_dir = self._local_snapshot(Path(tmp), _SHA_A, sidecar=False)
+            r = _bare_retriever(
+                Settings(debug=False, jina_model_revision=_SHA_A, jina_model_path=str(model_dir))
+            )
+            r._expected_model_revision = _SHA_A
+            got_dir, got_rev = r._resolve_local_model_dir()
+            self.assertEqual(got_dir, model_dir)
+            self.assertEqual(got_rev, _SHA_A)
+
+    def test_local_dir_with_no_provable_revision_fails(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            model_dir = Path(tmp) / "some-model"
+            model_dir.mkdir()
+            r = _bare_retriever(
+                Settings(debug=False, jina_model_revision=_SHA_A, jina_model_path=str(model_dir))
+            )
+            r._expected_model_revision = _SHA_A
+            with self.assertRaises(JinaRetrieverError) as ctx:
+                r.ensure_model_ready()
+            self.assertIn("cannot be proven", str(ctx.exception))
+
+    def test_local_dir_revision_mismatch_fails(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            model_dir = self._local_snapshot(Path(tmp), _SHA_B, sidecar=True)
+            r = _bare_retriever(
+                Settings(debug=False, jina_model_revision=_SHA_A, jina_model_path=str(model_dir))
+            )
+            r._expected_model_revision = _SHA_A
+            with self.assertRaises(JinaRetrieverError) as ctx:
+                r.ensure_model_ready()
+            self.assertIn("index/config pin", str(ctx.exception))
+
+
+class MissingTimestampTests(unittest.TestCase):
+    """Fix 6 -- a NaN / missing timestamp must never be treated as a
+    zero-second frame, and must sort last."""
+
+    def _retriever_with_nan_row(self):
+        ids = [100, 200, 300]
+        index, df, _ = _synthetic_index_and_rows(0, ids)
+        # Row for id=100 has NO timestamp; the other two are at 5s and 6s.
+        df.loc[df["vector_id"] == 100, "timestamp_ms"] = np.nan
+        df.loc[df["vector_id"] == 200, "timestamp_ms"] = 5000.0
+        df.loc[df["vector_id"] == 300, "timestamp_ms"] = 6000.0
+        r = _bare_retriever()
+        r._index = index
+        r._global_ids = df
+        r._id_to_row = {int(row["vector_id"]): row for row in df.to_dict(orient="records")}
+        r._video_to_rows = r._build_video_to_rows()
+        return r
+
+    def test_nan_timestamp_is_not_selected_as_a_zero_second_frame(self):
+        r = self._retriever_with_nan_row()
+        near_zero = r.get_nearest_frame("L21_V001", 0.0)
+        self.assertIsNotNone(near_zero)
+        # The NaN-timestamp frame (id 100) must NOT win the 0-second query.
+        self.assertNotEqual(near_zero["vector_id"], 100)
+        self.assertEqual(near_zero["vector_id"], 200)  # nearest real timestamp (5s)
+
+    def test_missing_timestamp_rows_sort_last(self):
+        r = self._retriever_with_nan_row()
+        order = [row["vector_id"] for row in r._video_to_rows["L21_V001"]]
+        self.assertEqual(order[-1], 100)  # untimestamped row is last
+        self.assertEqual(order[:2], [200, 300])
+
+    def test_json_output_keeps_missing_timestamp_null(self):
+        r = self._retriever_with_nan_row()
+        frame = r.get_frame_by_vector_id(100)
+        self.assertIsNone(frame["timestamp"])
+        self.assertIsNone(frame["timestamp_ms"])
+
+
 class QueryVectorValidationTests(unittest.TestCase):
     def test_rejects_wrong_shape(self):
         r = _bare_retriever()
@@ -374,27 +719,24 @@ class LazyLoadingTests(unittest.TestCase):
         r = _bare_retriever()
         self.assertIsNone(r._model)
 
-    def test_load_model_tolerates_a_blank_revision_with_a_warning(self):
+    def test_load_model_refuses_without_a_pinned_revision(self):
         import threading
 
+        # A retriever whose revision was never resolved (never reached through
+        # __init__, which would have raised) must still refuse to load.
         r = _bare_retriever(Settings(debug=False, jina_model_revision=None, jina_local_files_only=False))
         r._model_lock = threading.Lock()
 
-        fake_model = MagicMock()
-        fake_model.eval.return_value = fake_model
-        fake_model.to.return_value = fake_model
         fake_tf = MagicMock()
-        fake_tf.AutoModel.from_pretrained.return_value = fake_model
+        fake_tf.AutoModel.from_pretrained.side_effect = AssertionError(
+            "must not call from_pretrained without a pinned revision"
+        )
         old = sys.modules.get("transformers")
         sys.modules["transformers"] = fake_tf
         try:
-            with self.assertLogs("src.services.jina_retriever", level="WARNING") as logs:
-                out = r._load_model()
-            self.assertIs(out, fake_model)
-            self.assertTrue(any("not set" in m for m in logs.output))
-            # revision passed through as None, not "" -> transformers treats it as HEAD
-            _args, kwargs = fake_tf.AutoModel.from_pretrained.call_args
-            self.assertIsNone(kwargs["revision"])
+            with self.assertRaises(JinaRetrieverError) as ctx:
+                r._load_model()
+            self.assertIn("pinned commit revision", str(ctx.exception))
         finally:
             if old is not None:
                 sys.modules["transformers"] = old

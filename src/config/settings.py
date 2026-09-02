@@ -126,15 +126,23 @@ class Settings(BaseSettings):
     jina_faiss_index_path: Path | None = None
     jina_global_ids_path: Path | None = None
     jina_index_meta_path: Path | None = None
-    # The model itself is loaded from a local, pinned HuggingFace snapshot --
-    # never fetched unpinned at request time. `jina_model_path` may be a local
-    # directory or a repo id; when it is a repo id, `jina_local_files_only`
-    # forces transformers to use the already-cached snapshot for
-    # `jina_model_revision` instead of hitting the network.
+    # The model itself is loaded from a pinned HuggingFace snapshot -- never
+    # fetched *unpinned* at request time. `jina_model_path` may be a local
+    # directory or a repo id. `jina_local_files_only=True` forbids any network
+    # access and requires the snapshot for `jina_model_revision` to already be
+    # on disk; the default is False so a clean machine can obtain it once via
+    # the deterministic `jina_model_auto_bootstrap` path below.
     jina_model_path: str = "jinaai/jina-clip-v2"
     jina_model_revision: str | None = None
-    jina_local_files_only: bool = True
+    jina_local_files_only: bool = False
     jina_trust_remote_code: bool = True
+    # When the model is not already in the local HuggingFace cache, download it
+    # once via huggingface_hub.snapshot_download at the pinned
+    # `jina_model_revision` (needs `jina_local_files_only=false`). This is the
+    # supported deterministic provisioning path for a clean machine -- it never
+    # relies on a manually pre-populated cache. No effect when a revision is
+    # not pinned.
+    jina_model_auto_bootstrap: bool = True
     jina_device: str = "cpu"
     # `truncate_dim` passed to encode_text/encode_image; must match the 1024-d
     # FAISS index the corpus was built with (see scripts/cloud/build_jina_index.py).

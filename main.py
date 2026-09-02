@@ -18,6 +18,8 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -39,10 +41,25 @@ logging.basicConfig(
     format="%(levelname)s: %(message)s",
 )
 
+@asynccontextmanager
+async def _lifespan(_app: "FastAPI"):
+    """Best-effort: sync the active backend's cloud artifacts + warm its
+    retriever in the background so the first search isn't blocked. Gated by
+    CLOUD_ASSETS_AUTOSYNC; a no-op unless cloud assets are enabled."""
+    try:
+        from src.services.startup_warm import warm_active_backend_in_background
+
+        warm_active_backend_in_background(settings)
+    except Exception as exc:  # noqa: BLE001 - never let warm-up break startup
+        logging.getLogger(__name__).debug("startup warm not started: %s", exc)
+    yield
+
+
 app = FastAPI(
     title="AIC Search API",
     description="Multimodal video keyframe retrieval backend powered by BEiT-3 and Faiss.",
     version="1.0.0",
+    lifespan=_lifespan,
 )
 
 # Configure CORS

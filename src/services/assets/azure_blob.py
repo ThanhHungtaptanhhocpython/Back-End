@@ -60,15 +60,20 @@ class AzureBlobAssetStore(AssetStore):
         except Exception as exc:  # noqa: BLE001
             raise AssetStoreError("azure-storage-blob is not installed") from exc
 
+        # Small get/chunk sizes so the sync progress bar advances smoothly from
+        # the first MB (the SDK default pre-fetches 32 MB in one un-observable
+        # shot, which makes small artifacts jump 0 -> 100).
+        tuning = {"max_single_get_size": 4 * 1024 * 1024, "max_chunk_get_size": 4 * 1024 * 1024}
+
         conn = (self._settings.azure_storage_connection_string or "").strip()
         if conn:
-            self._client = BlobServiceClient.from_connection_string(conn)
+            self._client = BlobServiceClient.from_connection_string(conn, **tuning)
             return self._client
         account = (self._settings.azure_storage_account_name or "").strip()
         key = (self._settings.azure_storage_primary_key or "").strip()
         if account and key:
             self._client = BlobServiceClient(
-                account_url=f"https://{account}.blob.core.windows.net", credential=key
+                account_url=f"https://{account}.blob.core.windows.net", credential=key, **tuning
             )
             return self._client
         raise AssetStoreError(

@@ -37,6 +37,11 @@ from src.services.assets.factory import (  # noqa: F401
 )
 from src.services.assets.manifest import parse_manifest  # noqa: F401
 from src.services.assets.sync import SyncReport, sync_artifacts  # noqa: F401
+from src.services.assets.sync_state import (  # noqa: F401
+    SyncProgress,
+    get_sync_progress,
+    run_tracked_sync,
+)
 
 logger = logging.getLogger(__name__)
 

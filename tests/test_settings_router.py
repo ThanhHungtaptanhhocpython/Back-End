@@ -293,6 +293,12 @@ class TestCloudEndpoints:
         assert _client().post("/settings/cloud/test").json()["ok"] is False
         assert _client().get("/settings/cloud/manifest").status_code == 409
 
+    def test_sync_status_endpoint_shape(self) -> None:
+        body = _client().get("/settings/cloud/sync/status").json()
+        # always answerable, even before any sync has run
+        assert body["state"] in ("idle", "running", "done", "error")
+        assert "artifacts" in body and "pct" in body and "bytes_total" in body
+
     def test_sync_and_manifest_with_fake_store(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import hashlib
         import json as _json

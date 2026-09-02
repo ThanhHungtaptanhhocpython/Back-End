@@ -578,8 +578,23 @@ def cloud_sync(payload: CloudSyncRequest | None = None) -> dict:
     names = payload.names or list(
         assets.BACKEND_ARTIFACT_NAMES.get(settings.retrieval_backend, assets.BACKEND_ARTIFACT_NAMES["beit3"])
     )
-    report = assets.sync_artifacts(store, cache, names=names, manifest=manifest)
+    # Runs synchronously (the response is the final report, unchanged
+    # contract) but mirrors byte-level progress into the shared SyncProgress
+    # so GET /settings/cloud/sync/status can be polled from the UI meanwhile.
+    try:
+        report = assets.run_tracked_sync(store, cache, names, manifest, trigger="manual")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     return report.to_dict()
+
+
+@router.get("/cloud/sync/status")
+def cloud_sync_status() -> dict:
+    """Live progress of the current / most recent artifact sync (manual or the
+    startup warmer). ``state`` is idle | running | done | error."""
+    from src.services import assets
+
+    return assets.get_sync_progress().to_dict()
 
 
 @router.get("/cloud/cache")

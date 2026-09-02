@@ -277,6 +277,11 @@ class Settings(BaseSettings):
     cloud_assets_manifest_key: str = "hcmai-assets.json"
     cloud_assets_cache_path: Path | None = None
     cloud_assets_keyframe_cache_max_bytes: int = 5 * 1024 * 1024 * 1024
+    # When cloud assets are on, sync the active backend's artifacts (and warm
+    # its retriever) in the background at startup, so the first search isn't
+    # blocked on a multi-GB download / model load. Progress is visible on the
+    # Settings -> Cloud Assets tab. Turn off to keep sync fully manual.
+    cloud_assets_autosync: bool = True
 
     azure_storage_account_name: str = ""
     azure_storage_connection_string: str | None = None

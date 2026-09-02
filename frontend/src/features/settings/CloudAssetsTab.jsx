@@ -1,14 +1,35 @@
-import { useEffect, useState } from "react";
-import { Alert, Button, Descriptions, Popconfirm, Space, Spin, Table, Tag, message } from "antd";
+import { useEffect, useRef, useState } from "react";
+import {
+  Alert,
+  Button,
+  Descriptions,
+  Popconfirm,
+  Progress,
+  Space,
+  Spin,
+  Table,
+  Tag,
+  message,
+} from "antd";
 
 import {
   clearCloudCache,
   fetchCloudManifest,
   fetchCloudStatus,
+  fetchCloudSyncStatus,
   syncCloud,
   testCloud,
 } from "../../services/settingsApi.js";
 import { formatBytes } from "./settingsModel.js";
+
+const ART_STATUS_COLOR = {
+  synced: "success",
+  cached: "success",
+  downloading: "processing",
+  verifying: "processing",
+  pending: "default",
+  error: "error",
+};
 
 export default function CloudAssetsTab({ active }) {
   const [status, setStatus] = useState(null);
@@ -16,6 +37,8 @@ export default function CloudAssetsTab({ active }) {
   const [probe, setProbe] = useState(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState("");
+  const [syncProg, setSyncProg] = useState(null);
+  const pollRef = useRef(null);
 
   async function loadStatus() {
     setLoading(true);
@@ -28,9 +51,46 @@ export default function CloudAssetsTab({ active }) {
     }
   }
 
+  async function pollOnce() {
+    try {
+      const prog = await fetchCloudSyncStatus();
+      setSyncProg(prog);
+      return prog;
+    } catch {
+      return null;
+    }
+  }
+
+  function stopPolling() {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }
+
+  function startPolling() {
+    stopPolling();
+    pollRef.current = setInterval(async () => {
+      const prog = await pollOnce();
+      if (prog && prog.state !== "running") {
+        stopPolling();
+        loadManifest(false);
+        loadStatus();
+      }
+    }, 1000);
+  }
+
   useEffect(() => {
-    if (active) loadStatus();
+    if (!active) return;
+    loadStatus();
+    // pick up an in-flight sync (e.g. the startup warmer)
+    pollOnce().then((prog) => {
+      if (prog && prog.state === "running") startPolling();
+    });
+    return stopPolling;
   }, [active]);
+
+  useEffect(() => stopPolling, []);
 
   async function runTest() {
     setBusy("test");
@@ -56,17 +116,20 @@ export default function CloudAssetsTab({ active }) {
 
   async function runSync() {
     setBusy("sync");
+    startPolling();
     try {
       const report = await syncCloud([]);
       message[report.ok ? "success" : "warning"](
         `Sync ${report.ok ? "complete" : "finished with issues"} · version ${report.version}` +
           (report.promoted ? " · promoted" : ""),
       );
-      await loadManifest(false);
-      await loadStatus();
     } catch (err) {
       message.error(err.message);
     } finally {
+      stopPolling();
+      await pollOnce();
+      await loadManifest(false);
+      await loadStatus();
       setBusy("");
     }
   }
@@ -97,6 +160,8 @@ export default function CloudAssetsTab({ active }) {
       />
     );
   }
+
+  const syncing = syncProg?.state === "running";
 
   const artColumns = [
     { title: "Artifact", dataIndex: "name" },
@@ -134,16 +199,53 @@ export default function CloudAssetsTab({ active }) {
       <Space wrap style={{ marginBottom: 16 }}>
         <Button loading={busy === "test"} onClick={runTest}>Test connection</Button>
         <Button loading={busy === "manifest"} onClick={() => loadManifest(true)}>Load manifest</Button>
-        <Popconfirm title="Download and checksum-verify all artifacts?" onConfirm={runSync}>
-          <Button type="primary" loading={busy === "sync"}>Sync artifacts</Button>
+        <Popconfirm title="Download and checksum-verify all artifacts?" onConfirm={runSync} disabled={syncing}>
+          <Button type="primary" loading={busy === "sync" || syncing} disabled={syncing && busy !== "sync"}>
+            {syncing ? "Syncing…" : "Sync artifacts"}
+          </Button>
         </Popconfirm>
         <Popconfirm title="Clear the synced-artifact cache?" onConfirm={() => runClear("artifacts")}>
-          <Button danger loading={busy === "clear"}>Clear artifact cache</Button>
+          <Button danger loading={busy === "clear"} disabled={syncing}>Clear artifact cache</Button>
         </Popconfirm>
         <Popconfirm title="Clear the on-demand keyframe cache?" onConfirm={() => runClear("keyframes")}>
           <Button danger loading={busy === "clear"}>Clear keyframe cache</Button>
         </Popconfirm>
       </Space>
+
+      {syncProg && syncProg.state !== "idle" && (
+        <div className="set-sync-progress" style={{ marginBottom: 16 }}>
+          <div className="set-dim" style={{ marginBottom: 4 }}>
+            {syncProg.state === "running"
+              ? `Syncing ${syncProg.trigger === "startup" ? "(startup) " : ""}version ${syncProg.version} …`
+              : syncProg.state === "error"
+                ? `Last sync failed: ${syncProg.error}`
+                : `Last sync ${syncProg.report?.promoted ? "promoted " : ""}version ${syncProg.version}`}
+            {" · "}
+            {formatBytes(syncProg.bytes_done)} / {formatBytes(syncProg.bytes_total)}
+          </div>
+          <Progress
+            percent={Math.round(syncProg.pct || 0)}
+            status={syncProg.state === "error" ? "exception" : syncProg.state === "running" ? "active" : "success"}
+          />
+          <div style={{ marginTop: 8 }}>
+            {(syncProg.artifacts || []).map((a) => (
+              <div key={a.name} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
+                <span style={{ width: 170, fontFamily: "monospace", fontSize: 12 }}>{a.name}</span>
+                <Tag color={ART_STATUS_COLOR[a.status] || "default"}>{a.status}</Tag>
+                <Progress
+                  percent={Math.round(a.pct || 0)}
+                  size="small"
+                  style={{ flex: 1, marginBottom: 0 }}
+                  status={a.status === "error" ? "exception" : a.status === "downloading" ? "active" : "normal"}
+                />
+                <span className="set-dim" style={{ width: 90, textAlign: "right", fontSize: 12 }}>
+                  {formatBytes(a.done)} / {formatBytes(a.total)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {probe && (
         <Alert

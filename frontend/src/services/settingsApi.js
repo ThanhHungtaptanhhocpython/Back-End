@@ -105,6 +105,7 @@ export const fetchCloudManifest = (refresh = false, o) =>
   request("GET", `/settings/cloud/manifest${refresh ? "?refresh=1" : ""}`, o);
 export const syncCloud = (names = [], o = {}) =>
   request("POST", "/settings/cloud/sync", { ...o, body: { names } });
+export const fetchCloudSyncStatus = (o) => request("GET", "/settings/cloud/sync/status", o);
 export const fetchCloudCache = (o) => request("GET", "/settings/cloud/cache", o);
 export const clearCloudCache = (scope = "all", o = {}) =>
   request("POST", "/settings/cloud/cache/clear", { ...o, body: { scope } });

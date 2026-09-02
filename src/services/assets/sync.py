@@ -66,8 +66,13 @@ class SyncReport:
 def _download_and_promote(
     store: AssetStore, cache: ArtifactCache, manifest: Manifest, art, progress: ProgressCB | None
 ) -> ArtifactResult:
+    def _emit(phase: str, done: int) -> None:
+        if progress:
+            progress(art.name, phase, done, art.size)
+
     existing = cache.slot(manifest.version, art.name, expected_sha=art.sha256, expected_size=art.size)
     if existing.present and existing.verified:
+        _emit("cached", existing.size)
         return ArtifactResult(art.name, S_CACHED, bytes=existing.size)
 
     staged = cache.stage_path(art.name.replace("/", "_"))
@@ -80,23 +85,27 @@ def _download_and_promote(
                 fh.write(chunk)
                 h.update(chunk)
                 written += len(chunk)
-                if progress:
-                    progress(art.name, "download", written, art.size)
+                _emit("download", written)
     except AssetStoreError as exc:
         staged.unlink(missing_ok=True)
+        _emit("error", written)
         return ArtifactResult(art.name, S_DOWNLOAD_ERROR, detail=str(exc))
     except OSError as exc:
         staged.unlink(missing_ok=True)
+        _emit("error", written)
         return ArtifactResult(art.name, S_DOWNLOAD_ERROR, detail=f"write error: {type(exc).__name__}")
 
     if art.size and written != art.size:
         staged.unlink(missing_ok=True)
+        _emit("error", written)
         return ArtifactResult(
             art.name, S_SIZE_MISMATCH, bytes=written,
             detail=f"expected {art.size} bytes, got {written}",
         )
+    _emit("verify", written)
     if h.hexdigest() != art.sha256:
         staged.unlink(missing_ok=True)
+        _emit("error", written)
         return ArtifactResult(
             art.name, S_CHECKSUM_MISMATCH, bytes=written,
             detail=f"expected {art.sha256}, got {h.hexdigest()}",
@@ -105,7 +114,9 @@ def _download_and_promote(
     try:
         cache.promote(staged, manifest.version, art.name, art.sha256)
     except ValueError as exc:
+        _emit("error", written)
         return ArtifactResult(art.name, S_CHECKSUM_MISMATCH, bytes=written, detail=str(exc))
+    _emit("synced", written)
     return ArtifactResult(art.name, S_SYNCED, bytes=written)
 
 

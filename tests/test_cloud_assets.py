@@ -24,6 +24,7 @@ from src.services.assets.local_cache import ArtifactCache, KeyframeCache  # noqa
 from src.services.assets.manifest import parse_manifest  # noqa: E402
 from src.services.assets.s3_compatible import S3AssetStore  # noqa: E402
 from src.services.assets.sync import sync_artifacts  # noqa: E402
+from src.services.assets.sync_state import get_sync_progress, run_tracked_sync  # noqa: E402
 
 
 def _sha(data: bytes) -> str:
@@ -304,6 +305,79 @@ class TestSync:
         cache = ArtifactCache(tmp_path)
         report = sync_artifacts(store, cache)
         assert {r.name: r.status for r in report.results}["faiss_index"] == "download_error"
+
+
+# ---------------------------------------------------------------------------
+class TestSyncProgress:
+    def _store(self):
+        a, b = b"A" * 40, b"B" * 12  # 40 + 12 = 52 bytes total
+        objs = {
+            ("embeddings", "k/a"): a,
+            ("embeddings", "k/b"): b,
+        }
+        arts = [
+            {"name": "jina_faiss_index", "container": "embeddings", "key": "k/a", "size": len(a), "sha256": _sha(a)},
+            {"name": "jina_global_ids", "container": "embeddings", "key": "k/b", "size": len(b), "sha256": _sha(b)},
+        ]
+        objs[("metadata", "hcmai-assets.json")] = _manifest("2026-jina", arts)
+        return InMemoryStore(objs)
+
+    def test_tracked_sync_reports_progress_and_final_state(self, tmp_path: Path):
+        store = self._store()
+        cache = ArtifactCache(tmp_path)
+        report = run_tracked_sync(
+            store, cache, ["jina_faiss_index", "jina_global_ids"], store.fetch_manifest(), trigger="manual"
+        )
+        assert report.promoted is True
+
+        snap = get_sync_progress().to_dict()
+        assert snap["state"] == "done"
+        assert snap["trigger"] == "manual"
+        assert snap["version"] == "2026-jina"
+        assert snap["bytes_total"] == 52 and snap["bytes_done"] == 52
+        assert snap["pct"] == 100.0
+        by = {a["name"]: a for a in snap["artifacts"]}
+        assert by["jina_faiss_index"]["status"] == "synced"
+        assert by["jina_global_ids"]["status"] == "synced"
+
+    def test_tracked_sync_surfaces_error_state(self, tmp_path: Path):
+        store = self._store()
+        doc = json.loads(store.objects[("metadata", "hcmai-assets.json")])
+        doc["artifacts"][0]["sha256"] = _sha(b"WRONG")
+        store.objects[("metadata", "hcmai-assets.json")] = json.dumps(doc).encode()
+        cache = ArtifactCache(tmp_path)
+        report = run_tracked_sync(
+            store, cache, ["jina_faiss_index", "jina_global_ids"], store.fetch_manifest(), trigger="manual"
+        )
+        assert report.promoted is False
+        snap = get_sync_progress().to_dict()
+        assert snap["state"] == "done"  # the run itself completed; one artifact failed
+        by = {a["name"]: a for a in snap["artifacts"]}
+        assert by["jina_faiss_index"]["status"] == "error"
+        assert by["jina_global_ids"]["status"] == "synced"
+
+    def test_second_concurrent_tracked_sync_is_refused(self, tmp_path: Path, monkeypatch):
+        store = self._store()
+        cache = ArtifactCache(tmp_path)
+        manifest = store.fetch_manifest()
+
+        import src.services.assets.sync_state as ss
+
+        released = {"v": False}
+        real_begin = ss.SyncProgress.begin
+
+        def slow_begin(self, *a, **k):
+            real_begin(self, *a, **k)
+            # while "inside" a run, a second call must be rejected
+            try:
+                run_tracked_sync(store, cache, ["jina_global_ids"], manifest, trigger="manual")
+                released["v"] = "NOT-REFUSED"
+            except RuntimeError:
+                released["v"] = "refused"
+
+        monkeypatch.setattr(ss.SyncProgress, "begin", slow_begin)
+        run_tracked_sync(store, cache, ["jina_faiss_index"], manifest, trigger="manual")
+        assert released["v"] == "refused"
 
 
 # ---------------------------------------------------------------------------

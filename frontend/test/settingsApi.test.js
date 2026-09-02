@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   SettingsApiError,
   browseFs,
+  fetchCloudSyncStatus,
   fetchSchema,
   saveConfig,
   settingsBase,
@@ -111,6 +112,20 @@ test("syncCloud posts the requested artifact names", async () => {
     },
   });
   assert.deepEqual(body, { names: ["faiss_index"] });
+});
+
+test("fetchCloudSyncStatus GETs the sync-status endpoint", async () => {
+  let seen;
+  const body = await fetchCloudSyncStatus({
+    env: ENV,
+    fetchImpl: async (url, init) => {
+      seen = { url, method: init?.method };
+      return jsonResponse({ state: "running", pct: 42.0, artifacts: [] });
+    },
+  });
+  assert.equal(seen.url, "http://127.0.0.1:3000/settings/cloud/sync/status");
+  assert.equal(seen.method, "GET");
+  assert.equal(body.state, "running");
 });
 
 test("browseFs builds the fs query string", async () => {

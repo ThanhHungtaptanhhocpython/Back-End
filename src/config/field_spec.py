@@ -478,6 +478,10 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
        help="Local cache root for synced artifacts. Blank -> <app-data>/assets-cache."),
     _f("CLOUD_ASSETS_KEYFRAME_CACHE_MAX_BYTES", G_CLOUD, INT, minimum=1_000_000,
        help="LRU cap for on-demand keyframe downloads."),
+    _f("CLOUD_ASSETS_AUTOSYNC", G_CLOUD, BOOL,
+       help="At startup (cloud mode), sync the active backend's artifacts and "
+            "warm its retriever in the background so the first search isn't "
+            "blocked. Progress shows on this tab. Off = fully manual 'Sync'."),
     # Azure Blob
     _f("AZURE_STORAGE_ACCOUNT_NAME", G_CLOUD, STR),
     _f("AZURE_STORAGE_CONNECTION_STRING", G_CLOUD, SECRET, secret=True),

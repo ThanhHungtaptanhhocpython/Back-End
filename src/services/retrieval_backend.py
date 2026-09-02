@@ -1,15 +1,15 @@
 """Selects the active visual-retrieval backend (BEiT3 or Jina CLIP v2).
 
 `RETRIEVAL_BACKEND` picks which encoder + FAISS index serves textual KIS,
-grounded Q&A candidate retrieval, and TRAKE per-event retrieval. Both
-retrievers are lazy singletons (see `beit3_retriever.get_beit3_retriever` /
+grounded Q&A candidate retrieval, TRAKE per-event retrieval, the video
+timeline, and the image-similarity paths (search-by-uploaded-image, "Similar"
+on a captured frame, similar-by-vector-id). Both retrievers are lazy
+singletons (see `beit3_retriever.get_beit3_retriever` /
 `jina_retriever.get_jina_retriever`); importing this module, or calling
 `get_active_retriever` for one backend, never imports or loads the other
-backend's model.
-
-Image-similarity endpoints (search-by-uploaded-image, "Similar" on a captured
-frame) always use BEiT3 directly and do not go through this module -- Jina
-image encoding is out of scope for this migration.
+backend's model. Routing every path through here is what keeps the two
+vector-id spaces from ever crossing -- a Jina result's vector id is always
+reconstructed in the Jina index, a BEiT3 one in the BEiT3 index.
 """
 
 from __future__ import annotations
@@ -24,13 +24,17 @@ VALID_BACKENDS = (BEIT3, JINA_CLIP_V2)
 
 
 class Retriever(Protocol):
-    """The subset of retriever methods shared by BEiT3Retriever and
-    JinaRetriever, used by the backend-agnostic call sites (textual KIS,
-    grounded Q&A, TRAKE, video timeline)."""
+    """The retriever methods shared by BEiT3Retriever and JinaRetriever, used
+    by the backend-agnostic call sites (textual KIS, grounded Q&A, TRAKE,
+    video timeline, image similarity)."""
 
     backend_id: str
 
     def search_visual(self, query: str, top_k: int = 20) -> list[dict]: ...
+
+    def search_by_image(self, image: object, top_k: int = 20) -> list[dict]: ...
+
+    def search_by_vector_id(self, vector_id: int, top_k: int = 20) -> list[dict]: ...
 
     def get_frame_by_vector_id(self, vector_id: int) -> dict | None: ...
 

@@ -1,9 +1,12 @@
 """Jina CLIP v2 text-to-image visual retrieval service.
 
 Owns the cloud-primary retrieval path built for this migration:
-    Vietnamese/English text query -> Jina CLIP v2 `encode_text(task="retrieval.query")`
-    -> normalized 1024-d query vector -> FAISS IndexIDMap2(IndexFlatIP) search ->
-    jina_global_ids.parquet lookup -> structured results.
+    text (Vietnamese/English) via `encode_text(task="retrieval.query")`, or an
+    image via `encode_image` -> normalized 1024-d query vector ->
+    FAISS IndexIDMap2(IndexFlatIP) search -> global_ids.parquet lookup ->
+    structured results. Serves textual KIS, grounded Q&A candidate retrieval,
+    TRAKE per-event retrieval, the video timeline, and the image-similarity
+    paths when RETRIEVAL_BACKEND=jina_clip_v2.
 
 Jina CLIP v2 and BEiT3 are two independent embedding spaces built from two
 independent FAISS indexes (see scripts/cloud/build_jina_index.py for the Jina
@@ -11,13 +14,16 @@ one and scripts/model_encoding/run_beit3_encoder.py-derived pipelines for the
 BEiT3 one). Nothing in this module ever mixes a vector, a vector id, or a
 frame path from one into the other.
 
-The model is loaded from a **local, pinned** snapshot -- `JINA_MODEL_REVISION`
-must be set and `JINA_LOCAL_FILES_ONLY` (default True) forces transformers to
-resolve it from the already-downloaded local HuggingFace cache instead of
-reaching the network at request time. Nothing here imports `torch` or
-`transformers` at module scope, and the retriever singleton is only ever
-constructed from inside a request handler (see `get_jina_retriever`), so
-merely importing this module -- or starting the app -- loads nothing.
+The model is loaded from a local snapshot -- `JINA_LOCAL_FILES_ONLY` (default
+True) forces transformers to resolve it from the already-downloaded local
+HuggingFace cache instead of reaching the network at request time.
+`JINA_MODEL_REVISION` pins the exact checkpoint the FAISS index was built
+with; it is strongly recommended but not required (blank -> a loud one-time
+warning + the resolved commit is logged so it can be pinned afterwards).
+Nothing here imports `torch` or `transformers` at module scope, and the
+retriever singleton is only ever constructed from inside a request handler
+(see `get_jina_retriever`), so merely importing this module -- or starting
+the app -- loads nothing.
 """
 
 from __future__ import annotations
@@ -265,29 +271,37 @@ class JinaRetriever:
         return lookup
 
     def _load_model(self) -> Any:
-        """Load the pinned Jina CLIP v2 model. Only ever called lazily, from
-        inside `encode_text`, never at import or construction time."""
+        """Load the Jina CLIP v2 model. Only ever called lazily, from inside
+        `encode_text` / `encode_image`, never at import or construction time.
+
+        `JINA_MODEL_REVISION` pins the exact checkpoint the FAISS index was
+        built with. It is strongly recommended but not required: when blank,
+        the model resolves to whatever the local HF cache holds (or, with
+        `JINA_LOCAL_FILES_ONLY=false`, the current Hub HEAD) and a loud
+        one-time warning is logged with the resolved commit so it can be
+        pinned afterwards.
+        """
         if self._model is not None:
             return self._model
         with self._model_lock:
             if self._model is not None:
                 return self._model
-            import torch
             from transformers import AutoModel
 
-            revision = (self._settings.jina_model_revision or "").strip()
-            if not revision:
-                raise JinaRetrieverError(
-                    "JINA_MODEL_REVISION is not set. The model must be pinned to an "
-                    "exact revision so it can never silently drift to a newer, "
-                    "differently-trained checkpoint than the one the FAISS index "
-                    "was built with."
-                )
+            revision = (self._settings.jina_model_revision or "").strip() or None
             source = self._settings.jina_model_path or "jinaai/jina-clip-v2"
+            if revision is None:
+                logger.warning(
+                    "JINA_MODEL_REVISION is not set: loading %s unpinned. Query "
+                    "vectors will only match the FAISS index while this resolves "
+                    "to the same checkpoint the corpus was embedded with. Pin it "
+                    "once the resolved commit (logged next) is confirmed.",
+                    source,
+                )
             logger.info(
                 "Loading Jina CLIP v2 from %s@%s (local_files_only=%s)",
                 source,
-                revision,
+                revision or "<unpinned>",
                 self._settings.jina_local_files_only,
             )
             model = AutoModel.from_pretrained(
@@ -296,6 +310,9 @@ class JinaRetriever:
                 trust_remote_code=bool(self._settings.jina_trust_remote_code),
                 local_files_only=bool(self._settings.jina_local_files_only),
             )
+            resolved = getattr(getattr(model, "config", None), "_commit_hash", None)
+            if resolved:
+                logger.info("Jina CLIP v2 resolved commit: %s", resolved)
             model = model.eval().to(self._device)
             self._model = model
             return self._model
@@ -338,15 +355,48 @@ class JinaRetriever:
                 task="retrieval.query",
                 truncate_dim=int(self._settings.jina_truncate_dim),
             )
+        return self._finalize_query_vector(vec)
+
+    def _finalize_query_vector(self, vec: Any) -> np.ndarray:
+        """Common tail for encode_text / encode_image: -> contiguous,
+        L2-normalized (1, 1024) float32, validated."""
         if hasattr(vec, "detach"):
             vec = vec.detach().cpu().numpy()
         vec = np.asarray(vec, dtype=np.float32).reshape(1, -1)
-        vec = np.ascontiguousarray(vec, dtype=np.float32)
         norm = float(np.linalg.norm(vec))
         if norm > 0:
-            vec = np.ascontiguousarray(vec / norm, dtype=np.float32)
+            vec = vec / norm
+        vec = np.ascontiguousarray(vec, dtype=np.float32)
         self._validate_query_vector(vec)
         return vec
+
+    def encode_image(self, image: Any) -> np.ndarray:
+        """Encode an image query into a normalized, contiguous (1, 1024)
+        float32 vector using Jina CLIP v2's own image preprocessing.
+
+        ``image`` may be a filesystem path, a file-like object, or a PIL
+        ``Image``. The keyframe corpus was embedded with
+        ``model.encode_image(..., truncate_dim=1024)`` (see
+        scripts/notebooks/embed-jina-upload-azure-5jobs-disk-safe.ipynb), so
+        the query goes through the exact same call -- no manual resize /
+        normalize, which Jina's remote code applies internally.
+        """
+        from PIL import Image
+
+        if isinstance(image, Image.Image):
+            pil = image.convert("RGB")
+        else:
+            try:
+                pil = Image.open(image).convert("RGB")
+            except (OSError, ValueError) as exc:
+                raise JinaRetrieverError(f"Could not read the query image: {exc}") from exc
+
+        model = self._load_model()
+        import torch
+
+        with torch.inference_mode():
+            vec = model.encode_image([pil], truncate_dim=int(self._settings.jina_truncate_dim))
+        return self._finalize_query_vector(vec)
 
     # ------------------------------------------------------------------
     # Search
@@ -419,7 +469,9 @@ class JinaRetriever:
         if not isinstance(top_k, int) or isinstance(top_k, bool) or top_k <= 0:
             raise JinaRetrieverError(f"top_k must be a positive integer, got {top_k!r}.")
 
-        query_vec = self.encode_text(query)
+        return self._search(self.encode_text(query), top_k)
+
+    def _search(self, query_vec: np.ndarray, top_k: int) -> list[dict]:
         scores, ids = self._index.search(query_vec, top_k)
         scores = scores[0]
         ids = ids[0]
@@ -432,13 +484,41 @@ class JinaRetriever:
             row = self._id_to_row.get(int(vector_id))
             if row is None:
                 logger.error(
-                    "Jina FAISS returned vector_id=%s with no matching row in jina_global_ids.parquet.",
+                    "Jina FAISS returned vector_id=%s with no matching row in jina global_ids.parquet.",
                     vector_id,
                 )
                 continue
             rank += 1
             results.append(self._build_result(rank, float(score), int(vector_id), row))
         return results
+
+    def search_by_image(self, image: Any, top_k: int = 20) -> list[dict]:
+        """Encode an image with Jina CLIP v2's vision tower and search the same
+        FAISS index. Every hit carries a real Jina vector id; the query
+        image's own per-video frame index is never treated as a vector id.
+        """
+        if not isinstance(top_k, int) or isinstance(top_k, bool) or top_k <= 0:
+            raise JinaRetrieverError(f"top_k must be a positive integer, got {top_k!r}.")
+        return self._search(self.encode_image(image), top_k)
+
+    def search_by_vector_id(self, vector_id: int, top_k: int = 20) -> list[dict]:
+        """Find keyframes similar to an existing Jina vector id by
+        reconstructing its vector from this index and searching.
+
+        The id must be a Jina-space vector id (from this retriever's own
+        results) -- a vector id from another backend would reconstruct an
+        unrelated vector here.
+        """
+        if not isinstance(top_k, int) or isinstance(top_k, bool) or top_k <= 0:
+            raise JinaRetrieverError(f"top_k must be a positive integer, got {top_k!r}.")
+        try:
+            query_vec = self._index.reconstruct(int(vector_id)).reshape(1, -1)
+        except Exception as exc:  # noqa: BLE001
+            raise JinaRetrieverError(
+                f"Cannot reconstruct vector for vector_id={vector_id}: {exc}"
+            ) from exc
+        query_vec = np.ascontiguousarray(query_vec, dtype=np.float32)
+        return self._search(query_vec, top_k)
 
     def get_frame_by_vector_id(self, vector_id: int) -> dict | None:
         """Return the exact metadata row for a Jina vector ID.

@@ -134,12 +134,18 @@ def getImageDataQAndASearch(query, k):
     return frames
 
 def getImageSearchById(image_id, k):
-    """Search similar keyframes using BEiT-3 vector ID."""
-    from src.services.beit3_retriever import get_beit3_retriever
+    """Search similar keyframes using the active backend's vector ID.
+
+    The id is reconstructed from -- and searched against -- whichever FAISS
+    index RETRIEVAL_BACKEND selects, so a Jina result row's vector id is
+    always resolved in the Jina index and a BEiT3 one in the BEiT3 index;
+    the two id spaces never cross.
+    """
+    from src.services.retrieval_backend import get_active_retriever
     try:
-        return get_beit3_retriever().search_by_vector_id(int(image_id), top_k=k)
+        return get_active_retriever().search_by_vector_id(int(image_id), top_k=k)
     except Exception as e:
-        logging.error(f"Error during BEiT-3 image search by id: {e}")
+        logging.error(f"Error during image search by id: {e}")
         return []
 
 
@@ -147,30 +153,33 @@ def getImageSearchById(image_id, k):
 def getCaptureSimilarSearch(image_path, k):
     """Similar-frame search seeded by a captured frame's exact preview still.
 
-    Encodes the server-extracted WebP with BEiT-3's vision tower and searches
-    the same 1024-d FAISS index as visual text search. The captured frame's
-    per-video ``frame_idx`` is never passed as a global FAISS vector id, so this
-    cannot silently return matches for an unrelated corpus frame. Errors
-    propagate so the caller can report them instead of inventing results.
+    Encodes the server-extracted still with the active backend's vision tower
+    (BEiT3, or Jina CLIP v2 when RETRIEVAL_BACKEND=jina_clip_v2) and searches
+    that backend's 1024-d FAISS index. The captured frame's per-video
+    ``frame_idx`` is never passed as a global FAISS vector id, so this cannot
+    silently return matches for an unrelated corpus frame. Errors propagate so
+    the caller can report them instead of inventing results.
     """
-    from src.services.beit3_retriever import get_beit3_retriever
+    from src.services.retrieval_backend import get_active_retriever
 
-    return get_beit3_retriever().search_by_image(image_path, top_k=k)
+    return get_active_retriever().search_by_image(image_path, top_k=k)
 
 
 def getImageSearchByFile(image_file, k):
-    """Search similar keyframes from an uploaded image via BEiT-3's vision tower.
+    """Search similar keyframes from an uploaded image via the active backend's
+    vision tower.
 
-    The uploaded image is encoded the same way indexed keyframes were and
-    searched against the shared 1024-d FAISS index, so results carry real
-    FAISS vector ids (a follow-up pivot on them is well defined).
+    The uploaded image is encoded the same way that backend's indexed
+    keyframes were and searched against its 1024-d FAISS index, so results
+    carry real vector ids in that backend's own space (a follow-up pivot on
+    them is well defined).
     """
-    from src.services.beit3_retriever import get_beit3_retriever
+    from src.services.retrieval_backend import get_active_retriever
 
     try:
-        return get_beit3_retriever().search_by_image(image_file, top_k=k)
+        return get_active_retriever().search_by_image(image_file, top_k=k)
     except Exception as e:
-        logging.error(f"Error during BEiT-3 image file search: {e}")
+        logging.error(f"Error during image file search: {e}")
         return []
 
 def GetImageDataTrakeSearch(query, top_results=100): 

@@ -216,6 +216,69 @@ class MergeSchemaNormalizationTests(unittest.TestCase):
         assert top["split"] == "L21_a"
 
 
+class ImageSearchTests(unittest.TestCase):
+    """encode_image / search_by_image / search_by_vector_id: the Jina-backend
+    image-similarity path used when RETRIEVAL_BACKEND=jina_clip_v2."""
+
+    def setUp(self):
+        ids = [100, 200, 300, 400]
+        self.index, self.df, self.vectors = _synthetic_index_and_rows(7, ids)
+        r = _bare_retriever()
+        r._index = self.index
+        r._global_ids = self.df
+        r._id_to_row = {int(row["vector_id"]): row for row in self.df.to_dict(orient="records")}
+        r._video_to_rows = r._build_video_to_rows()
+        self.retriever = r
+        match_vec = self.vectors[2:3].copy()  # exact match for id=300
+        captured = {}
+
+        class FakeModel:
+            def encode_image(self, images, truncate_dim=None):
+                captured["n_images"] = len(images)
+                captured["truncate_dim"] = truncate_dim
+                captured["mode"] = getattr(images[0], "mode", None)
+                return match_vec
+
+        r._model = FakeModel()
+        r._model_lock = MagicMock()
+        self.captured = captured
+
+    @staticmethod
+    def _img():
+        from PIL import Image
+
+        return Image.new("RGB", (9, 5), (10, 20, 30))
+
+    def test_encode_image_uses_jina_interface_and_normalizes(self):
+        vec = self.retriever.encode_image(self._img())
+        self.assertEqual(self.captured["truncate_dim"], EXPECTED_DIM)
+        self.assertEqual(self.captured["n_images"], 1)
+        self.assertEqual(self.captured["mode"], "RGB")
+        self.assertEqual(vec.shape, (1, EXPECTED_DIM))
+        self.assertEqual(vec.dtype, np.float32)
+        self.assertTrue(vec.flags["C_CONTIGUOUS"])
+        self.assertAlmostEqual(float(np.linalg.norm(vec)), 1.0, places=4)
+
+    def test_search_by_image_hits_the_faiss_index(self):
+        results = self.retriever.search_by_image(self._img(), top_k=3)
+        self.assertEqual(results[0]["vector_id"], 300)
+        self.assertAlmostEqual(results[0]["score"], 1.0, places=4)
+        self.assertEqual(results[0]["retrieval_backend"], "jina_clip_v2")
+
+    def test_search_by_image_rejects_bad_top_k(self):
+        with self.assertRaises(JinaRetrieverError):
+            self.retriever.search_by_image(self._img(), top_k=0)
+
+    def test_search_by_vector_id_reconstructs_from_this_index(self):
+        results = self.retriever.search_by_vector_id(300, top_k=2)
+        self.assertEqual(results[0]["vector_id"], 300)
+        self.assertAlmostEqual(results[0]["score"], 1.0, places=4)
+
+    def test_search_by_vector_id_unknown_id_raises(self):
+        with self.assertRaises(JinaRetrieverError):
+            self.retriever.search_by_vector_id(999999, top_k=2)
+
+
 class QueryVectorValidationTests(unittest.TestCase):
     def test_rejects_wrong_shape(self):
         r = _bare_retriever()
@@ -311,13 +374,32 @@ class LazyLoadingTests(unittest.TestCase):
         r = _bare_retriever()
         self.assertIsNone(r._model)
 
-    def test_load_model_requires_a_pinned_revision(self):
-        r = _bare_retriever(Settings(debug=False, jina_model_revision=None))
+    def test_load_model_tolerates_a_blank_revision_with_a_warning(self):
         import threading
 
+        r = _bare_retriever(Settings(debug=False, jina_model_revision=None, jina_local_files_only=False))
         r._model_lock = threading.Lock()
-        with self.assertRaises(JinaRetrieverError):
-            r._load_model()
+
+        fake_model = MagicMock()
+        fake_model.eval.return_value = fake_model
+        fake_model.to.return_value = fake_model
+        fake_tf = MagicMock()
+        fake_tf.AutoModel.from_pretrained.return_value = fake_model
+        old = sys.modules.get("transformers")
+        sys.modules["transformers"] = fake_tf
+        try:
+            with self.assertLogs("src.services.jina_retriever", level="WARNING") as logs:
+                out = r._load_model()
+            self.assertIs(out, fake_model)
+            self.assertTrue(any("not set" in m for m in logs.output))
+            # revision passed through as None, not "" -> transformers treats it as HEAD
+            _args, kwargs = fake_tf.AutoModel.from_pretrained.call_args
+            self.assertIsNone(kwargs["revision"])
+        finally:
+            if old is not None:
+                sys.modules["transformers"] = old
+            else:
+                sys.modules.pop("transformers", None)
 
     def test_reimporting_module_triggers_no_model_download(self):
         # Stub torch/transformers so that IF the module tried to eagerly load

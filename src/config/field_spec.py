@@ -253,8 +253,10 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
             "the local cache only (see JINA_LOCAL_FILES_ONLY)."),
     _f("JINA_MODEL_REVISION", G_RETRIEVAL, STR,
        hide_when={"RETRIEVAL_BACKEND": "beit3"},
-       help="Pinned commit hash the local snapshot was downloaded at. Required "
-            "so the encoder can never silently drift to a newer unpinned model."),
+       help="Commit hash the local snapshot was downloaded at, pinning the "
+            "encoder to the checkpoint the FAISS index was built with. "
+            "Strongly recommended; if blank the retriever loads whatever the "
+            "local cache holds and logs the resolved commit."),
     _f("JINA_LOCAL_FILES_ONLY", G_RETRIEVAL, BOOL,
        hide_when={"RETRIEVAL_BACKEND": "beit3"},
        help="Never fetch the model from the network at request time; use only "

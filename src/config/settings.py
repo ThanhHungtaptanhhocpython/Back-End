@@ -298,7 +298,13 @@ class Settings(BaseSettings):
     s3_metadata_prefix: str = "metadata/"
 
     # --- Local runtime launcher ---
-    launcher_frontend_enabled: bool = False
+    # ``python -m launcher`` starts the frontend alongside the backend by
+    # default. ``preview`` builds the production bundle (once, then only when
+    # sources / the API URL change) and serves it with ``vite preview``;
+    # ``dev`` runs the hot-reload dev server instead. A missing / broken npm
+    # toolchain never fails the launcher -- the backend still comes up.
+    launcher_frontend_enabled: bool = True
+    launcher_frontend_mode: str = "preview"  # preview | dev
     launcher_frontend_dir: Path | None = None
     launcher_frontend_port: int = 5173
     launcher_health_timeout_seconds: float = 60.0

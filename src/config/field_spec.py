@@ -98,7 +98,7 @@ _BASIC_KEYS = {
     "AZURE_STORAGE_ACCOUNT_NAME", "AZURE_STORAGE_CONNECTION_STRING", "AZURE_STORAGE_PRIMARY_KEY",
     "S3_ENDPOINT_URL", "S3_REGION", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY",
     # Launcher
-    "LAUNCHER_FRONTEND_ENABLED",
+    "LAUNCHER_FRONTEND_ENABLED", "LAUNCHER_FRONTEND_MODE",
     # Logging
     "LOG_LEVEL",
 }
@@ -500,7 +500,13 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
 
     # -- Launcher -----------------------------------------------------------
     _f("LAUNCHER_FRONTEND_ENABLED", G_LAUNCHER, BOOL,
-       help="Have the launcher also start / restart the local frontend dev server."),
+       help="Have the launcher also start / restart the local frontend. A "
+            "missing or broken npm toolchain is non-fatal -- the backend "
+            "still comes up."),
+    _f("LAUNCHER_FRONTEND_MODE", G_LAUNCHER, CHOICE, choices=("preview", "dev"),
+       help="'preview' builds the production bundle and serves it with vite "
+            "preview (rebuilt only when sources or the API URL change); 'dev' "
+            "runs the hot-reload dev server."),
     _f("LAUNCHER_FRONTEND_DIR", G_LAUNCHER, PATH, path_kind="dir", placeholder="frontend"),
     _f("LAUNCHER_FRONTEND_PORT", G_LAUNCHER, INT, minimum=1, maximum=65535, placeholder="5173"),
     _f("LAUNCHER_HEALTH_TIMEOUT_SECONDS", G_LAUNCHER, FLOAT, minimum=1, maximum=600,

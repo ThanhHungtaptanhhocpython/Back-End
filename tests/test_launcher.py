@@ -98,6 +98,7 @@ def _make_launcher(broken: set[int], *, frontend=False):
     launcher = Launcher(
         backend_factory=backend_factory,
         frontend_factory=frontend_factory,
+        frontend_builder=lambda spec, built_for: built_for,  # never shell out to npm in tests
         health_probe=probe,
         spec_resolver=resolve_spec,
         enable_frontend=frontend,
@@ -188,3 +189,66 @@ class TestLauncher:
         launcher.shutdown()
         assert backend.stopped == 1 and launcher.backend is None
         assert launcher_control.read_status()["state"] == "idle"
+
+    def test_frontend_start_failure_is_non_fatal(self, env) -> None:
+        env.create_revision(
+            {"PORT": "3000", "HOST": "0.0.0.0", "LAUNCHER_FRONTEND_ENABLED": "true",
+             "LAUNCHER_HEALTH_TIMEOUT_SECONDS": "2", "LAUNCHER_HEALTH_POLL_INTERVAL_SECONDS": "0.5"},
+            source="ui",
+        )
+        get_settings.cache_clear()
+        launcher = _make_launcher(broken=set(), frontend=True)
+
+        def boom(_spec):
+            raise FileNotFoundError("npm not found")
+
+        launcher._frontend_factory = boom
+
+        assert launcher.boot() is True  # backend still healthy despite the frontend blowing up
+        assert launcher.backend.is_alive()
+        assert launcher.frontend is None
+        assert launcher._frontend_failed is True
+        # supervise must not keep retrying a permanently-failed frontend
+        launcher.tick()
+        assert launcher._frontend_failed is True
+
+    def test_preview_builder_runs_once_then_skips(self, env, tmp_path) -> None:
+        from launcher.core import _default_frontend_builder, RuntimeSpec
+
+        fe_dir = tmp_path / "frontend"
+        (fe_dir / "src").mkdir(parents=True)
+        (fe_dir / "src" / "app.jsx").write_text("x", encoding="utf-8")
+
+        calls = []
+
+        def fake_run_build(cmd, *, cwd, env=None, timeout=600.0):
+            import time as _t
+
+            calls.append(cmd)
+            dist = Path(cwd) / "dist"
+            dist.mkdir(parents=True, exist_ok=True)
+            (dist / "index.html").write_text("<html></html>", encoding="utf-8")
+            future = _t.time() + 3600  # ensure dist is newer than src
+            os.utime(dist / "index.html", (future, future))
+
+        import launcher.core as lc
+
+        orig = lc.run_build
+        lc.run_build = fake_run_build
+        try:
+            spec = RuntimeSpec(
+                host="0.0.0.0", port=3000, api_base_url="http://127.0.0.1:3000",
+                frontend_enabled=True, frontend_mode="preview", frontend_dir=fe_dir,
+                frontend_port=5173, health_timeout=2.0, health_poll_interval=0.5, active_revision_id=1,
+            )
+            built_for = _default_frontend_builder(spec, None)
+            assert built_for == "http://127.0.0.1:3000" and len(calls) == 1
+            # unchanged src + same url -> no rebuild
+            built_for = _default_frontend_builder(spec, built_for)
+            assert len(calls) == 1
+            # different api url -> rebuild
+            spec2 = RuntimeSpec(**{**spec.__dict__, "api_base_url": "http://127.0.0.1:4000"})
+            _default_frontend_builder(spec2, built_for)
+            assert len(calls) == 2
+        finally:
+            lc.run_build = orig

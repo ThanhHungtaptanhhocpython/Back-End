@@ -80,6 +80,29 @@ def default_backend_cmd(host: str, port: int) -> list[str]:
     ]
 
 
+def _npm() -> str:
+    return "npm.cmd" if os.name == "nt" else "npm"
+
+
 def default_frontend_cmd(port: int) -> list[str]:
-    npm = "npm.cmd" if os.name == "nt" else "npm"
-    return [npm, "run", "dev", "--", "--port", str(int(port)), "--strictPort"]
+    """Hot-reload dev server (LAUNCHER_FRONTEND_MODE=dev)."""
+    return [_npm(), "run", "dev", "--", "--port", str(int(port)), "--strictPort"]
+
+
+def frontend_build_cmd() -> list[str]:
+    """One-shot production build -> frontend/dist."""
+    return [_npm(), "run", "build"]
+
+
+def frontend_preview_cmd(port: int) -> list[str]:
+    """Serve the built frontend/dist (LAUNCHER_FRONTEND_MODE=preview)."""
+    return [_npm(), "run", "preview", "--", "--port", str(int(port)), "--strictPort"]
+
+
+def run_build(cmd: list[str], *, cwd: Path, env: dict | None = None, timeout: float = 600.0) -> None:
+    """Run a blocking build step. Raises CalledProcessError / FileNotFoundError
+    / TimeoutExpired on failure -- the caller decides whether that is fatal."""
+    full_env = os.environ.copy()
+    if env:
+        full_env.update({k: str(v) for k, v in env.items()})
+    subprocess.run(cmd, cwd=str(cwd), env=full_env, check=True, timeout=timeout)

@@ -18,7 +18,14 @@ from pathlib import Path
 from typing import Callable
 
 from launcher.health import check_once, connect_host, health_url
-from launcher.process import ManagedProcess, default_backend_cmd, default_frontend_cmd
+from launcher.process import (
+    ManagedProcess,
+    default_backend_cmd,
+    default_frontend_cmd,
+    frontend_build_cmd,
+    frontend_preview_cmd,
+    run_build,
+)
 from src.services import launcher_control
 
 logger = logging.getLogger("launcher")
@@ -32,6 +39,7 @@ class RuntimeSpec:
     port: int
     api_base_url: str
     frontend_enabled: bool
+    frontend_mode: str
     frontend_dir: Path
     frontend_port: int
     health_timeout: float
@@ -62,6 +70,7 @@ def resolve_spec() -> RuntimeSpec:
         port=port,
         api_base_url=f"http://{connect_host(host)}:{port}",
         frontend_enabled=bool(s.launcher_frontend_enabled),
+        frontend_mode=(s.launcher_frontend_mode or "preview").strip().lower(),
         frontend_dir=s.get_launcher_frontend_dir(),
         frontend_port=int(s.launcher_frontend_port or 5173),
         health_timeout=float(s.launcher_health_timeout_seconds or 60.0),
@@ -78,13 +87,42 @@ def _default_backend_factory(spec: RuntimeSpec) -> ManagedProcess:
     return ManagedProcess("backend", default_backend_cmd(spec.host, spec.port), cwd=REPO_ROOT)
 
 
+def _frontend_env(spec: RuntimeSpec) -> dict:
+    return {"VITE_SEARCH_API_BASE_URL": spec.api_base_url, "VITE_SEARCH_MODE": "live"}
+
+
 def _default_frontend_factory(spec: RuntimeSpec) -> ManagedProcess:
-    return ManagedProcess(
-        "frontend",
-        default_frontend_cmd(spec.frontend_port),
-        cwd=spec.frontend_dir,
-        env={"VITE_SEARCH_API_BASE_URL": spec.api_base_url, "VITE_SEARCH_MODE": "live"},
+    cmd = (
+        frontend_preview_cmd(spec.frontend_port)
+        if spec.frontend_mode == "preview"
+        else default_frontend_cmd(spec.frontend_port)
     )
+    return ManagedProcess("frontend", cmd, cwd=spec.frontend_dir, env=_frontend_env(spec))
+
+
+def _default_frontend_builder(spec: RuntimeSpec, built_for: str | None) -> str | None:
+    """Build ``frontend/dist`` for ``preview`` mode when it is missing, stale
+    vs ``src/``, or was built for a different API URL. Returns the API URL the
+    build now reflects (so the caller can skip a rebuild next time), or the
+    unchanged ``built_for`` when no build was needed. Raises on build failure.
+    """
+    if spec.frontend_mode != "preview":
+        return built_for
+    dist_index = spec.frontend_dir / "dist" / "index.html"
+    src_dir = spec.frontend_dir / "src"
+    needs_build = built_for != spec.api_base_url or not dist_index.is_file()
+    if not needs_build and src_dir.is_dir():
+        dist_mtime = dist_index.stat().st_mtime
+        newest_src = max(
+            (p.stat().st_mtime for p in src_dir.rglob("*") if p.is_file()), default=0.0
+        )
+        needs_build = newest_src > dist_mtime
+    if not needs_build:
+        return built_for
+    logger.info("building frontend bundle in %s (api=%s) …", spec.frontend_dir, spec.api_base_url)
+    run_build(frontend_build_cmd(), cwd=spec.frontend_dir, env=_frontend_env(spec))
+    logger.info("frontend build complete")
+    return spec.api_base_url
 
 
 def _default_health_probe(spec: RuntimeSpec) -> bool:
@@ -97,6 +135,7 @@ class Launcher:
         *,
         backend_factory: ProcFactory = _default_backend_factory,
         frontend_factory: ProcFactory = _default_frontend_factory,
+        frontend_builder: Callable[[RuntimeSpec, str | None], str | None] = _default_frontend_builder,
         health_probe: HealthProbe = _default_health_probe,
         spec_resolver: Callable[[], RuntimeSpec] = resolve_spec,
         poll_interval: float = 1.0,
@@ -106,6 +145,7 @@ class Launcher:
     ) -> None:
         self._backend_factory = backend_factory
         self._frontend_factory = frontend_factory
+        self._frontend_builder = frontend_builder
         self._health_probe = health_probe
         self._resolve = spec_resolver
         self.poll_interval = poll_interval
@@ -120,6 +160,10 @@ class Launcher:
         self.current_revision_id: int | None = None
         self.stop = False
         self._restart_backoff = 0
+        # preview mode: which API URL the current frontend/dist was built for,
+        # and whether frontend start-up has permanently failed this session.
+        self._built_for: str | None = None
+        self._frontend_failed = False
 
     # -- process helpers ------------------------------------------------
     def _start_backend(self, spec: RuntimeSpec) -> None:
@@ -133,11 +177,24 @@ class Launcher:
             self.backend = None
 
     def _start_frontend(self, spec: RuntimeSpec) -> None:
-        if not (self.enable_frontend and spec.frontend_enabled):
+        if not (self.enable_frontend and spec.frontend_enabled) or self._frontend_failed:
             return
-        self.frontend = self._frontend_factory(spec)
-        self.frontend.start()
-        logger.info("frontend started (pid=%s) api=%s", self.frontend.pid, spec.api_base_url)
+        try:
+            self._built_for = self._frontend_builder(spec, self._built_for)
+            self.frontend = self._frontend_factory(spec)
+            self.frontend.start()
+            logger.info(
+                "frontend started (pid=%s) api=%s mode=%s",
+                self.frontend.pid, spec.api_base_url, spec.frontend_mode,
+            )
+        except Exception as exc:  # noqa: BLE001 - a broken npm toolchain must not kill the launcher
+            self._frontend_failed = True
+            self.frontend = None
+            logger.warning(
+                "frontend not started (%s): %s -- the backend is up on %s; open it "
+                "directly or run the frontend yourself.",
+                spec.frontend_mode, exc, spec.api_base_url,
+            )
 
     def _stop_frontend(self) -> None:
         if self.frontend:
@@ -207,6 +264,9 @@ class Launcher:
     def _handle_restart(self, req: dict) -> None:
         old_spec = self.spec
         new_spec = self._resolve()
+        # A deliberate restart may be fixing whatever broke the frontend
+        # (wrong dir, npm just installed, ...) -- give it another chance.
+        self._frontend_failed = False
         logger.info("restart requested (reason=%s target_revision=%s)",
                     req.get("reason"), new_spec.active_revision_id)
         launcher_control.write_status("restarting", reason=req.get("reason"),

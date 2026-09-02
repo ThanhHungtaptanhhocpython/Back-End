@@ -135,7 +135,7 @@ with `preview_url: null` and a `preview_error` reason; app startup is unaffected
 ### Recommended: the local launcher
 
 ```bash
-python -m launcher            # backend (+ frontend, if LAUNCHER_FRONTEND_ENABLED)
+python -m launcher            # backend + frontend (frontend on by default)
 python -m launcher --no-frontend
 ```
 
@@ -143,8 +143,15 @@ The launcher reads the **active runtime-config revision**, starts the FastAPI
 backend, and watches for restart requests from the Settings UI. On a config
 change it applies the new revision, polls `/health`, and — if the app does not
 come up healthy within `LAUNCHER_HEALTH_TIMEOUT_SECONDS` — automatically
-restores the previous revision and starts again. When `HOST`/`PORT` change it
-also restarts the local frontend with the new API base URL.
+restores the previous revision and starts again.
+
+It also starts the local frontend (`LAUNCHER_FRONTEND_ENABLED=true` by
+default). `LAUNCHER_FRONTEND_MODE=preview` (default) runs `npm run build` — only
+when `frontend/dist` is missing / stale or `HOST`/`PORT` changed — and serves
+the bundle with `vite preview`; `LAUNCHER_FRONTEND_MODE=dev` runs the
+hot-reload dev server instead. A missing or broken npm toolchain is **non-fatal**:
+the launcher logs a warning and the backend still comes up. When `HOST`/`PORT`
+change the frontend is rebuilt/restarted with the new API base URL.
 
 Runtime configuration lives in a per-user SQLite store
 (`<app-data>/HCMAI2026/config.db`), seeded from `.env` on first run. After that,

@@ -16,7 +16,11 @@ from src.config.settings import Settings
 from src.services.retrieval_backend import (
     BEIT3,
     JINA_CLIP_V2,
+    BackendMismatchError,
+    BackendPreparingError,
+    BackendProvenanceRequired,
     RetrievalBackendError,
+    assert_active_backend,
     get_active_retriever,
 )
 
@@ -85,6 +89,71 @@ class BackendSelectionTests(unittest.TestCase):
     def test_default_backend_is_beit3(self):
         settings = Settings(debug=False)
         self.assertEqual(settings.retrieval_backend, BEIT3)
+
+
+class AssertActiveBackendTests(unittest.TestCase):
+    """An image-pivot-by-id must be reconstructed in the same backend that
+    produced the id -- and provenance is mandatory, not optional."""
+
+    def test_blank_or_missing_provenance_is_rejected(self):
+        s = Settings(debug=False, retrieval_backend="jina_clip_v2")
+        with self.assertRaises(BackendProvenanceRequired):
+            assert_active_backend(None, s)
+        with self.assertRaises(BackendProvenanceRequired):
+            assert_active_backend("   ", s)
+
+    def test_unrecognised_provenance_is_rejected(self):
+        s = Settings(debug=False, retrieval_backend="beit3")
+        with self.assertRaises(BackendProvenanceRequired):
+            assert_active_backend("openclip", s)
+
+    def test_matching_provenance_passes(self):
+        s = Settings(debug=False, retrieval_backend="beit3")
+        assert_active_backend("beit3", s)
+        assert_active_backend("BEiT-3", s)  # alias + case
+        s2 = Settings(debug=False, retrieval_backend="jina_clip_v2")
+        assert_active_backend("jina-clip-v2", s2)
+
+    def test_mismatched_provenance_raises_409(self):
+        s = Settings(debug=False, retrieval_backend="jina_clip_v2")
+        with self.assertRaises(BackendMismatchError) as ctx:
+            assert_active_backend("beit3", s)
+        self.assertEqual(ctx.exception.claimed, "beit3")
+        self.assertEqual(ctx.exception.active, "jina_clip_v2")
+
+
+class BackendPreparingTests(unittest.TestCase):
+    """Fix 8 -- a request that lands mid startup sync gets a retryable
+    'preparing' signal, not the raw construction error."""
+
+    def _run(self, sync_state, jina_exc):
+        fake_jina = MagicMock()
+        fake_jina.get_jina_retriever = MagicMock(side_effect=jina_exc)
+        fake_ss = MagicMock()
+        fake_ss.get_sync_progress.return_value.to_dict.return_value = {"state": sync_state}
+        olds = {
+            "src.services.jina_retriever": sys.modules.get("src.services.jina_retriever"),
+            "src.services.assets.sync_state": sys.modules.get("src.services.assets.sync_state"),
+        }
+        sys.modules["src.services.jina_retriever"] = fake_jina
+        sys.modules["src.services.assets.sync_state"] = fake_ss
+        try:
+            return get_active_retriever(Settings(debug=False, retrieval_backend="jina_clip_v2"))
+        finally:
+            for name, old in olds.items():
+                if old is not None:
+                    sys.modules[name] = old
+                else:
+                    sys.modules.pop(name, None)
+
+    def test_construction_error_during_sync_becomes_preparing(self):
+        with self.assertRaises(BackendPreparingError):
+            self._run("running", RuntimeError("jina artifacts missing"))
+
+    def test_construction_error_without_sync_is_raised_as_is(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            self._run("idle", RuntimeError("real config error"))
+        self.assertNotIsInstance(ctx.exception, BackendPreparingError)
 
 
 class ModuleImportHasNoSideEffectsTests(unittest.TestCase):

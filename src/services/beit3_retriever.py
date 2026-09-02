@@ -543,6 +543,13 @@ class BEiT3Retriever:
             if fallback_frame_numbers:
                 timestamp = fallback_frame_numbers[0] / 25.0
 
+        # NOTE: the BEiT3 result payload is deliberately byte-for-byte the same
+        # as before the Jina backend was added -- no `retrieval_backend` key.
+        # `RETRIEVAL_BACKEND=beit3` is the default and must not change shape.
+        # The frontend treats an absent `retrieval_backend` on a card as
+        # `beit3` (see backendSearch.normalizeBackendItem), so an id-pivot
+        # still sends the now-required provenance. `backend_id` (the class
+        # attribute, used by grounded_qa_service's ASR gating) is unaffected.
         result = {
             "rank": rank,
             "score": score,

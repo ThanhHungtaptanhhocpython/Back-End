@@ -220,6 +220,20 @@ class SearchVisualIntegrationTests(unittest.TestCase):
         scores = [r["score"] for r in results]
         self.assertEqual(scores, sorted(scores, reverse=True))
 
+    def test_result_shape_is_the_pre_jina_beit3_contract(self):
+        """RETRIEVAL_BACKEND=beit3 must keep the exact legacy result payload --
+        in particular NO `retrieval_backend` key (that is Jina-only)."""
+        top = self.retriever.search_visual("a person", top_k=1)[0]
+        self.assertNotIn("retrieval_backend", top)
+        self.assertEqual(
+            set(top),
+            {
+                "rank", "score", "vector_id", "faiss_id", "global_frame_id",
+                "frame_idx", "video_id", "frame_id", "frame_name", "frame_path",
+                "timestamp", "namespace",
+            },
+        )
+
     def test_search_visual_rejects_invalid_top_k(self):
         with self.assertRaises(BEiT3RetrieverError):
             self.retriever.search_visual("x", top_k=0)

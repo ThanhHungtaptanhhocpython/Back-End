@@ -161,7 +161,21 @@ function requestFor(tab, pivot) {
       effectivePivot?.faiss_idx
     );
     if (image instanceof Blob) body.append("image", image, image.name || "reference-image");
-    if (faissIndex !== undefined && faissIndex !== null) body.append("faiss_index", String(faissIndex));
+    if (faissIndex !== undefined && faissIndex !== null) {
+      body.append("faiss_index", String(faissIndex));
+      // Provenance is REQUIRED for an id pivot so the backend can reject a
+      // stale id after a backend switch (BEiT3 <-> Jina have independent
+      // vector-id spaces). A card from the default BEiT3 backend carries no
+      // `retrieval_backend`, so an absent value means `beit3`. (An uploaded
+      // image carries no id and never reaches this branch.)
+      const provenance =
+        firstDefined(
+          effectivePivot?.retrievalBackend,
+          effectivePivot?.retrieval_backend,
+          effectivePivot?.backend?.retrieval_backend
+        ) || "beit3";
+      body.append("retrieval_backend", String(provenance));
+    }
     body.append("topk", String(topk));
     return { endpoint, body };
   }
@@ -259,6 +273,11 @@ export function normalizeBackendItem(item, rank, total, baseUrl = "") {
     link: String(firstDefined(raw.link, raw.youtube_url, raw.youtubeUrl, raw.video_url, raw.videoUrl, raw.url) ?? ""),
     real: true,
     faissIndex: faissIndex === undefined ? undefined : finiteNumber(faissIndex),
+    // Which retrieval backend produced this card, sent back with an
+    // image-pivot-by-id request so the API can reject a stale cross-backend
+    // id. BEiT3 (the default) result rows carry no `retrieval_backend`, so an
+    // absent value is interpreted as `beit3`.
+    retrievalBackend: firstDefined(raw.retrieval_backend, raw.retrievalBackend) || "beit3",
     score: normaliseScore(scoreValue, rank, total),
     rank,
     answer: raw.answer,

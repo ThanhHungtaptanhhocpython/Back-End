@@ -31,9 +31,11 @@ def test_image_search_by_faiss_index(monkeypatch):
     from main import app
     client = TestClient(app)
 
+    # `retrieval_backend` is mandatory on the id-pivot path; the default
+    # backend is BEiT3, so a BEiT3-provenanced card is accepted.
     response = client.post(
         "/users/imagesearch",
-        data={"faiss_index": "100", "topk": "5"},
+        data={"faiss_index": "100", "topk": "5", "retrieval_backend": "beit3"},
     )
     assert response.status_code == 200
     data = response.json()

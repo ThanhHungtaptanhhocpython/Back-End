@@ -84,13 +84,21 @@ def handle_image_search(
     response: Response,
     topk: Optional[str] = Form("100"),
     faiss_index: Optional[str] = Form("default"),
+    retrieval_backend: Optional[str] = Form(None),
     image: Optional[UploadFile] = File(None)
 ):
-    """Image pivot search, entirely on the BEiT-3 1024-d index.
+    """Image pivot search on the ACTIVE retrieval backend's 1024-d index.
 
-    An uploaded ``image`` is encoded with BEiT-3's vision tower; a
-    ``faiss_index`` is an existing BEiT-3 vector id. Either way the results
-    carry real FAISS vector ids.
+    An uploaded ``image`` is encoded with the active backend's vision tower
+    (no existing vector id, so no provenance needed). A ``faiss_index`` is an
+    existing vector id and MUST be reconstructed in the same backend that
+    produced it, so ``retrieval_backend`` (the ``retrieval_backend`` field of
+    the result card; the frontend fills in ``beit3`` when a card carries none)
+    is **required** on that path:
+
+    * missing / unrecognised ``retrieval_backend`` -> HTTP 422, nothing reconstructed
+    * ``retrieval_backend`` != the active backend (stale card after a switch)
+      -> HTTP 409, nothing reconstructed
     """
     try:
         topk_int = int(topk) if topk is not None else 100
@@ -111,6 +119,19 @@ def handle_image_search(
         except (TypeError, ValueError):
             response.status_code = status.HTTP_400_BAD_REQUEST
             return BaseResponse(success=False, message="faiss_index must be an integer.", data=DataResponse(items=[], total_items=0))
+        from src.services.retrieval_backend import (
+            BackendMismatchError,
+            BackendProvenanceRequired,
+            assert_active_backend,
+        )
+        try:
+            assert_active_backend(retrieval_backend)
+        except BackendProvenanceRequired as exc:
+            response.status_code = 422
+            return BaseResponse(success=False, message=str(exc), data=DataResponse(items=[], total_items=0))
+        except BackendMismatchError as exc:
+            response.status_code = status.HTTP_409_CONFLICT
+            return BaseResponse(success=False, message=str(exc), data=DataResponse(items=[], total_items=0))
         from src.services.user_service import getImageSearchById
         res = getImageSearchById(faiss_index_int, topk_int)
     else:
@@ -158,10 +179,13 @@ def handle_capture_similar_search(
             data=DataResponse(items=[], total_items=0),
         )
 
+    from src.services.retrieval_backend import BackendPreparingError
     from src.services.user_service import getCaptureSimilarSearch
 
     try:
         res = getCaptureSimilarSearch(str(still_path), request.topk)
+    except BackendPreparingError:
+        raise  # -> 503 + Retry-After (main._maybe_backend_preparing)
     except Exception as exc:  # noqa: BLE001 - surface a clear message, never a random result set
         logging.error("Captured-frame Similar search failed for %s#%s: %s", video_id, frame_idx, exc)
         response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -285,7 +309,7 @@ def handle_video_keyframes(
     around: Optional[str] = None,
     limit: Optional[int] = 60
 ):
-    from src.services.retrieval_backend import get_active_retriever
+    from src.services.retrieval_backend import BackendPreparingError, get_active_retriever
     try:
         retriever = get_active_retriever()
         items = retriever.get_video_timeline(video_id=video_id, around_frame_id=around, limit=limit or 60)
@@ -293,6 +317,8 @@ def handle_video_keyframes(
             success=True,
             data=DataResponse(items=items, total_items=len(items))
         )
+    except BackendPreparingError:
+        raise  # -> 503 + Retry-After (main._maybe_backend_preparing)
     except Exception as exc:
         logging.error(f"Error fetching timeline for video {video_id}: {exc}")
         return BaseResponse(

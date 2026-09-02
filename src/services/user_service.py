@@ -141,9 +141,11 @@ def getImageSearchById(image_id, k):
     always resolved in the Jina index and a BEiT3 one in the BEiT3 index;
     the two id spaces never cross.
     """
-    from src.services.retrieval_backend import get_active_retriever
+    from src.services.retrieval_backend import BackendPreparingError, get_active_retriever
     try:
         return get_active_retriever().search_by_vector_id(int(image_id), top_k=k)
+    except BackendPreparingError:
+        raise  # retryable 503, not an empty result set
     except Exception as e:
         logging.error(f"Error during image search by id: {e}")
         return []
@@ -174,10 +176,12 @@ def getImageSearchByFile(image_file, k):
     carry real vector ids in that backend's own space (a follow-up pivot on
     them is well defined).
     """
-    from src.services.retrieval_backend import get_active_retriever
+    from src.services.retrieval_backend import BackendPreparingError, get_active_retriever
 
     try:
         return get_active_retriever().search_by_image(image_file, top_k=k)
+    except BackendPreparingError:
+        raise  # retryable 503, not an empty result set
     except Exception as e:
         logging.error(f"Error during image file search: {e}")
         return []

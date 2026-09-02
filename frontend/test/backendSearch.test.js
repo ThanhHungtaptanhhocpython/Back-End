@@ -226,6 +226,81 @@ test("a non-captured keyframe pivot still sends faiss_index to imagesearch", asy
   assert.equal(body.get("topk"), "5");
 });
 
+test("surfaces retrieval_backend provenance on a normalized card", () => {
+  const payload = {
+    success: true,
+    data: {
+      total_items: 1,
+      items: [{ vector_id: 5, video_id: "L21_V001", frame_id: "kf_0002", retrieval_backend: "jina_clip_v2" }],
+    },
+  };
+  const result = normalizeBackendResponse(payload, { type: "TEXT", latency: 1 });
+  assert.equal(result.items[0].retrievalBackend, "jina_clip_v2");
+});
+
+test("a card with no retrieval_backend defaults to beit3 (old BEiT3 result shape)", () => {
+  const payload = {
+    success: true,
+    data: { total_items: 1, items: [{ vector_id: 9, faiss_id: 9, video_id: "L21_V001", frame_id: "003048" }] },
+  };
+  const result = normalizeBackendResponse(payload, { type: "TEXT", latency: 1 });
+  assert.equal(result.items[0].retrievalBackend, "beit3");
+  // and the raw payload the card echoes has no such key
+  assert.equal("retrieval_backend" in result.items[0].backend, false);
+});
+
+test("an image pivot by id sends its backend provenance alongside faiss_index", async () => {
+  let body;
+  await runBackendSearch(
+    { searchType: "IMAGE", params: { topk: 4 } },
+    { faissIndex: 991, retrievalBackend: "jina_clip_v2" },
+    {
+      config: { baseUrl: "http://localhost:3000/users", mode: "live" },
+      fetchImpl: async (url, init) => {
+        body = init.body;
+        return { ok: true, json: async () => successPayload };
+      },
+    }
+  );
+  assert.equal(body.get("faiss_index"), "991");
+  assert.equal(body.get("retrieval_backend"), "jina_clip_v2");
+});
+
+test("an id pivot from a BEiT3 card (no provenance field) still sends retrieval_backend=beit3", async () => {
+  let body;
+  await runBackendSearch(
+    { searchType: "IMAGE", params: { topk: 5 } },
+    { faissIndex: 277466, submissionFrameId: 3048 },
+    {
+      config: { baseUrl: "http://localhost:3000/users", mode: "live" },
+      fetchImpl: async (url, init) => {
+        body = init.body;
+        return { ok: true, json: async () => successPayload };
+      },
+    }
+  );
+  assert.equal(body.get("faiss_index"), "277466");
+  assert.equal(body.get("retrieval_backend"), "beit3");
+});
+
+test("an uploaded-image search carries no faiss_index and no provenance", async () => {
+  let body;
+  const blob = new Blob(["x"], { type: "image/png" });
+  await runBackendSearch(
+    { searchType: "IMAGE", params: { topk: 4, imageFile: blob } },
+    null,
+    {
+      config: { baseUrl: "http://localhost:3000/users", mode: "live" },
+      fetchImpl: async (url, init) => {
+        body = init.body;
+        return { ok: true, json: async () => successPayload };
+      },
+    }
+  );
+  assert.equal(body.get("faiss_index"), null);
+  assert.equal(body.get("retrieval_backend"), null);
+});
+
 test("does not classify valid HTTP failures as transport failures", async () => {
   await assert.rejects(
     runBackendSearch(

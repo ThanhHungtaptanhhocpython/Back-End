@@ -49,6 +49,95 @@ class RetrievalBackendError(RuntimeError):
     """Raised for an unknown/misconfigured RETRIEVAL_BACKEND value."""
 
 
+class BackendProvenanceRequired(RuntimeError):
+    """A pivot-by-vector-id request arrived without a usable ``retrieval_backend``
+    provenance tag (missing, blank, or an unrecognised value). BEiT3 and Jina
+    ids share no space, so the server cannot guess which index to reconstruct
+    in -- the request is rejected (HTTP 422) rather than run against a possibly
+    wrong index."""
+
+
+class BackendMismatchError(RuntimeError):
+    """A caller supplied a vector id qualified with a backend that is not the
+    one currently active. Reconstructing it in the active index would return
+    an unrelated frame, so the request is rejected (HTTP 409)."""
+
+    def __init__(self, claimed: str, active: str):
+        self.claimed = claimed
+        self.active = active
+        super().__init__(
+            f"This result was produced by the {claimed!r} retrieval backend but "
+            f"{active!r} is active now. Re-run the search before pivoting on it "
+            f"(the two backends have independent vector-id spaces)."
+        )
+
+
+class BackendPreparingError(RuntimeError):
+    """The active backend is not ready yet -- a startup cloud sync or model
+    warm is still in flight. Retryable (HTTP 503 + Retry-After)."""
+
+
+def active_backend(settings: Settings | None = None) -> str:
+    settings = settings or get_settings()
+    return (settings.retrieval_backend or BEIT3).strip().lower()
+
+
+_BACKEND_ALIASES = {
+    "beit3": BEIT3, "beit-3": BEIT3, "beit_3": BEIT3,
+    "jina": JINA_CLIP_V2, "jina_clip_v2": JINA_CLIP_V2, "jina-clip-v2": JINA_CLIP_V2,
+}
+
+
+def normalize_backend_name(value: str | None) -> str | None:
+    """Canonicalise a backend name/alias, or ``None`` if unrecognised/blank."""
+    key = (value or "").strip().lower()
+    if not key:
+        return None
+    return _BACKEND_ALIASES.get(key, key if key in VALID_BACKENDS else None)
+
+
+def assert_active_backend(claimed: str | None, settings: Settings | None = None) -> None:
+    """Guard a pivot-by-vector-id request.
+
+    Provenance is **mandatory** for a raw-id pivot: BEiT3 and Jina ids occupy
+    independent spaces, so an id with no ``retrieval_backend`` cannot be
+    reconstructed safely.
+
+    * missing / blank / unrecognised ``claimed`` -> :class:`BackendProvenanceRequired` (HTTP 422)
+    * a recognised backend that is not the active one -> :class:`BackendMismatchError` (HTTP 409)
+
+    Callers that carry no id (uploaded-image / captured-frame search) must not
+    call this -- they legitimately have nothing to qualify.
+    """
+    normalized = normalize_backend_name(claimed)
+    if normalized is None:
+        raise BackendProvenanceRequired(
+            "retrieval_backend is required for an image-pivot-by-id request "
+            "(BEiT3 and Jina CLIP v2 have independent vector-id spaces). "
+            f"Got {claimed!r}; re-run the search to obtain a result card that carries it."
+        )
+    current = active_backend(settings)
+    if normalized != current:
+        raise BackendMismatchError(normalized, current)
+
+
+def _preparing_if_syncing(exc: Exception) -> None:
+    """Re-raise as :class:`BackendPreparingError` iff a tracked artifact sync
+    is currently running -- otherwise the caller sees the real error."""
+    try:
+        from src.services.assets.sync_state import get_sync_progress
+
+        if get_sync_progress().to_dict().get("state") == "running":
+            raise BackendPreparingError(
+                "The retrieval backend is still preparing (cloud asset sync in "
+                "progress). Retry shortly."
+            ) from exc
+    except BackendPreparingError:
+        raise
+    except Exception:  # noqa: BLE001 - never mask the original error with a probe failure
+        return
+
+
 def get_active_retriever(settings: Settings | None = None) -> Any:
     """Return the lazily-loaded retriever singleton for the configured backend."""
     settings = settings or get_settings()
@@ -56,7 +145,11 @@ def get_active_retriever(settings: Settings | None = None) -> Any:
     if backend == JINA_CLIP_V2:
         from src.services.jina_retriever import get_jina_retriever
 
-        return get_jina_retriever()
+        try:
+            return get_jina_retriever()
+        except Exception as exc:  # noqa: BLE001
+            _preparing_if_syncing(exc)
+            raise
     if backend == BEIT3:
         from src.services.beit3_retriever import get_beit3_retriever
 

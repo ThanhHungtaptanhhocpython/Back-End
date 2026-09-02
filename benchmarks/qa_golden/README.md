@@ -12,8 +12,9 @@ Nó dùng frame thật trong bộ AIC đã tải, không cần train lại model
 | `count_ocr_v1.jsonl` | 10 | đếm và đọc chữ/logo/số trên hình |
 | `visual_attributes_v1.jsonl` | 10 | màu sắc và hướng không gian |
 | `temporal_multievent_v1.jsonl` | 2 | chuỗi nhiều sự kiện và chữ số rất nhỏ trên màn hình |
+| `competition_regressions_v1.jsonl` | 1 | lỗi thực tế: video điểm thấp hơn nhưng chứa đủ sự kiện và đáp án ASR |
 
-Tổng cộng có 40 câu, cân bằng 20 câu tiếng Việt và 20 câu tiếng Anh. Mỗi câu đã được
+Tổng cộng có 41 câu, gồm bộ 40 câu cân bằng Việt/Anh và 1 regression tiếng Việt từ đề thật. Mỗi câu đã được
 đối chiếu trực quan với ít nhất một frame thật. Đây là bộ khởi đầu do một người duyệt; trước khi
 dùng làm benchmark chính thức, nên có thêm một người duyệt độc lập các đáp án/alias.
 
@@ -30,7 +31,7 @@ Từ thư mục `Back-End`:
 ```
 
 Lệnh trên kiểm tra schema, ID trùng, giới hạn 100 ký tự và mọi `frame_path` bên dưới
-`KEYFRAMES_ROOT`. Với cấu hình hiện tại, kết quả phải là 40 case và 46 evidence frame.
+`KEYFRAMES_ROOT`. Với cấu hình hiện tại, kết quả phải là 41 case và 48 evidence frame.
 
 Khi backend đang chạy ở cổng 3000, chạy thử vài câu trước:
 

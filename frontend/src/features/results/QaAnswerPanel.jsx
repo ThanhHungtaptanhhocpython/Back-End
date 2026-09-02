@@ -1,9 +1,11 @@
+import QaCandidateList from "./QaCandidateList";
+
 function numeric(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export default function QaAnswerPanel({ tab }) {
+export default function QaAnswerPanel({ tab, onSelectCandidate }) {
   if (tab?.searchType !== "QA" || tab?.status !== "done") return null;
 
   const summary = tab?.meta || {};
@@ -16,7 +18,9 @@ export default function QaAnswerPanel({ tab }) {
   const evaluatedFrames = numeric(summary.evaluated_frames);
   const retrievedFrames = numeric(summary.retrieved_frames);
   const answerMode = String(summary.answer_mode || "").toLowerCase();
-  const status = answerMode === "best_guess"
+  const status = answerMode === "candidate"
+    ? "PHƯƠNG ÁN ĐÃ CHỌN"
+    : answerMode === "best_guess"
     ? "PHƯƠNG ÁN KHẢ DĨ NHẤT"
     : answerMode === "fallback"
       ? "KHÔNG ĐỦ BẰNG CHỨNG"
@@ -41,6 +45,12 @@ export default function QaAnswerPanel({ tab }) {
 
       <p className="ws-qa-answer-text">{answer}</p>
       {summary.reason ? <p className="ws-qa-answer-reason">{summary.reason}</p> : null}
+      <QaCandidateList
+        candidates={summary.answer_candidates}
+        frames={tab?.results}
+        selectedId={summary.selected_candidate_id}
+        onSelect={onSelectCandidate}
+      />
       {isDemo ? (
         <p className="ws-qa-answer-note">
           Test data only. This tab switches to the live VLM automatically when matching local keyframe images are available.

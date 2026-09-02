@@ -522,6 +522,34 @@ export default function Workstation() {
     });
     toast.success(`Q&A returned ${items.length} source frames`);
   };
+  const selectQaCandidate = (candidate) => {
+    if (!candidate || !activeKey) return;
+    setTabs((prev) => prev.map((tab) => {
+      if (tab.key !== activeKey) return tab;
+      return {
+        ...tab,
+        meta: {
+          ...(tab.meta || {}),
+          answer: candidate.answer,
+          confidence: candidate.confidence,
+          status: candidate.status,
+          reason: candidate.reason,
+          supporting_frame_ids: candidate.supporting_frame_ids || [],
+          answer_mode: "candidate",
+          selected_candidate_id: candidate.candidate_id,
+          selected_candidate_video_id: candidate.video_id,
+        },
+      };
+    }));
+    const names = new Set([
+      ...(Array.isArray(candidate.supporting_frame_names) ? candidate.supporting_frame_names : []),
+      candidate.representative_frame_name,
+    ].filter(Boolean).map(String));
+    const matching = activeTab?.results?.find((frame) => names.has(String(frame?.frameName || "")))
+      || activeTab?.results?.find((frame) => String(frame?.videoKey || "") === String(candidate.video_id || ""));
+    if (matching) setFocusedId(matching.id);
+    toast.info(`Đã chọn ${candidate.video_id}: ${candidate.answer}`);
+  };
   const formatAgentSearchMessage = (result, addedLabel) => {
     const queries = Array.isArray(result?.queriesUsed) ? result.queriesUsed : [];
     const routing = result?.routing || result?.plan?.routing || {};
@@ -619,7 +647,12 @@ export default function Workstation() {
       const result = frames.length ? await askCopilot(text, frames) : await askGroundedQa(text);
       if (Array.isArray(result?.frames) && result.frames.length) {
         if (result?.mode === "agent_search") applyAgentSearchResults(result?.searchQuery || text, { items: result.frames, totalItems: result.frames.length, latency: 0, source: "live" });
-        else if (result?.mode === "grounded_qa") applyGroundedQaResults(text, result.frames, result.meta, result.demo);
+        else if (result?.mode === "grounded_qa") {
+          const qaFrames = Array.isArray(result?.allFrames) && result.allFrames.length
+            ? result.allFrames
+            : result.frames;
+          applyGroundedQaResults(text, qaFrames, result.meta, result.demo);
+        }
         else applyDeepSearchResults(result?.searchQuery || text, result.frames);
       }
       const reply = {
@@ -632,6 +665,8 @@ export default function Workstation() {
         queryTitle: result?.mode === "agent_search" ? "Expanded queries" : "Queries used",
         routing: result?.routing || {},
         mustHaveChecks: result?.searchPlan?.must_have_checks || result?.searchPlan?.search_plan?.must_have_checks || [],
+        answerCandidates: result?.meta?.answer_candidates || [],
+        allFrames: result?.allFrames || result?.frames || [],
       };
       setChatMsgs((prev) => [...prev, reply]);
       setChatStatus("idle");
@@ -877,7 +912,7 @@ export default function Workstation() {
                 </span>
               </div>
             </div>
-            <QaAnswerPanel tab={activeTab} />
+            <QaAnswerPanel tab={activeTab} onSelectCandidate={selectQaCandidate} />
             <ResultGrid
               tab={activeTab}
               keptMap={kept}
@@ -935,6 +970,7 @@ export default function Workstation() {
             setAgentInput={setAgentSearchInput}
             onAgentSearch={sendAgentSearch}
             agentComposerRef={agentComposerRef}
+            onSelectQaCandidate={selectQaCandidate}
           />
         </div>
       </div>

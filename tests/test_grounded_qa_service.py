@@ -7,11 +7,14 @@ from PIL import Image
 
 from src.services.grounded_qa_service import (
     _candidate_from_evidence,
+    _build_candidate_bundles,
     _detail_image_data_urls,
     _diversify_evidence_groups,
     _fuse_text_hits,
     _normalise_supporting_ids,
+    _normalise_candidate_answers,
     _question_plan,
+    _rank_video_hypotheses,
     _relevant_text_evidence,
     _select_detail_frame_ids,
     _split_visual_events,
@@ -31,6 +34,9 @@ def _settings(**overrides):
         "qa_max_frames": 3,
         "qa_per_video_limit": 2,
         "qa_vlm_enabled": True,
+        "qa_candidate_answers_enabled": False,
+        "qa_candidate_max_videos": 4,
+        "qa_candidate_frames_per_video": 3,
         "qa_detail_pass_enabled": True,
         "qa_detail_model": "test/detail-model",
         "qa_detail_max_frames": 2,
@@ -326,6 +332,20 @@ def test_split_visual_events_accepts_connector_followed_by_comma():
     assert events == ["Inside a self-driving car", "the camera moves outside to a white car"]
 
 
+def test_split_visual_events_treats_descriptive_sentences_as_must_have_events():
+    events = _split_visual_events(
+        "A landslide completely blocks a mountain road. "
+        "In a close-up, a red-topped road marker is buried. "
+        "In the last scene, a motorcyclist crosses the mud. What is the pass name?"
+    )
+
+    assert events == [
+        "A landslide completely blocks a mountain road",
+        "In a close-up, a red-topped road marker is buried",
+        "In the last scene, a motorcyclist crosses the mud",
+    ]
+
+
 def test_detail_images_include_full_frame_and_zoom_grid(tmp_path):
     path = tmp_path / "frame.png"
     Image.new("RGB", (120, 90), color=(25, 80, 140)).save(path)
@@ -458,6 +478,75 @@ def test_diversified_groups_reserve_direct_text_evidence():
     selected = _diversify_evidence_groups(groups, ["visual query"], limit=6)
 
     assert "asr-anchor" in {group["id"] for group in selected}
+
+
+def test_video_hypothesis_prefers_complete_compact_multi_event_match():
+    groups = [
+        {
+            "id": "visual-top",
+            "video_id": "wrong-video",
+            "score": 4.0,
+            "video_event_coverage": 1,
+            "video_event_best_ranks": {"e1": 1},
+            "video_event_worst_rank": 1,
+            "video_event_span_seconds": 0.0,
+            "video_query_coverage": 3,
+            "frames": [{}],
+        },
+        {
+            "id": "complete",
+            "video_id": "target-video",
+            "score": 2.5,
+            "video_event_coverage": 3,
+            "video_event_best_ranks": {"e1": 8, "e2": 10, "e3": 12},
+            "video_event_worst_rank": 12,
+            "video_event_span_seconds": 42.0,
+            "video_query_coverage": 4,
+            "frames": [{"qa_evidence_priority": 20.0}],
+        },
+    ]
+    plan = {"event_queries": ["one", "two", "three"], "visual_queries": ["a", "b", "c", "d"]}
+
+    ranked = _rank_video_hypotheses(groups, plan, 4)
+
+    assert ranked[0]["video_id"] == "target-video"
+    assert ranked[0]["complete_event_match"] is True
+    assert ranked[0]["event_coverage_ratio"] == 1.0
+
+
+def test_candidate_answers_are_kept_separate_by_video_and_frame_ids():
+    selected = {
+        "f1": _frame(1, "L22_V027", 380.0),
+        "f2": _frame(2, "L22_V008", 234.0),
+    }
+    hypotheses = [
+        {"video_id": "L22_V027", "score": 4.0, "retrieval_score": 3.0},
+        {"video_id": "L22_V008", "score": 3.0, "retrieval_score": 2.0},
+    ]
+    bundles = _build_candidate_bundles(hypotheses, selected, 4, 2)
+    payload = {
+        "candidates": [
+            {
+                "candidate_id": "c1", "status": "uncertain", "answer": "đèo Tằng Quái",
+                "confidence": 0.4, "reason": "Chỉ khớp cảnh sạt lở.",
+                "supporting_frame_ids": ["f1"], "used_ocr_evidence": False,
+                "used_asr_evidence": False, "answer_language": "vi",
+            },
+            {
+                "candidate_id": "c2", "status": "answered", "answer": "đèo Tà Pứa",
+                "confidence": 0.92, "reason": "ASR cùng video nêu tên đèo Tà Pứa.",
+                "supporting_frame_ids": ["f2"], "used_ocr_evidence": False,
+                "used_asr_evidence": True, "answer_language": "vi",
+            },
+        ]
+    }
+
+    candidates, errors = _normalise_candidate_answers(payload, bundles, "location")
+
+    assert errors == []
+    assert [candidate["video_id"] for candidate in candidates] == ["L22_V027", "L22_V008"]
+    assert candidates[1]["answer"] == "đèo Tà Pứa"
+    assert candidates[1]["supporting_frame_names"] == ["000002.webp"]
 
 
 def test_text_evidence_is_limited_to_attached_video_moment():

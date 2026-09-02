@@ -12,6 +12,8 @@ BACKEND_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if BACKEND_ROOT not in sys.path:
     sys.path.insert(0, BACKEND_ROOT)
 
+from unittest.mock import MagicMock  # noqa: E402
+
 from src.config.settings import Settings  # noqa: E402
 from src.services import startup_warm  # noqa: E402
 from src.services.assets.local_cache import ArtifactCache  # noqa: E402
@@ -137,6 +139,58 @@ class TestSyncActiveBackendArtifacts:
         assets_mod.reset_caches()
         startup_warm._sync_active_backend_artifacts(self._settings(tmp_path))  # returns cleanly
         assets_mod.reset_caches()
+
+    def test_skips_and_does_not_promote_when_manifest_missing_a_profile_artifact(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """A manifest that omits part of the Jina profile is a broken publish:
+        startup must NOT sync a partial profile (fresh index + stale parquet)."""
+        from src.services import assets as assets_mod
+
+        store = _jina_store()
+        # drop jina_global_ids from the published manifest (blob still present)
+        import json as _json
+
+        doc = _json.loads(store.objects[("metadata", "hcmai-assets.json")])
+        doc["artifacts"] = [a for a in doc["artifacts"] if a["name"] != "jina_global_ids"]
+        store.objects[("metadata", "hcmai-assets.json")] = _json.dumps(doc).encode()
+
+        monkeypatch.setattr(assets_mod.factory, "build_asset_store", lambda settings=None: store)
+        assets_mod.reset_caches()
+
+        startup_warm._sync_active_backend_artifacts(self._settings(tmp_path))
+
+        assert store.reads == []  # nothing downloaded
+        assert ArtifactCache(tmp_path).get_current() is None
+        assets_mod.reset_caches()
+
+
+class TestWarmLoadsTheModel:
+    """Fix 8 -- 'retriever ready' must be truthful: the warm path performs an
+    explicit model warm, not just index construction."""
+
+    def test_warm_calls_model_warm(self, monkeypatch):
+        monkeypatch.setattr(startup_warm, "_sync_active_backend_artifacts", lambda s: None)
+        retriever = MagicMock()
+        fake_rb = MagicMock()
+        fake_rb.get_active_retriever.return_value = retriever
+        monkeypatch.setitem(sys.modules, "src.services.retrieval_backend", fake_rb)
+
+        startup_warm._warm(Settings(_env_file=None, retrieval_backend="jina_clip_v2"))
+
+        fake_rb.get_active_retriever.assert_called_once()
+        retriever.warm_model.assert_called_once()
+
+    def test_warm_survives_a_model_warm_failure(self, monkeypatch):
+        monkeypatch.setattr(startup_warm, "_sync_active_backend_artifacts", lambda s: None)
+        retriever = MagicMock()
+        retriever.warm_model.side_effect = RuntimeError("model download failed")
+        fake_rb = MagicMock()
+        fake_rb.get_active_retriever.return_value = retriever
+        monkeypatch.setitem(sys.modules, "src.services.retrieval_backend", fake_rb)
+
+        # must not raise -- warm-up is best-effort
+        startup_warm._warm(Settings(_env_file=None, retrieval_backend="jina_clip_v2"))
 
 
 if __name__ == "__main__":

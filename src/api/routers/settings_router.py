@@ -572,29 +572,95 @@ def cloud_sync(payload: CloudSyncRequest | None = None) -> dict:
         raise HTTPException(status_code=422, detail=f"Invalid manifest: {exc}")
     except assets.AssetStoreError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
-    # An explicit request always wins; otherwise sync only the active
-    # backend's artifacts -- a member on Jina must never be made to also
-    # download the (possibly much larger) BEiT3 checkpoint + FAISS index.
-    names = payload.names or list(
+
+    manifest_names = {a.name for a in manifest.artifacts}
+    profile = list(
         assets.BACKEND_ARTIFACT_NAMES.get(settings.retrieval_backend, assets.BACKEND_ARTIFACT_NAMES["beit3"])
     )
+
+    if payload.names:
+        # A manual, explicitly-selected subset: stage the download only. It
+        # must never move `current` on its own (that could pair a fresh index
+        # with an unsynced parquet), so promote=False and no `required` gate.
+        unknown = sorted(n for n in payload.names if n not in manifest_names)
+        if unknown:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown artifact name(s) for manifest {manifest.version}: {unknown}",
+            )
+        names, required, promote = list(payload.names), None, False
+    else:
+        # Active-backend profile sync: the manifest MUST declare the whole
+        # profile, else it is a broken publish for this backend -- reject
+        # rather than sync/promote a partial profile.
+        missing = sorted(n for n in profile if n not in manifest_names)
+        if missing:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Manifest {manifest.version} is missing {settings.retrieval_backend} "
+                    f"profile artifact(s) {missing}. Rebuild/republish the manifest with "
+                    f"the complete profile before syncing."
+                ),
+            )
+        names, required, promote = list(profile), list(profile), True
+
     # Runs synchronously (the response is the final report, unchanged
     # contract) but mirrors byte-level progress into the shared SyncProgress
     # so GET /settings/cloud/sync/status can be polled from the UI meanwhile.
     try:
-        report = assets.run_tracked_sync(store, cache, names, manifest, trigger="manual")
+        report = assets.run_tracked_sync(
+            store, cache, names, manifest, trigger="manual", required=required, promote=promote
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    if report.errors:
+        raise HTTPException(status_code=422, detail="; ".join(report.errors))
     return report.to_dict()
 
 
 @router.get("/cloud/sync/status")
 def cloud_sync_status() -> dict:
     """Live progress of the current / most recent artifact sync (manual or the
-    startup warmer). ``state`` is idle | running | done | error."""
+    startup warmer). ``state`` is idle | running | done | error; ``had_errors``
+    / ``ok`` distinguish a clean run from one that finished with
+    checksum/download failures."""
     from src.services import assets
 
     return assets.get_sync_progress().to_dict()
+
+
+@router.get("/retrieval/status")
+def retrieval_status() -> dict:
+    """Is the active retrieval backend ready to serve a query?
+
+    ``ready`` true  -> queries will work.
+    ``state`` "preparing" -> a startup cloud sync / pinned-model download is
+                             still in flight; retry shortly (queries get 503).
+    ``state`` "error" -> a real misconfiguration (see ``detail``).
+    """
+    from src.services import assets
+
+    settings = get_settings()
+    backend = (settings.retrieval_backend or "beit3").strip().lower()
+    sync_state = assets.get_sync_progress().to_dict().get("state")
+    out: dict = {"backend": backend, "sync_state": sync_state}
+
+    if backend != "jina_clip_v2":
+        out["ready"] = True
+        return out
+
+    if sync_state == "running":
+        out.update(ready=False, state="preparing", detail="cloud asset sync in progress")
+        return out
+    try:
+        from src.services import jina_retriever as jr
+
+        retriever = jr._retriever or jr.get_jina_retriever()
+        out.update(retriever.readiness())
+    except Exception as exc:  # noqa: BLE001
+        out.update(ready=False, state="error", detail=str(exc))
+    return out
 
 
 @router.get("/cloud/cache")

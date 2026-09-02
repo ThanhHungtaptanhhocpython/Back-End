@@ -106,6 +106,10 @@ class SyncProgress:
             self.state = "done"
             if report is not None:
                 self.report = report.to_dict()
+                # A validation error (unknown / empty names) never touched a
+                # byte -- surface it so the run does not read as green.
+                if report.errors and not self.error:
+                    self.error = "; ".join(report.errors)
                 for r in report.results:
                     art = self._artifacts.get(r.name)
                     if art is not None and art.status not in ("synced", "cached", "error"):
@@ -118,6 +122,14 @@ class SyncProgress:
             arts = [a.to_dict() for a in self._artifacts.values()]
             total = sum(a["total"] for a in arts)
             done = sum(a["done"] for a in arts)
+            had_errors = bool(self.error) or any(a["status"] == "error" for a in arts) or (
+                self.report is not None and not self.report.get("ok", True)
+            )
+            promoted = bool(self.report.get("promoted")) if self.report else False
+            # A finished run with checksum/download failures is "completed with
+            # errors" -- never a green success. `ok` is True only for a clean,
+            # promoted (or fully-cached) run.
+            ok = self.state == "done" and not had_errors
             return {
                 "state": self.state,
                 "version": self.version,
@@ -125,6 +137,9 @@ class SyncProgress:
                 "started_at": self.started_at,
                 "finished_at": self.finished_at,
                 "error": self.error,
+                "had_errors": had_errors,
+                "ok": ok,
+                "promoted": promoted,
                 "bytes_total": total,
                 "bytes_done": min(done, total) if total else done,
                 "pct": round(done / total * 100.0, 1) if total else 0.0,
@@ -148,16 +163,25 @@ def run_tracked_sync(
     manifest: Manifest,
     *,
     trigger: str,
+    required: list[str] | None = None,
+    promote: bool = True,
 ) -> SyncReport:
     """Run :func:`sync_artifacts`, mirroring byte-level progress into the
-    shared :class:`SyncProgress`. Serialized: only one at a time."""
+    shared :class:`SyncProgress`. Serialized: only one at a time.
+
+    ``required`` is the profile that gates promotion (see
+    :func:`sync_artifacts`); ``None`` means "whatever ``names`` downloaded".
+    ``promote=False`` stages the download without ever moving ``current``
+    (used for a manual, explicitly-selected subset).
+    """
     if not _RUN_LOCK.acquire(blocking=False):
         raise RuntimeError("a sync is already running")
     try:
         _PROGRESS.begin(manifest, names, trigger)
         try:
             report = sync_artifacts(
-                store, cache, names=names, manifest=manifest, progress=_PROGRESS.on_progress
+                store, cache, names=names, required=required, manifest=manifest,
+                progress=_PROGRESS.on_progress, promote=promote,
             )
         except Exception as exc:  # noqa: BLE001
             _PROGRESS.finish(None, error=f"{type(exc).__name__}: {exc}")

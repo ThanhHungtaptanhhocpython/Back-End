@@ -99,8 +99,27 @@ async def validation_exception_handler(
         },
     )
 
-# Register global catch-all exception handler
-app.add_exception_handler(Exception, global_exception_handler)
+async def _maybe_backend_preparing(request: Request, exc: Exception) -> JSONResponse:
+    """A search that lands mid startup-warm (cloud sync / model load still in
+    flight) gets a clear, retryable 503 -- never a generic 500."""
+    from src.services.retrieval_backend import BackendPreparingError
+
+    if isinstance(exc, BackendPreparingError):
+        return JSONResponse(
+            status_code=503,
+            headers={"Retry-After": "5"},
+            content={
+                "success": False,
+                "message": str(exc),
+                "detail": "backend_preparing",
+                "data": {"items": [], "total_items": 0},
+            },
+        )
+    return await global_exception_handler(request, exc)
+
+
+# Register global catch-all exception handler (backend-preparing -> 503, else 500)
+app.add_exception_handler(Exception, _maybe_backend_preparing)
 
 
 app.include_router(health_router, prefix="")

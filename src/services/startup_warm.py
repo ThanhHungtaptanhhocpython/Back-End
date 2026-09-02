@@ -56,8 +56,16 @@ def _warm(settings: Settings) -> None:
     try:
         from src.services.retrieval_backend import get_active_retriever
 
-        get_active_retriever()
-        logger.info("startup warm: %s retriever ready", settings.retrieval_backend)
+        retriever = get_active_retriever()
+        # Construction only loads the FAISS index + parquet. Explicitly warm
+        # the query encoder too, so "retriever ready" is truthful and the
+        # first real request never pays the (pinned) model download / load.
+        warm = getattr(retriever, "warm_model", None)
+        if callable(warm):
+            warm()
+            logger.info("startup warm: %s retriever + model ready", settings.retrieval_backend)
+        else:
+            logger.info("startup warm: %s retriever ready", settings.retrieval_backend)
     except Exception as exc:  # noqa: BLE001
         logger.warning("startup retriever warm skipped: %s", exc)
 
@@ -82,22 +90,37 @@ def _sync_active_backend_artifacts(settings: Settings) -> None:
         logger.info("startup warm: no manifest yet, nothing to sync")
         return
 
-    names = list(
+    profile = list(
         BACKEND_ARTIFACT_NAMES.get(settings.retrieval_backend, BACKEND_ARTIFACT_NAMES["beit3"])
     )
-    wanted = [a for a in manifest.artifacts if a.name in set(names)]
+    manifest_names = {a.name for a in manifest.artifacts}
+    missing = [n for n in profile if n not in manifest_names]
+    if missing:
+        # A manifest that does not declare the *whole* active-backend profile
+        # is a broken publish. Do NOT sync a partial profile -- that is exactly
+        # what would leave a fresh index paired with a stale/absent parquet.
+        logger.warning(
+            "startup warm: manifest %s is missing %s profile artifact(s) %s; "
+            "skipping sync (republish the manifest with the full profile)",
+            manifest.version,
+            settings.retrieval_backend,
+            missing,
+        )
+        return
+    wanted = [a for a in manifest.artifacts if a.name in set(profile)]
     cache = get_artifact_cache(settings)
     if cache.get_current() == manifest.version and cache.is_version_verified(manifest.version, wanted):
         logger.info("startup warm: %s artifacts already current (%s)", settings.retrieval_backend, manifest.version)
         return
 
     logger.info(
-        "startup warm: syncing %d %s artifact(s) for manifest %s",
-        len(wanted),
+        "startup warm: syncing the full %d-artifact %s profile for manifest %s",
+        len(profile),
         settings.retrieval_backend,
         manifest.version,
     )
     try:
-        run_tracked_sync(store, cache, names, manifest, trigger="startup")
+        # required == the COMPLETE profile -> promotion is all-or-nothing.
+        run_tracked_sync(store, cache, list(profile), manifest, trigger="startup", required=list(profile))
     except RuntimeError as exc:
         logger.info("startup warm: %s", exc)  # a manual sync is already running

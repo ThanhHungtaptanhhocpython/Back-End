@@ -21,6 +21,7 @@ import {
   testCloud,
 } from "../../services/settingsApi.js";
 import { formatBytes } from "./settingsModel.js";
+import { shouldKeepPolling, summarizeSyncProgress } from "./cloudSyncView.js";
 
 const ART_STATUS_COLOR = {
   synced: "success",
@@ -39,22 +40,27 @@ export default function CloudAssetsTab({ active }) {
   const [busy, setBusy] = useState("");
   const [syncProg, setSyncProg] = useState(null);
   const pollRef = useRef(null);
+  // Guards every async continuation: a poll / sync-POST that resolves after the
+  // tab is switched away or the component unmounts must NOT restart the poller
+  // or setState.
+  const aliveRef = useRef(true);
 
   async function loadStatus() {
     setLoading(true);
     try {
-      setStatus(await fetchCloudStatus());
+      const next = await fetchCloudStatus();
+      if (aliveRef.current) setStatus(next);
     } catch (err) {
-      message.error(err.message);
+      if (aliveRef.current) message.error(err.message);
     } finally {
-      setLoading(false);
+      if (aliveRef.current) setLoading(false);
     }
   }
 
   async function pollOnce() {
     try {
       const prog = await fetchCloudSyncStatus();
-      setSyncProg(prog);
+      if (aliveRef.current) setSyncProg(prog);
       return prog;
     } catch {
       return null;
@@ -70,27 +76,44 @@ export default function CloudAssetsTab({ active }) {
 
   function startPolling() {
     stopPolling();
+    if (!aliveRef.current) return;
     pollRef.current = setInterval(async () => {
-      const prog = await pollOnce();
-      if (prog && prog.state !== "running") {
+      if (!aliveRef.current) {
         stopPolling();
-        loadManifest(false);
-        loadStatus();
+        return;
+      }
+      const prog = await pollOnce();
+      if (prog && !shouldKeepPolling(prog)) {
+        stopPolling();
+        if (aliveRef.current) {
+          loadManifest(false);
+          loadStatus();
+        }
       }
     }, 1000);
   }
 
   useEffect(() => {
-    if (!active) return;
+    if (!active) return undefined;
+    aliveRef.current = true;
     loadStatus();
     // pick up an in-flight sync (e.g. the startup warmer)
     pollOnce().then((prog) => {
-      if (prog && prog.state === "running") startPolling();
+      if (aliveRef.current && prog && shouldKeepPolling(prog)) startPolling();
     });
-    return stopPolling;
+    return () => {
+      aliveRef.current = false;
+      stopPolling();
+    };
   }, [active]);
 
-  useEffect(() => stopPolling, []);
+  useEffect(
+    () => () => {
+      aliveRef.current = false;
+      stopPolling();
+    },
+    [],
+  );
 
   async function runTest() {
     setBusy("test");
@@ -119,18 +142,32 @@ export default function CloudAssetsTab({ active }) {
     startPolling();
     try {
       const report = await syncCloud([]);
-      message[report.ok ? "success" : "warning"](
-        `Sync ${report.ok ? "complete" : "finished with issues"} · version ${report.version}` +
-          (report.promoted ? " · promoted" : ""),
-      );
+      const errs = Array.isArray(report.errors) ? report.errors : [];
+      if (errs.length) {
+        message.error(`Sync rejected: ${errs.join("; ")}`);
+      } else {
+        message[report.ok ? "success" : "warning"](
+          `Sync ${report.ok ? "complete" : "finished with errors"} · version ${report.version}` +
+            (report.promoted ? " · promoted" : " · not promoted"),
+        );
+      }
     } catch (err) {
-      message.error(err.message);
+      // The blocking POST failed / timed out client-side. Backend work may
+      // still be running -- fall through and let the poll below decide whether
+      // to keep watching rather than blindly stopping.
+      if (aliveRef.current) message.error(err.message);
     } finally {
-      stopPolling();
-      await pollOnce();
-      await loadManifest(false);
-      await loadStatus();
-      setBusy("");
+      const prog = await pollOnce();
+      if (aliveRef.current && prog && shouldKeepPolling(prog)) {
+        startPolling(); // backend still syncing -> keep the progress bar live
+      } else {
+        stopPolling();
+        if (aliveRef.current) {
+          await loadManifest(false);
+          await loadStatus();
+        }
+      }
+      if (aliveRef.current) setBusy("");
     }
   }
 
@@ -161,7 +198,8 @@ export default function CloudAssetsTab({ active }) {
     );
   }
 
-  const syncing = syncProg?.state === "running";
+  const syncView = summarizeSyncProgress(syncProg);
+  const syncing = syncView.running;
 
   const artColumns = [
     { title: "Artifact", dataIndex: "name" },
@@ -212,21 +250,26 @@ export default function CloudAssetsTab({ active }) {
         </Popconfirm>
       </Space>
 
-      {syncProg && syncProg.state !== "idle" && (
+      {syncView.visible && (
         <div className="set-sync-progress" style={{ marginBottom: 16 }}>
           <div className="set-dim" style={{ marginBottom: 4 }}>
-            {syncProg.state === "running"
-              ? `Syncing ${syncProg.trigger === "startup" ? "(startup) " : ""}version ${syncProg.version} …`
-              : syncProg.state === "error"
-                ? `Last sync failed: ${syncProg.error}`
-                : `Last sync ${syncProg.report?.promoted ? "promoted " : ""}version ${syncProg.version}`}
+            {syncView.headline}
             {" · "}
             {formatBytes(syncProg.bytes_done)} / {formatBytes(syncProg.bytes_total)}
           </div>
-          <Progress
-            percent={Math.round(syncProg.pct || 0)}
-            status={syncProg.state === "error" ? "exception" : syncProg.state === "running" ? "active" : "success"}
-          />
+          <Progress percent={Math.round(syncProg.pct || 0)} status={syncView.overallStatus} />
+          {syncView.hadErrors && !syncView.running && (
+            <Alert
+              style={{ marginTop: 8 }}
+              type="warning"
+              showIcon
+              message="Sync completed with errors"
+              description={
+                syncProg.error ||
+                "One or more artifacts failed checksum / download. The version was not promoted; fix the source and re-sync."
+              }
+            />
+          )}
           <div style={{ marginTop: 8 }}>
             {(syncProg.artifacts || []).map((a) => (
               <div key={a.name} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>

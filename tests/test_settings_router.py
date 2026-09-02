@@ -298,26 +298,37 @@ class TestCloudEndpoints:
         # always answerable, even before any sync has run
         assert body["state"] in ("idle", "running", "done", "error")
         assert "artifacts" in body and "pct" in body and "bytes_total" in body
+        assert "had_errors" in body and "ok" in body
 
-    def test_sync_and_manifest_with_fake_store(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_retrieval_status_ready_for_default_beit3_backend(self) -> None:
+        body = _client().get("/settings/retrieval/status").json()
+        assert body["backend"] == "beit3"
+        assert body["ready"] is True
+
+    @staticmethod
+    def _full_beit3_store(version: str = "vX"):
         import hashlib
         import json as _json
 
+        from src.services.assets.base import BACKEND_ARTIFACT_NAMES
+        from tests.test_cloud_assets import InMemoryStore
+
+        arts, objs = [], {}
+        for name in BACKEND_ARTIFACT_NAMES["beit3"]:
+            blob = f"BEIT3-{name}-bytes".encode()
+            key = f"beit3/{name}"
+            objs[("embeddings", key)] = blob
+            arts.append({"name": name, "container": "embeddings", "key": key,
+                         "size": len(blob), "sha256": hashlib.sha256(blob).hexdigest()})
+        objs[("metadata", "hcmai-assets.json")] = _json.dumps({"version": version, "artifacts": arts}).encode()
+        return InMemoryStore(objs)
+
+    def test_sync_and_manifest_with_fake_store(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from src.api.routers import settings_router
         from src.config.settings import Settings
         from src.services import assets as assets_mod
-        from tests.test_cloud_assets import InMemoryStore
 
-        faiss = b"FAISS-BYTES-XYZ"
-        arts = [{
-            "name": "faiss_index", "container": "embeddings", "key": "beit3/f.index",
-            "size": len(faiss), "sha256": hashlib.sha256(faiss).hexdigest(),
-        }]
-        objs = {
-            ("metadata", "hcmai-assets.json"): _json.dumps({"version": "vX", "artifacts": arts}).encode(),
-            ("embeddings", "beit3/f.index"): faiss,
-        }
-        store = InMemoryStore(objs)
+        store = self._full_beit3_store("vX")
         s = Settings(_env_file=None, cloud_assets_enabled=True, cloud_assets_provider="s3_compatible",
                      cloud_assets_cache_path=str(tmp_path))
         monkeypatch.setattr(settings_router, "get_settings", lambda: s)
@@ -334,8 +345,59 @@ class TestCloudEndpoints:
         assert report["current_version"] == "vX"
 
         after = client.get("/settings/cloud/manifest").json()
-        assert after["artifacts"][0]["cached"] is True and after["artifacts"][0]["verified"] is True
+        assert all(a["cached"] and a["verified"] for a in after["artifacts"])
 
         cleared = client.post("/settings/cloud/cache/clear", json={"scope": "all"}).json()
         assert cleared["ok"] is True
+        assets_mod.reset_caches()
+
+    def test_active_profile_sync_rejects_a_manifest_missing_a_profile_artifact(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A manifest that declares only part of the active backend's profile is
+        a broken publish: POST /settings/cloud/sync must 422, not promote."""
+        import json as _json
+
+        from src.api.routers import settings_router
+        from src.config.settings import Settings
+        from src.services import assets as assets_mod
+        from tests.test_cloud_assets import InMemoryStore
+
+        store = self._full_beit3_store("vY")
+        # drop `tokenizer` from the published manifest (blob still there)
+        doc = _json.loads(store.objects[("metadata", "hcmai-assets.json")])
+        doc["artifacts"] = [a for a in doc["artifacts"] if a["name"] != "tokenizer"]
+        store.objects[("metadata", "hcmai-assets.json")] = _json.dumps(doc).encode()
+
+        s = Settings(_env_file=None, cloud_assets_enabled=True, cloud_assets_provider="s3_compatible",
+                     cloud_assets_cache_path=str(tmp_path))
+        monkeypatch.setattr(settings_router, "get_settings", lambda: s)
+        monkeypatch.setattr(assets_mod, "build_asset_store", lambda settings=None: store)
+        assets_mod.reset_caches()
+
+        resp = _client().post("/settings/cloud/sync", json={})
+        assert resp.status_code == 422
+        assert "tokenizer" in resp.json()["detail"]
+        assert assets_mod.get_artifact_cache(s).get_current() is None
+        assert store.reads == []  # nothing was downloaded
+        assets_mod.reset_caches()
+
+    def test_manual_subset_sync_stages_without_promoting(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from src.api.routers import settings_router
+        from src.config.settings import Settings
+        from src.services import assets as assets_mod
+
+        store = self._full_beit3_store("vZ")
+        s = Settings(_env_file=None, cloud_assets_enabled=True, cloud_assets_provider="s3_compatible",
+                     cloud_assets_cache_path=str(tmp_path))
+        monkeypatch.setattr(settings_router, "get_settings", lambda: s)
+        monkeypatch.setattr(assets_mod, "build_asset_store", lambda settings=None: store)
+        assets_mod.reset_caches()
+
+        report = _client().post("/settings/cloud/sync", json={"names": ["faiss_index"]}).json()
+        assert [a["name"] for a in report["artifacts"]] == ["faiss_index"]
+        assert report["promoted"] is False
+        assert report["current_version"] is None
         assets_mod.reset_caches()

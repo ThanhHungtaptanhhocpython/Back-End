@@ -308,6 +308,121 @@ class TestSync:
 
 
 # ---------------------------------------------------------------------------
+_JINA_PROFILE = ["jina_faiss_index", "jina_global_ids", "jina_video_metadata", "jina_index_meta"]
+_BEIT3_PROFILE = ["faiss_index", "global_ids", "video_metadata", "index_meta", "checkpoint", "tokenizer"]
+
+
+def _profile_store(profile, version="prof-v1", *, drop=(), corrupt=()):
+    """A manifest declaring `profile` (minus `drop`), with `corrupt` artifacts
+    whose published sha256 will not match the bytes."""
+    objs, arts = {}, []
+    for name in profile:
+        if name in drop:
+            continue
+        blob = f"{name}-bytes-{version}".encode()
+        key = f"p/{name}"
+        objs[("embeddings", key)] = blob
+        sha = _sha(b"WRONG") if name in corrupt else _sha(blob)
+        arts.append({"name": name, "container": "embeddings", "key": key,
+                     "size": len(blob), "sha256": sha})
+    objs[("metadata", "hcmai-assets.json")] = _manifest(version, arts)
+    return InMemoryStore(objs)
+
+
+def _jina_profile_store(version="jina-v9", **kw):
+    return _profile_store(_JINA_PROFILE, version, **kw)
+
+
+class TestProfileAtomicPromotion:
+    """Promotion is all-or-nothing across the *complete* active-backend
+    profile. A manifest missing any profile artifact is a broken publish:
+    nothing is downloaded and `current` never moves."""
+
+    def test_complete_jina_profile_promotes_after_all_verify(self, tmp_path: Path):
+        store = _jina_profile_store()
+        cache = ArtifactCache(tmp_path)
+        report = sync_artifacts(store, cache, names=list(_JINA_PROFILE), required=list(_JINA_PROFILE))
+        assert report.ok and report.promoted
+        assert cache.get_current() == report.version == "jina-v9"
+        assert not report.errors
+
+    def test_complete_beit3_profile_still_promotes(self, tmp_path: Path):
+        store = _profile_store(_BEIT3_PROFILE, "beit3-v2")
+        cache = ArtifactCache(tmp_path)
+        report = sync_artifacts(store, cache, names=list(_BEIT3_PROFILE), required=list(_BEIT3_PROFILE))
+        assert report.ok and report.promoted and cache.get_current() == "beit3-v2"
+
+    def test_one_bad_checksum_blocks_profile_promotion(self, tmp_path: Path):
+        store = _jina_profile_store(corrupt=("jina_global_ids",))
+        cache = ArtifactCache(tmp_path)
+        report = sync_artifacts(store, cache, names=list(_JINA_PROFILE), required=list(_JINA_PROFILE))
+        statuses = {r.name: r.status for r in report.results}
+        assert statuses["jina_global_ids"] == "checksum_mismatch"
+        assert report.promoted is False and cache.get_current() is None
+
+    def test_incomplete_download_does_not_promote(self, tmp_path: Path):
+        store = _jina_profile_store()
+        cache = ArtifactCache(tmp_path)
+        report = sync_artifacts(store, cache, names=["jina_faiss_index"], required=list(_JINA_PROFILE))
+        assert [r.name for r in report.results] == ["jina_faiss_index"]
+        assert report.results[0].status == "synced"
+        assert report.promoted is False and cache.get_current() is None
+
+    @pytest.mark.parametrize("missing", _JINA_PROFILE)
+    def test_manifest_missing_any_required_artifact_is_rejected(self, tmp_path: Path, missing):
+        store = _jina_profile_store(drop=(missing,))
+        cache = ArtifactCache(tmp_path)
+        report = sync_artifacts(store, cache, names=list(_JINA_PROFILE), required=list(_JINA_PROFILE))
+        assert report.errors and missing in report.errors[0]
+        assert report.results == []          # nothing downloaded
+        assert store.reads == []             # not even a byte fetched
+        assert report.promoted is False and cache.get_current() is None
+
+    def test_jina_index_plus_meta_but_no_global_ids_is_rejected(self, tmp_path: Path):
+        store = _jina_profile_store(drop=("jina_global_ids", "jina_video_metadata"))
+        cache = ArtifactCache(tmp_path)
+        report = sync_artifacts(store, cache, names=list(_JINA_PROFILE), required=list(_JINA_PROFILE))
+        assert report.errors and "jina_global_ids" in report.errors[0]
+        assert report.promoted is False and cache.get_current() is None
+        assert store.reads == []
+
+    def test_unknown_artifact_name_is_a_validation_error(self, tmp_path: Path):
+        store = _jina_profile_store()
+        cache = ArtifactCache(tmp_path)
+        report = sync_artifacts(store, cache, names=["not_a_real_artifact"])
+        assert report.errors and report.ok is False
+        assert report.promoted is False and report.results == [] and cache.get_current() is None
+
+    def test_empty_names_request_is_a_validation_error(self, tmp_path: Path):
+        store = _jina_profile_store()
+        cache = ArtifactCache(tmp_path)
+        report = sync_artifacts(store, cache, names=[])
+        assert report.errors and report.ok is False and report.promoted is False
+
+    def test_manual_subset_stages_without_promoting_when_promote_false(self, tmp_path: Path):
+        store = _jina_profile_store()
+        cache = ArtifactCache(tmp_path)
+        report = sync_artifacts(store, cache, names=["jina_faiss_index"], promote=False)
+        assert report.results[0].status == "synced"
+        assert report.promoted is False and cache.get_current() is None
+
+    def test_partial_sync_stays_staged_then_completion_promotes(self, tmp_path: Path):
+        store = _jina_profile_store()
+        cache = ArtifactCache(tmp_path)
+
+        first = sync_artifacts(store, cache, names=["jina_faiss_index"], required=list(_JINA_PROFILE))
+        assert first.promoted is False and cache.get_current() is None
+        s = Settings(_env_file=None, cloud_assets_enabled=True,
+                     cloud_assets_provider="s3_compatible", cloud_assets_cache_path=str(tmp_path))
+        assets.reset_caches()
+        assert assets.resolve_artifact_path("jina_faiss_index", settings=s) is None
+        assets.reset_caches()
+
+        second = sync_artifacts(store, cache, names=list(_JINA_PROFILE), required=list(_JINA_PROFILE))
+        assert second.promoted is True and cache.get_current() == "jina-v9"
+
+
+# ---------------------------------------------------------------------------
 class TestSyncProgress:
     def _store(self):
         a, b = b"A" * 40, b"B" * 12  # 40 + 12 = 52 bytes total

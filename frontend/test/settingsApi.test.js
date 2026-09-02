@@ -5,6 +5,7 @@ import {
   SettingsApiError,
   browseFs,
   fetchCloudSyncStatus,
+  fetchRetrievalStatus,
   fetchSchema,
   saveConfig,
   settingsBase,
@@ -126,6 +127,20 @@ test("fetchCloudSyncStatus GETs the sync-status endpoint", async () => {
   assert.equal(seen.url, "http://127.0.0.1:3000/settings/cloud/sync/status");
   assert.equal(seen.method, "GET");
   assert.equal(body.state, "running");
+});
+
+test("fetchRetrievalStatus GETs the retrieval-status endpoint", async () => {
+  let seen;
+  const body = await fetchRetrievalStatus({
+    env: ENV,
+    fetchImpl: async (url, init) => {
+      seen = { url, method: init?.method };
+      return jsonResponse({ backend: "jina_clip_v2", ready: false, state: "preparing" });
+    },
+  });
+  assert.equal(seen.url, "http://127.0.0.1:3000/settings/retrieval/status");
+  assert.equal(seen.method, "GET");
+  assert.equal(body.state, "preparing");
 });
 
 test("browseFs builds the fs query string", async () => {

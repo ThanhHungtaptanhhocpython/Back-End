@@ -17,7 +17,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
@@ -812,6 +812,44 @@ class ValidateImmutableModelRevisionTests(unittest.TestCase):
             jr.JinaRetriever._validate_immutable_revision(_SHA_A, "x"),
             jr.validate_immutable_model_revision(_SHA_A, "x"),
         )
+
+
+class ResolveDeviceTests(unittest.TestCase):
+    """`JINA_DEVICE` -> concrete torch device. 'auto' picks cuda when a GPU is
+    present, else cpu; 'cuda' falls back to cpu (never a hard error); 'cpu'
+    stays cpu; anything else is rejected."""
+
+    def _resolve(self, requested, *, cuda_available):
+        from src.services import jina_retriever as jr
+
+        bare = object.__new__(jr.JinaRetriever)
+        with patch("torch.cuda.is_available", return_value=cuda_available):
+            return jr.JinaRetriever._resolve_device(bare, requested)
+
+    def test_auto_uses_gpu_when_available(self):
+        self.assertEqual(self._resolve("auto", cuda_available=True), "cuda")
+
+    def test_auto_uses_cpu_when_no_gpu(self):
+        self.assertEqual(self._resolve("auto", cuda_available=False), "cpu")
+
+    def test_unset_defaults_to_auto_behaviour(self):
+        self.assertEqual(self._resolve(None, cuda_available=True), "cuda")
+        self.assertEqual(self._resolve("", cuda_available=False), "cpu")
+
+    def test_explicit_cuda_falls_back_to_cpu_without_a_gpu(self):
+        self.assertEqual(self._resolve("cuda", cuda_available=False), "cpu")
+
+    def test_explicit_cuda_is_honoured_with_a_gpu(self):
+        self.assertEqual(self._resolve("CUDA", cuda_available=True), "cuda")
+
+    def test_explicit_cpu_never_upgrades_to_gpu(self):
+        self.assertEqual(self._resolve("cpu", cuda_available=True), "cpu")
+
+    def test_unknown_value_is_rejected(self):
+        from src.services import jina_retriever as jr
+
+        with self.assertRaises(jr.JinaRetrieverError):
+            self._resolve("tpu", cuda_available=False)
 
 
 if __name__ == "__main__":

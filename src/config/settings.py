@@ -159,7 +159,7 @@ class Settings(BaseSettings):
     # relies on a manually pre-populated cache. No effect when a revision is
     # not pinned.
     jina_model_auto_bootstrap: bool = True
-    jina_device: str = "cpu"
+    jina_device: str = "auto"  # "auto" (cuda if available, else cpu) | "cpu" | "cuda"
     # `truncate_dim` passed to encode_text/encode_image; must match the 1024-d
     # FAISS index the corpus was built with (see scripts/cloud/build_jina_index.py).
     jina_truncate_dim: int = 1024

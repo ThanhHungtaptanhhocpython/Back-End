@@ -277,8 +277,11 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
        hide_when={"RETRIEVAL_BACKEND": "beit3"},
        help="Jina CLIP v2 ships custom modeling code on the Hub; required True "
             "to load it via transformers.AutoModel."),
-    _f("JINA_DEVICE", G_RETRIEVAL, CHOICE, choices=("cpu", "cuda"),
-       hide_when={"RETRIEVAL_BACKEND": "beit3"}, help="Torch device for Jina text encoding."),
+    _f("JINA_DEVICE", G_RETRIEVAL, CHOICE, choices=("auto", "cpu", "cuda"),
+       hide_when={"RETRIEVAL_BACKEND": "beit3"},
+       help="Torch device for Jina image/text encoding. 'auto' (default) uses "
+            "the GPU when one is available, otherwise CPU; 'cuda' forces the "
+            "GPU but falls back to CPU with a warning if there is none."),
     _f("JINA_TRUNCATE_DIM", G_RETRIEVAL, INT, minimum=64, maximum=4096,
        hide_when={"RETRIEVAL_BACKEND": "beit3"},
        help="Must match the dimension the FAISS index was built with (1024)."),

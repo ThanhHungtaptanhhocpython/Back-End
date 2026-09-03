@@ -267,21 +267,37 @@ class JinaRetriever:
     # ------------------------------------------------------------------
 
     def _resolve_device(self, requested: str | None) -> str:
-        requested_norm = (requested or "cpu").strip().lower()
-        if requested_norm not in ("cuda", "cpu"):
-            raise JinaRetrieverError(
-                f"Invalid JINA_DEVICE={requested!r}; expected 'cuda' or 'cpu'."
-            )
-        if requested_norm == "cuda":
-            import torch
+        """Resolve ``JINA_DEVICE`` to a concrete torch device string.
 
-            if not torch.cuda.is_available():
-                logger.warning(
-                    "JINA_DEVICE=cuda was requested but CUDA is not available; "
-                    "falling back to CPU."
-                )
-                return "cpu"
-        return requested_norm
+        * ``auto`` (default) / unset -> ``cuda`` when a CUDA GPU is available,
+          otherwise ``cpu``.
+        * ``cuda`` -> ``cuda`` if available, else ``cpu`` with a warning
+          (an explicit request that can't be honoured must not be a hard error).
+        * ``cpu`` -> ``cpu``.
+        """
+        requested_norm = (requested or "auto").strip().lower()
+        if requested_norm not in ("auto", "cuda", "cpu"):
+            raise JinaRetrieverError(
+                f"Invalid JINA_DEVICE={requested!r}; expected 'auto', 'cuda' or 'cpu'."
+            )
+        if requested_norm == "cpu":
+            return "cpu"
+
+        import torch
+
+        cuda_ok = torch.cuda.is_available()
+        if requested_norm == "auto":
+            resolved = "cuda" if cuda_ok else "cpu"
+            logger.info("JINA_DEVICE=auto -> %s (cuda_available=%s)", resolved, cuda_ok)
+            return resolved
+        # requested_norm == "cuda"
+        if not cuda_ok:
+            logger.warning(
+                "JINA_DEVICE=cuda was requested but CUDA is not available; "
+                "falling back to CPU."
+            )
+            return "cpu"
+        return "cuda"
 
     def _require_path(self, path: Path | None, env_var: str) -> Path:
         if path is None:

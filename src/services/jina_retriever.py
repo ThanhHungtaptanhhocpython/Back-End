@@ -286,18 +286,29 @@ class JinaRetriever:
         import torch
 
         cuda_ok = torch.cuda.is_available()
-        if requested_norm == "auto":
-            resolved = "cuda" if cuda_ok else "cpu"
-            logger.info("JINA_DEVICE=auto -> %s (cuda_available=%s)", resolved, cuda_ok)
-            return resolved
-        # requested_norm == "cuda"
-        if not cuda_ok:
-            logger.warning(
-                "JINA_DEVICE=cuda was requested but CUDA is not available; "
-                "falling back to CPU."
-            )
-            return "cpu"
-        return "cuda"
+        if cuda_ok:
+            if requested_norm == "auto":
+                try:
+                    name = torch.cuda.get_device_name(0)
+                except Exception:  # noqa: BLE001 - name lookup is cosmetic
+                    name = "cuda device"
+                logger.info("JINA_DEVICE=auto -> cuda (%s)", name)
+            return "cuda"
+
+        # No CUDA-capable torch. Fall back to CPU, but say so loudly with the
+        # fix -- Jina encoding is ~10x slower on CPU, and the usual cause is the
+        # CPU-only `torch` wheel (`pip install torch` does not always pull a CUDA
+        # build, notably on Windows) rather than a missing GPU.
+        _v = getattr(torch, "__version__", "?")
+        logger.warning(
+            "JINA_DEVICE=%s but torch.cuda.is_available() is False -- Jina CLIP v2 "
+            "will encode on CPU (~10x slower). Installed torch=%s. If this machine "
+            "has an NVIDIA GPU, install a CUDA build, e.g.: pip install "
+            "torch==2.13.0+cu126 torchvision==0.28.0+cu126 --index-url "
+            "https://download.pytorch.org/whl/cu126  (match the +cuXXX to your driver).",
+            requested_norm, _v,
+        )
+        return "cpu"
 
     def _require_path(self, path: Path | None, env_var: str) -> Path:
         if path is None:

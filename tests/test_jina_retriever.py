@@ -845,6 +845,25 @@ class ResolveDeviceTests(unittest.TestCase):
     def test_explicit_cpu_never_upgrades_to_gpu(self):
         self.assertEqual(self._resolve("cpu", cuda_available=True), "cpu")
 
+    def test_auto_falling_back_to_cpu_warns_with_the_cuda_install_hint(self):
+        from src.services import jina_retriever as jr
+
+        bare = object.__new__(jr.JinaRetriever)
+        with patch("torch.cuda.is_available", return_value=False), \
+             self.assertLogs("src.services.jina_retriever", level="WARNING") as cm:
+            self.assertEqual(jr.JinaRetriever._resolve_device(bare, "auto"), "cpu")
+        joined = "\n".join(cm.output)
+        self.assertIn("download.pytorch.org/whl", joined)
+        self.assertIn("cuda.is_available", joined)
+
+    def test_explicit_cpu_does_not_warn(self):
+        from src.services import jina_retriever as jr
+
+        bare = object.__new__(jr.JinaRetriever)
+        with patch("torch.cuda.is_available", return_value=False):
+            with self.assertNoLogs("src.services.jina_retriever", level="WARNING"):
+                self.assertEqual(jr.JinaRetriever._resolve_device(bare, "cpu"), "cpu")
+
     def test_unknown_value_is_rejected(self):
         from src.services import jina_retriever as jr
 

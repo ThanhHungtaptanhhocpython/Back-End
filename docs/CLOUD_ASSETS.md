@@ -65,7 +65,7 @@ container and LRU-cached locally.
 | `jina_faiss_index` | `jina_faiss.index` | `IndexIDMap2(IndexFlatIP(1024))` |
 | `jina_global_ids` | `global_ids.parquet` | one row per keyframe (schema below) |
 | `jina_video_metadata` | `video_metadata.parquet` | per-video: `video_id`, `parent_namespace`, `frame_count`, `embedding_dim`, `first_vector_id`, `artifact_blob` |
-| `jina_index_meta` | `index_meta.json` | `embedding_run`, `model`, `embedding_dim`, `metric`, `vector_count`, `video_count` |
+| `jina_index_meta` | `index_meta.json` | `embedding_run`, `model`, `embedding_dim`, `metric`, `vector_count`, `video_count`, `model_revision` |
 
 **`jina_global_ids` parquet — two accepted schemas.** `JinaRetriever` reads
 either and normalizes internally (`_normalize_global_ids`):
@@ -96,6 +96,12 @@ environment** (`RETRIEVAL_BACKEND=jina_clip_v2`):
   A branch/tag/`main`, or a `jina_index_meta.json` with no `model_revision`,
   is rejected: **rebuild and republish** such an `index_meta.json` (with
   `scripts/cloud/build_jina_index.py --model-revision <sha>`) before deploy.
+  For the published `fine_keyframes_jina_clip_v2_1024d_v2` index this is already
+  done: its `index_meta.json` carries
+  `model_revision = e10d47f5691d0454a0fb5d13f46f2199b74cb436` (verified 2026-09-03
+  by re-encoding sampled keyframes — cosine ≥ 0.99999 vs the stored vectors; this
+  is `jinaai/jina-clip-v2` `main` HEAD and the only image-encoder-relevant commit),
+  so `JINA_MODEL_REVISION` need not be set unless you want an explicit override.
 * `JINA_MODEL_PATH` = a repo id → the pinned commit is fetched once via
   `huggingface_hub` (`JINA_LOCAL_FILES_ONLY=false`, `JINA_MODEL_AUTO_BOOTSTRAP=true`).
 * `JINA_MODEL_PATH` = an existing local directory → loaded directly, offline;
@@ -136,10 +142,10 @@ The `fine_keyframes_jina_clip_v2_1024d_v2` index is already published. To use it
    manifest), then upload it once to `metadata/hcmai-assets.json`.
 2. Per member: `CLOUD_ASSETS_ENABLED=true`, `CLOUD_ASSETS_PROVIDER=azure_blob`,
    `AZURE_STORAGE_CONNECTION_STRING=…`, `RETRIEVAL_BACKEND=jina_clip_v2`,
-   `JINA_MODEL_PATH=jinaai/jina-clip-v2`, and **`JINA_MODEL_REVISION=<the exact
-   `jinaai/jina-clip-v2` commit SHA the index was embedded with>`** — unless the
-   published `jina_index_meta.json` already carries that SHA in `model_revision`
-   (regenerate + reupload it if it does not). Save → restart.
+   `JINA_MODEL_PATH=jinaai/jina-clip-v2`. `JINA_MODEL_REVISION` is **optional**
+   here — the published `jina_index_meta.json` already carries the proven pin
+   (`model_revision = e10d47f5691d0454a0fb5d13f46f2199b74cb436`); set it only to
+   force a different commit. Save → restart.
 3. With `CLOUD_ASSETS_AUTOSYNC=true` (default) the app then syncs the four
    `jina_*` artifacts and warms the retriever **in the background at
    startup** — nothing to click. Watch it on the **Cloud Assets** tab: an

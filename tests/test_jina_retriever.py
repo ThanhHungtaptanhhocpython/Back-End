@@ -765,5 +765,54 @@ class LazyLoadingTests(unittest.TestCase):
             importlib.reload(jr)
 
 
+class ValidateImmutableModelRevisionTests(unittest.TestCase):
+    """The shared model-pin contract reused by the index builder and the
+    scratch/jina_smoke_test.py helper -- it must match runtime behaviour.
+
+    Symbols are pulled from the live module in each test: an earlier test in
+    this file reloads ``src.services.jina_retriever``, which rebinds the
+    module-level ``JinaRetrieverError`` class the file imported at load time.
+    """
+
+    def _mod(self):
+        from src.services import jina_retriever as jr
+        return jr
+
+    def test_accepts_short_and_full_hex_shas(self):
+        validate = self._mod().validate_immutable_model_revision
+        for good in ("deadbee", _SHA_A, _SHA_B, "E10D47F5691D0454A0FB5D13F46F2199B74CB436"):
+            self.assertEqual(validate(good, "x"), good.strip())
+
+    def test_strips_surrounding_whitespace(self):
+        self.assertEqual(self._mod().validate_immutable_model_revision(f"  {_SHA_A}\n", "x"), _SHA_A)
+
+    def test_rejects_empty_or_none_as_missing(self):
+        jr = self._mod()
+        for bad in (None, "", "   "):
+            with self.assertRaises(jr.JinaRetrieverError) as ctx:
+                jr.validate_immutable_model_revision(bad, "JINA_MODEL_REVISION")
+            self.assertIn("missing", str(ctx.exception))
+
+    def test_rejects_moving_refs(self):
+        jr = self._mod()
+        for bad in ("main", "master", "HEAD", "latest", "dev", "develop", "stable"):
+            with self.assertRaises(jr.JinaRetrieverError) as ctx:
+                jr.validate_immutable_model_revision(bad, "x")
+            self.assertIn("immutable commit revision", str(ctx.exception))
+
+    def test_rejects_placeholders_and_non_hex(self):
+        jr = self._mod()
+        for bad in ("smoke-test-unpinned", "v2.0", "jinaai/jina-clip-v2", "abcdefg", "z" * 12):
+            with self.assertRaises(jr.JinaRetrieverError):
+                jr.validate_immutable_model_revision(bad, "x")
+
+    def test_matches_the_retriever_staticmethod(self):
+        jr = self._mod()
+        self.assertEqual(
+            jr.JinaRetriever._validate_immutable_revision(_SHA_A, "x"),
+            jr.validate_immutable_model_revision(_SHA_A, "x"),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

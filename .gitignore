@@ -54,6 +54,13 @@ media-info-*.zip
 *.index
 *.parquet
 *.spm
+*.npy
+
+# Local Jina smoke-test index + its downloaded per-video embeddings/records
+# (scratch/jina_smoke_test.py build-mini --out ./jina_mini). Azure-sourced,
+# never commit.
+/jina_mini/
+/jina_runtime/
 src/dict/nw/*.bin
 src/dict/faiss_index.bin
 .gstack/

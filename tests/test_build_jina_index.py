@@ -99,6 +99,34 @@ class TestHappyPath:
         assert row["keyframe_ordinal"] == 1
         assert row["source_frame_id"] == 0
 
+    @pytest.mark.parametrize("bad_rev", ["", "main", "latest", "smoke-test-unpinned", "v2.0", "abcdef"])
+    def test_non_immutable_model_revision_is_rejected(self, tmp_path: Path, bad_rev: str):
+        _write_video(tmp_path, "L21_a", "L21_V001", 2, seed=41)
+        argv = [
+            "--embeddings-root", str(tmp_path / "embeddings"),
+            "--records-root", str(tmp_path / "records"),
+            "--out-dir", str(tmp_path / "out"),
+            "--model-revision", bad_rev,
+        ]
+        with pytest.raises(SystemExit, match="model-revision"):
+            bji.main(argv)
+        assert not (tmp_path / "out").exists()
+
+    def test_immutable_model_revision_is_accepted(self, tmp_path: Path):
+        _write_video(tmp_path, "L21_a", "L21_V001", 2, seed=42)
+        out_dir = tmp_path / "out"
+        # A synthetic 40-hex string -- shape only; not a real checkpoint id.
+        sha = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+        rc = bji.main([
+            "--embeddings-root", str(tmp_path / "embeddings"),
+            "--records-root", str(tmp_path / "records"),
+            "--out-dir", str(out_dir),
+            "--model-revision", sha,
+        ])
+        assert rc == 0
+        meta = json.loads((out_dir / "jina_index_meta.json").read_text(encoding="utf-8"))
+        assert meta["model_revision"] == sha
+
     def test_main_writes_all_four_output_files(self, tmp_path: Path):
         _write_video(tmp_path, "L21_a", "L21_V001", 3, seed=3)
         out_dir = tmp_path / "out"

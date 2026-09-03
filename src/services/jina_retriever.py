@@ -182,6 +182,31 @@ class JinaRetrieverError(RuntimeError):
     """
 
 
+def validate_immutable_model_revision(rev: str | None, where: str = "model revision") -> str:
+    """Return ``rev`` stripped, or raise :class:`JinaRetrieverError`.
+
+    The single definition of an acceptable Jina CLIP v2 model pin, shared by
+    the runtime retriever, the index builder, and the local smoke-test helper
+    so all three agree on it: a bare git commit SHA (7-64 hex chars). An empty
+    value, a placeholder like ``smoke-test-unpinned``, or a moving ref such as
+    ``main`` / ``latest`` is rejected -- query embeddings must come from the
+    exact commit that produced the published cloud FAISS index.
+    """
+    r = (rev or "").strip()
+    if not r:
+        raise JinaRetrieverError(
+            f"{where} is missing. Set it to the exact git commit SHA the cloud "
+            f"Jina FAISS index was embedded with."
+        )
+    if r.lower() in _MOVING_REFS or not _IMMUTABLE_REV_RE.match(r):
+        raise JinaRetrieverError(
+            f"{where}={rev!r} is not an immutable commit revision. Jina query "
+            f"embeddings must use the exact git commit SHA that produced the "
+            f"cloud FAISS index -- not a branch, tag, or moving ref like 'main'."
+        )
+    return r
+
+
 class JinaRetriever:
     """Owns the Jina CLIP v2 model, FAISS index, and parquet metadata."""
 
@@ -315,14 +340,7 @@ class JinaRetriever:
 
     @staticmethod
     def _validate_immutable_revision(rev: str, where: str) -> str:
-        r = (rev or "").strip()
-        if r.lower() in _MOVING_REFS or not _IMMUTABLE_REV_RE.match(r):
-            raise JinaRetrieverError(
-                f"{where}={rev!r} is not an immutable commit revision. Jina query "
-                f"embeddings must use the exact git commit SHA that produced the "
-                f"cloud FAISS index -- not a branch, tag, or moving ref like 'main'."
-            )
-        return r
+        return validate_immutable_model_revision(rev, where)
 
     def _resolve_expected_model_revision(self) -> str:
         """The exact Jina CLIP v2 commit the query encoder must resolve to.

@@ -84,6 +84,15 @@ EXPECTED_DIM = 1024
 _UNSAFE_ID_RE = re.compile(r"[\\/]|\.\.")
 _NORM_ATOL = 2e-3  # matches the tolerance the Azure merge notebook validates with
 
+# An immutable model pin: a git commit SHA (7-64 hex). Kept in lock-step with
+# `src/services/jina_retriever.py` (`_IMMUTABLE_REV_RE` / `_MOVING_REFS` /
+# `validate_immutable_model_revision`) -- the runtime retriever refuses to query
+# an index whose `model_revision` is a branch/tag/placeholder, so the builder
+# must refuse to stamp one. Inlined (not imported) to keep this script runnable
+# standalone from a build/notebook environment with no `src` on sys.path.
+_IMMUTABLE_REV_RE = re.compile(r"\A[0-9a-fA-F]{7,64}\Z")
+_MOVING_REFS = {"main", "master", "head", "latest", "dev", "develop", "stable"}
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -91,6 +100,20 @@ def _now() -> str:
 
 def _fail(message: str) -> "SystemExit":
     return SystemExit(f"build_jina_index: {message}")
+
+
+def _validate_model_revision(rev: str) -> str:
+    r = (rev or "").strip()
+    if not r:
+        raise _fail("--model-revision is empty")
+    if r.lower() in _MOVING_REFS or not _IMMUTABLE_REV_RE.match(r):
+        raise _fail(
+            f"--model-revision={rev!r} is not an immutable commit revision. Pass the "
+            f"exact git commit SHA the Jina CLIP v2 encoder ran at -- not a branch, "
+            f"tag, or moving ref like 'main'. The runtime retriever refuses to query "
+            f"an index stamped with anything else."
+        )
+    return r
 
 
 @dataclass
@@ -376,11 +399,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model-id", default="jinaai/jina-clip-v2",
                         help="HuggingFace repo id or local snapshot dir the corpus was built with.")
     parser.add_argument("--model-revision", required=True,
-                        help="Pinned commit hash the encoder ran at -- required, not optional: "
-                             "the runtime retriever refuses to query without a matching pin.")
+                        help="Pinned commit hash the encoder ran at -- required, not optional, "
+                             "and must be an immutable git commit SHA (7-64 hex): the runtime "
+                             "retriever refuses to query without a matching pin.")
     parser.add_argument("--embedding-run", default="",
                         help="Free-form label for this corpus build (for index_meta.json only).")
     args = parser.parse_args(argv)
+
+    model_revision = _validate_model_revision(args.model_revision)
 
     started = time.perf_counter()
     result = build_index(args.embeddings_root, args.records_root, args.map_keyframes_root)
@@ -403,7 +429,7 @@ def main(argv: list[str] | None = None) -> int:
         "backend": "jina_clip_v2",
         "embedding_run": args.embedding_run or None,
         "model_id": args.model_id,
-        "model_revision": args.model_revision,
+        "model_revision": model_revision,
         "dimension": EXPECTED_DIM,
         "metric": "inner_product_on_l2_normalized_vectors",
         "normalization": "l2",

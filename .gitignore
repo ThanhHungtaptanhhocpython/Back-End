@@ -70,3 +70,16 @@ aic2026_05_beit3_faiss/metadata_beit3_downloaded.json
 .terraform/
 .terraform.lock.hcl
 crash.log
+
+# Ansible Secrets
+infrastructure/ansible/inventory.ini
+infrastructure/ansible/*.vault
+infrastructure/ansible/*.vault.key
+
+# Output & Credentials Dump Files
+infrastructure/terraform/outputs.txt
+infrastructure/terraform/azure_credentials.txt
+infrastructure/terraform/*.txt
+infrastructure/*.txt
+*credentials*.txt
+

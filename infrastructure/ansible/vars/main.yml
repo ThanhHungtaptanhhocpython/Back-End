@@ -1,0 +1,10 @@
+---
+# ==============================================================================
+# Biến cấu hình triển khai Elasticsearch (KHÔNG CHỨA MẬT KHẨU THẬT)
+# Mật khẩu được nạp động từ file inventory.ini (file đã được gitignore bảo vệ an toàn)
+# ==============================================================================
+elasticsearch_version: "8.13.0"
+elasticsearch_port: 9200
+elasticsearch_heap_size: "2g"
+elasticsearch_data_dir: "/opt/elasticsearch/data"
+elasticsearch_app_dir: "/opt/elasticsearch"

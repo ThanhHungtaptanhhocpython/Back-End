@@ -27,6 +27,20 @@ variable "storage_replication_type" {
   default     = "LRS"
 }
 
+variable "vm_size" {
+  type        = string
+  description = "Kích cỡ máy ảo chạy Elasticsearch tại Singapore (Standard_D2s_v3: 2 vCPU, 8GB RAM)"
+  default     = "Standard_D2s_v3"
+}
+
+
+
+variable "vm_admin_username" {
+  type        = string
+  description = "Tài khoản admin SSH vào máy ảo"
+  default     = "azureuser"
+}
+
 variable "tags" {
   type        = map(string)
   description = "Tags gán cho tài nguyên"

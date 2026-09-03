@@ -1,0 +1,195 @@
+---
+- name: Triển khai và Gia cố Bảo mật (Hardening Harness) cho Elasticsearch trên Azure VM
+  hosts: elasticsearch_servers
+  become: yes
+  vars_files:
+    - vars/main.yml
+
+  tasks:
+    # ==============================================================================
+    # 1. KERNEL TUNING & OS HARDENING (GIA CỐ BẢO MẬT HỆ ĐIỀU HÀNH)
+    # ==============================================================================
+    - name: Cấu hình vm.max_map_count >= 262144 (Bộ nhớ ảo cho mmap ES)
+      ansible.posix.sysctl:
+        name: vm.max_map_count
+        value: '262144'
+        state: present
+        reload: yes
+
+    - name: Giảm mức độ swappiness = 1 (Chống swap RAM ra ổ cứng)
+      ansible.posix.sysctl:
+        name: vm.swappiness
+        value: '1'
+        state: present
+        reload: yes
+
+    - name: Gia cố mạng - Bật TCP SYN Cookies (Chống tấn công từ chối dịch vụ SYN Flood)
+      ansible.posix.sysctl:
+        name: net.ipv4.tcp_syncookies
+        value: '1'
+        state: present
+        reload: yes
+
+    - name: Gia cố mạng - Bật Reverse Path Filtering (Chống giả mạo địa chỉ IP Spoofing)
+      ansible.posix.sysctl:
+        name: net.ipv4.conf.all.rp_filter
+        value: '1'
+        state: present
+        reload: yes
+
+    - name: Gia cố mạng - Bỏ qua ICMP Broadcast Pings (Chống Smurf DDoS)
+      ansible.posix.sysctl:
+        name: net.ipv4.icmp_echo_ignore_broadcasts
+        value: '1'
+        state: present
+        reload: yes
+
+    - name: Thiết lập giới hạn File Descriptors & Memory Lock trong /etc/security/limits.d/
+      copy:
+        dest: /etc/security/limits.d/99-elasticsearch.conf
+        content: |
+          * soft nofile 65536
+          * hard nofile 65536
+          * soft memlock unlimited
+          * hard memlock unlimited
+          * soft nproc 4096
+          * hard nproc 4096
+        mode: '0644'
+
+    # ==============================================================================
+    # 2. FIREWALL HARDENING (GIA CỐ TƯỜNG LỬA UFW)
+    # ==============================================================================
+    - name: Cài đặt và cấu hình tường lửa UFW
+      apt:
+        name: ufw
+        state: present
+
+    - name: Thiết lập chính sách mặc định của tường lửa (Chặn toàn bộ Inbound lạ)
+      community.general.ufw:
+        direction: incoming
+        policy: deny
+
+    - name: Cho phép lưu lượng Outbound ra ngoài
+      community.general.ufw:
+        direction: outgoing
+        policy: allow
+
+    - name: Mở cổng SSH (22) với tính năng Rate Limiting (Chống Brute-force mật khẩu)
+      community.general.ufw:
+        rule: limit
+        port: '22'
+        proto: tcp
+
+    - name: Mở cổng Elasticsearch (9200) cho truy vấn từ xa
+      community.general.ufw:
+        rule: allow
+        port: "{{ elasticsearch_port }}"
+        proto: tcp
+
+    - name: Bật kích hoạt tường lửa UFW
+      community.general.ufw:
+        state: enabled
+
+    # ==============================================================================
+    # 3. CÀI ĐẶT & BẢO MẬT DOCKER
+    # ==============================================================================
+    - name: Cập nhật danh sách gói apt
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Cài đặt các gói phụ trợ
+      apt:
+        name:
+          - curl
+          - git
+          - ca-certificates
+          - gnupg
+          - docker.io
+          - docker-compose-v2
+        state: present
+
+    - name: Đảm bảo Docker service đang chạy và tự khởi động cùng OS
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Thêm user admin vào group docker
+      user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: yes
+
+    # ==============================================================================
+    # 4. CHUẨN BỊ THƯ MỤC DỮ LIỆU (NON-ROOT PERMISSIONS)
+    # ==============================================================================
+    - name: Tạo thư mục chứa file cấu hình và dữ liệu Elasticsearch
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "1000" # UID elasticsearch trong container
+        group: "1000" # GID elasticsearch trong container
+        mode: '0770'
+      loop:
+        - "{{ elasticsearch_app_dir }}"
+        - "{{ elasticsearch_data_dir }}"
+
+    - name: Triển khai file docker-compose.yml đã gia cố từ template Jinja2
+      template:
+        src: templates/docker-compose.yml.j2
+        dest: "{{ elasticsearch_app_dir }}/docker-compose.yml"
+        owner: "1000"
+        group: "1000"
+        mode: '0640'
+
+    # ==============================================================================
+    # 5. KHỞI CHẠY CONTAINER ELASTICSEARCH
+    # ==============================================================================
+    - name: Dọn dẹp container khởi tạo ban đầu để giải phóng cổng 9200
+      shell: |
+        docker stop elasticsearch aic_elasticsearch 2>/dev/null || true
+        docker rm -f elasticsearch aic_elasticsearch 2>/dev/null || true
+      failed_when: false
+
+    - name: Khởi động container Elasticsearch bằng Docker Compose
+      command:
+        cmd: docker compose up -d
+        chdir: "{{ elasticsearch_app_dir }}"
+
+
+    - name: Chờ Elasticsearch khởi động và mở cổng 9200 (Tối đa 90 giây)
+      wait_for:
+        port: "{{ elasticsearch_port }}"
+        delay: 10
+        timeout: 90
+
+    # ==============================================================================
+    # 6. KIỂM TRA SỨC KHỎE (HEALTHCHECK HARNESS) VÀ XUẤT KẾT QUẢ
+    # ==============================================================================
+    - name: Kiểm tra trạng thái Cluster Health của Elasticsearch
+      uri:
+        url: "http://localhost:{{ elasticsearch_port }}/_cluster/health"
+        user: "elastic"
+        password: "{{ elasticsearch_password }}"
+        method: GET
+        force_basic_auth: yes
+        return_content: yes
+        status_code: 200
+      register: es_health
+      until: es_health.status == 200
+      retries: 12
+      delay: 5
+
+    - name: In thông tin kết nối và trạng thái bảo mật
+      debug:
+        msg:
+          - "=========================================================="
+          - "🎉 ELASTICSEARCH ĐÃ ĐƯỢC GIA CỐ (HARDENED) & SẴN SÀNG!"
+          - "Cluster Status:  {{ es_health.json.status }}"
+          - "Cluster Name:    {{ es_health.json.cluster_name }}"
+          - "Số Nodes:        {{ es_health.json.number_of_nodes }}"
+          - "Tường lửa UFW:   Đang kích hoạt (Rate-limit SSH + Port 9200)"
+          - "Bảo mật Docker:  No-new-privileges + PID limit 1000 + Log Rotation"
+          - "URL kết nối:     http://elastic:{{ elasticsearch_password }}@{{ ansible_host }}:{{ elasticsearch_port }}"
+          - "=========================================================="

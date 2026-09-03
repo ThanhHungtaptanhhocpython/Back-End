@@ -42,6 +42,9 @@
  * @property {number} latency       - Mock latency ms
  * @property {FrameItem[]} results  - Ranked result frames
  * @property {number} total         - Result count
+ * @property {Object|null} meta     - Backend QA summary/diagnostics
+ * @property {"live"|"demo"|"fallback"|null} resultSource
+ * @property {string|null} resultMode
  */
 
 /**

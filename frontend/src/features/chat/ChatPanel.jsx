@@ -16,6 +16,7 @@ import {
 import { translateTextDetailed } from "../../services/translateService";
 import { canTargetTranslation, TRANSLATION_TARGETS } from "../../shared/translationTarget";
 import useDialogFocus from "../../hooks/useDialogFocus";
+import QaCandidateList from "../results/QaCandidateList";
 
 async function copyText(text) {
   try {
@@ -132,7 +133,7 @@ function InteractiveMessage({ text }) {
   );
 }
 /* ---------- Q&A tab ---------- */
-function QaTab({ messages, status, input, setInput, onSend, ctxFrame, onClearCtx, composerRef }) {
+function QaTab({ messages, status, input, setInput, onSend, ctxFrame, onClearCtx, composerRef, onSelectCandidate }) {
   const listRef = useRef(null);
   useEffect(() => {
     const el = listRef.current;
@@ -158,6 +159,14 @@ function QaTab({ messages, status, input, setInput, onSend, ctxFrame, onClearCtx
               ) : null}
               {m.role === "assistant" ? <span className="ws-demo-badge">{m.demo ? "DEMO" : "LIVE"}</span> : null}
               <InteractiveMessage text={m.text} />
+              {m.role === "assistant" ? (
+                <QaCandidateList
+                  candidates={m.answerCandidates}
+                  frames={m.allFrames}
+                  onSelect={onSelectCandidate}
+                  compact
+                />
+              ) : null}
               <RoutingSummary routing={m.routing} />
               <SearchChecklist checks={m.mustHaveChecks} />
               <QueryList queries={m.queriesUsed} title={m.queryTitle || "Queries used"} />
@@ -284,6 +293,7 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
   const [translated, setTranslated] = useState("");
   const [translating, setTranslating] = useState(false);
   const [translationLive, setTranslationLive] = useState(false);
+  const [translationProvider, setTranslationProvider] = useState("none");
   const [translationStatus, setTranslationStatus] = useState("");
   const [editing, setEditing] = useState(false);
   const [editBuf, setEditBuf] = useState("");
@@ -314,6 +324,7 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
     if (!text || override !== null) {
       setTranslated("");
       setTranslationLive(false);
+      setTranslationProvider("none");
       setTranslationStatus("");
       setTranslating(false);
       return;
@@ -327,11 +338,13 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
         if (!cancelled) {
           setTranslated(result?.text || "");
           setTranslationLive(Boolean(result?.live));
+          setTranslationProvider(result?.provider || "none");
           setTranslationStatus(result?.status || "");
         }
       } catch {
         if (!cancelled) {
           setTranslated("");
+          setTranslationProvider("unavailable");
           setTranslationStatus("backend_unreachable");
         }
       } finally {
@@ -392,6 +405,9 @@ function TranslationPanel({ onUseInSearch, onUseInChat }) {
           <div className="ws-tr-trans">
             <div className="ws-tr-head">
               <span>Translated - {dir === "en-vi" ? "Vietnamese" : "English"}</span>
+              <span className="ws-demo-badge">
+                {translating ? "LIVE..." : translationLive ? `LIVE · ${translationProvider.toUpperCase()}` : override !== null ? "EDITED" : "UNAVAILABLE"}
+              </span>
               <span className="ws-demo-badge">{translationBadge}</span>
             </div>
             {editing ? (
@@ -453,6 +469,7 @@ export default function ChatPanel({
   open, width, chatTab, setChatTab, messages, status, input, setInput,
   onSend, ctxFrame, onClearCtx, composerRef, onToggleOpen, onExpand, onStartResize,
   onUseInSearch, onUseInChat, agentMessages = [], agentStatus = "idle", agentInput = "", setAgentInput = () => {}, onAgentSearch = () => {}, agentComposerRef,
+  onSelectQaCandidate = () => {},
 }) {
   if (!open) return null;
   return (
@@ -491,6 +508,7 @@ export default function ChatPanel({
           ctxFrame={ctxFrame}
           onClearCtx={onClearCtx}
           composerRef={composerRef}
+          onSelectCandidate={onSelectQaCandidate}
         />
       </div>
       <div className="ws-chat-pane" hidden={chatTab !== "agent"}>

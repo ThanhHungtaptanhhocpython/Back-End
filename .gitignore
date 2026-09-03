@@ -1,5 +1,7 @@
 .DS_Store
 .env
+.env.*
+!.env.example
 .flaskenv
 *.pyc
 *.pyo
@@ -20,6 +22,11 @@ cover/
 # Data directories
 src/data/
 data/
+benchmarks/qa_runs/
+
+# Local runtime state
+.runlogs/
+.venv-broken-*/
 
 .idea/
 docs/_build/
@@ -52,6 +59,8 @@ src/dict/faiss_index.bin
 .gstack/
 src/dict/metadata_beit3.json
 src/dict/*.json.bak_*
+aic2026_05_beit3_faiss/faiss_index_downloaded.bin
+aic2026_05_beit3_faiss/metadata_beit3_downloaded.json
 
 # Terraform
 *.tfvars

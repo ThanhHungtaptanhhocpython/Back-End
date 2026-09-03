@@ -39,6 +39,10 @@ class Settings(BaseSettings):
         src_dir: Absolute path to the `src/` directory. All data paths
             are resolved relative to this.
         keyframes_root: Root directory for keyframe images.
+        features_root: Root directory for per-video .npy feature files.
+        media_info_path: Directory containing per-video media-info JSON files.
+        clip_model_name: OpenCLIP model architecture name.
+        clip_pretrained: OpenCLIP pretrained weights identifier.
         log_level: Python logging level string.
     """
 
@@ -51,13 +55,16 @@ class Settings(BaseSettings):
     # --- Data Paths (resolved relative to src_dir if not absolute) ---
     src_dir: Path = _default_src_dir()
     keyframes_root: Path | None = None
+    features_root: Path | None = None
+    media_info_path: Path | None = None
+    faiss_index_path: Path | None = None
+    metadata_path: Path | None = None
 
     # --- Video playback / frame capture ---
     # Archive (or directory) of per-video media-info JSON files carrying the
     # YouTube ``watch_url`` and ``length``. ``media-info-aic25-b1.zip`` is a
     # runtime asset that is not committed to Git; point this at wherever it
     # lives on the deployment machine.
-    media_info_path: Path | None = None
     # Archive (or directory) of per-video map-keyframes CSV files. These carry
     # the authoritative per-video FPS and the keyframe-ordinal -> frame index
     # mapping. Defaults to the extracted ``src/dict/map-keyframes`` directory;
@@ -85,6 +92,10 @@ class Settings(BaseSettings):
 
     # --- External Services ---
     elasticsearch_url: str = "http://localhost:9200"
+
+    # --- Legacy OpenCLIP retrieval settings ---
+    clip_model_name: str = "ViT-B-32"
+    clip_pretrained: str = "openai"
 
     # --- CORS ---
     # Comma-separated list of allowed origins. Use "*" to allow any origin
@@ -194,13 +205,31 @@ class Settings(BaseSettings):
     trake_asr_enabled: bool = True
     trake_vlm_enabled: bool = True
     trake_vlm_max_sequences: int = 5
-    qa_retrieval_pool: int = 40
-    qa_max_frames: int = 8
-    qa_per_video_limit: int = 3
+    qa_retrieval_pool: int = 120
+    qa_visual_query_limit: int = 8
+    qa_max_frames: int = 16
+    qa_per_video_limit: int = 4
+    qa_event_window_seconds: float = 8.0
+    qa_max_evidence_groups: int = 8
+    qa_context_frames_per_group: int = 3
     qa_text_evidence_top_k: int = 12
+    qa_text_retrieval_pool: int = 32
     qa_evidence_window_seconds: float = 15.0
     qa_vlm_enabled: bool = True
+    qa_answer_model: str = "qwen/qwen3-vl-32b-instruct"
+    qa_candidate_answers_enabled: bool = True
+    qa_candidate_max_videos: int = 4
+    qa_candidate_frames_per_video: int = 3
+    qa_detail_pass_enabled: bool = True
+    qa_detail_model: str = "qwen/qwen3-vl-32b-instruct"
+    qa_detail_max_frames: int = 2
+    qa_detail_grid_size: int = 3
+    qa_detail_image_max_side: int = 900
+    qa_verify_enabled: bool = True
     qa_min_confidence: float = 0.55
+    qa_return_best_guess: bool = True
+    qa_uncertain_confidence_cap: float = 0.49
+    qa_answer_max_chars: int = 100
     qa_max_tokens: int = 700
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-3-5-sonnet-20240620"
@@ -336,7 +365,10 @@ class Settings(BaseSettings):
         return value
     @field_validator(
         "keyframes_root",
+        "features_root",
         "media_info_path",
+        "faiss_index_path",
+        "metadata_path",
         "map_keyframes_path",
         "video_capture_cache_path",
         "beit3_faiss_index_path",
@@ -398,6 +430,24 @@ class Settings(BaseSettings):
         if self.keyframes_root is not None:
             return Path(self.keyframes_root)
         return self.src_dir / "data" / "Keyframes"
+
+    def get_features_root(self) -> Path:
+        """Return the resolved per-video feature root directory."""
+        if self.features_root is not None:
+            return Path(self.features_root)
+        return self.src_dir / "dict" / "features"
+
+    def get_faiss_index_path(self) -> Path:
+        """Return the resolved legacy OpenCLIP FAISS index path."""
+        if self.faiss_index_path is not None:
+            return Path(self.faiss_index_path)
+        return self.src_dir / "dict" / "faiss_clip.bin"
+
+    def get_metadata_path(self) -> Path:
+        """Return the resolved legacy OpenCLIP metadata path."""
+        if self.metadata_path is not None:
+            return Path(self.metadata_path)
+        return self.src_dir / "dict" / "metadata_clip.json"
 
     def get_media_info_path(self) -> Path:
         """Return the resolved media-info archive/directory path.

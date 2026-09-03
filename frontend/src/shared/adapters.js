@@ -11,7 +11,13 @@
 export { translateText } from "../services/translateService.js";
 export { askCopilot, askGroundedQa } from "../services/copilotService.js";
 
-import { getSearchConfig, isTransportError, runBackendAgentSearch, runBackendSearch } from "../services/backendSearch.js";
+import {
+  getSearchConfig,
+  isTransportError,
+  runBackendAgentSearch,
+  runBackendSearch,
+  shouldUseQaDemoFallback,
+} from "../services/backendSearch.js";
 import { mockSearch, mockTemporalSearch } from "../mocks/searchEngine.js";
 import { parseTemporalQuery, buildTemporalEventQueries } from "./temporalQuery.js";
 
@@ -23,6 +29,22 @@ function mockTemporalForTab(tab) {
     topk: tab?.params?.topk || 100,
     folded: buildTemporalEventQueries(parsed),
   });
+}
+
+async function runQaDemoFallback(tab, pivot, { reason, liveMeta } = {}) {
+  const fallback = await mockSearch(tab, pivot);
+  return {
+    ...fallback,
+    mode: "FALLBACK DEMO - QA KEYFRAMES UNAVAILABLE",
+    source: "fallback",
+    fallbackReason: reason || liveMeta?.reason || "No local keyframe image was available for grounded Q&A.",
+    meta: {
+      ...fallback.meta,
+      demo: true,
+      fallback_reason: reason || liveMeta?.reason || "No local keyframe image was available for grounded Q&A.",
+      live_status: liveMeta?.status || null,
+    },
+  };
 }
 
 /**
@@ -40,9 +62,16 @@ export async function runSearch(tab, pivot) {
   }
 
   try {
-    return await runBackendSearch(tab, pivot, { config });
+    const result = await runBackendSearch(tab, pivot, { config });
+    if (config.mode === "auto" && shouldUseQaDemoFallback(tab, result)) {
+      return runQaDemoFallback(tab, pivot, { liveMeta: result.meta });
+    }
+    return result;
   } catch (error) {
     if (config.mode === "auto" && isTransportError(error)) {
+      if (tab?.searchType === "QA") {
+        return runQaDemoFallback(tab, pivot, { reason: error.message });
+      }
       const fallback = isTemporal ? await mockTemporalForTab(tab) : await mockSearch(tab, pivot);
       return {
         ...fallback,
@@ -50,6 +79,9 @@ export async function runSearch(tab, pivot) {
         source: "fallback",
         fallbackReason: error.message,
       };
+    }
+    if (config.mode === "auto" && tab?.searchType === "QA" && Number(error?.status) >= 500) {
+      return runQaDemoFallback(tab, pivot, { reason: error.message });
     }
     throw error;
   }

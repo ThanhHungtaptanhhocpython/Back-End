@@ -48,6 +48,213 @@
   font-size: 12px;
 }
 
+/* ---------- Q&A generated answer ---------- */
+.ws-qa-answer {
+  margin: 14px 14px 0;
+  padding: 14px 16px;
+  border: 1px solid #bfdbfe;
+  border-left: 4px solid var(--ws-primary);
+  border-radius: 8px;
+  background: #eff6ff;
+}
+
+.ws-qa-answer.demo {
+  border-color: #fde68a;
+  border-left-color: #d97706;
+  background: #fffbeb;
+}
+
+.ws-qa-answer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.ws-qa-answer-eyebrow {
+  margin-bottom: 6px;
+  color: var(--ws-faint);
+  font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.ws-qa-answer-badges,
+.ws-qa-answer-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ws-qa-answer-badge,
+.ws-qa-answer-status {
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.ws-qa-answer-badge.live {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.ws-qa-answer-badge.demo {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.ws-qa-answer-status {
+  color: var(--ws-muted);
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--ws-border);
+}
+
+.ws-qa-answer-stats {
+  color: var(--ws-muted);
+  font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 10px;
+}
+
+.ws-qa-answer-stats strong {
+  color: var(--ws-text);
+}
+
+.ws-qa-answer-text {
+  margin: 12px 0 0;
+  color: var(--ws-text);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.ws-qa-answer-reason,
+.ws-qa-answer-note {
+  margin: 7px 0 0;
+  color: var(--ws-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.ws-qa-answer-note {
+  color: #92400e;
+}
+
+.ws-qa-candidates {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.ws-qa-candidates-title {
+  color: var(--ws-faint);
+  font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.ws-qa-candidates-note {
+  margin-top: 3px;
+  color: var(--ws-muted);
+  font-size: 11px;
+}
+
+.ws-qa-candidate-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 9px;
+  margin-top: 9px;
+}
+
+.ws-qa-candidate {
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid var(--ws-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.ws-qa-candidate.selected {
+  border-color: var(--ws-primary);
+  box-shadow: 0 0 0 1px var(--ws-primary);
+}
+
+.ws-qa-candidate-images {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 7px;
+  overflow: hidden;
+}
+
+.ws-qa-candidate-images img {
+  width: 68px;
+  height: 44px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: var(--ws-surface-2);
+}
+
+.ws-qa-candidate-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  color: var(--ws-faint);
+  font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 9px;
+}
+
+.ws-qa-candidate-meta strong {
+  color: var(--ws-primary);
+  font-size: 10px;
+}
+
+.ws-qa-candidate-answer {
+  margin-top: 6px;
+  color: var(--ws-text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.ws-qa-candidate-reason {
+  display: -webkit-box;
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--ws-muted);
+  font-size: 10px;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.ws-qa-candidate-select {
+  width: 100%;
+  margin-top: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--ws-primary);
+  border-radius: 5px;
+  color: var(--ws-primary);
+  background: transparent;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.ws-qa-candidate-select:disabled {
+  color: #ffffff;
+  background: var(--ws-primary);
+  cursor: default;
+}
+
+.ws-qa-candidates.compact .ws-qa-candidate-grid {
+  grid-template-columns: 1fr;
+}
+
 .ws-grid {
   padding: 14px;
   display: flex;

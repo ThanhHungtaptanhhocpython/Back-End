@@ -14,6 +14,7 @@ import ShortcutOverlay from "./ShortcutOverlay";
 import QueryTabs from "../search/QueryTabs";
 import SearchBar from "../search/SearchBar";
 import ResultGrid from "../results/ResultGrid";
+import QaAnswerPanel from "../results/QaAnswerPanel";
 import TemporalStoryboard from "../results/TemporalStoryboard";
 import { reindexTemporalSequences } from "../../shared/temporalNormalize";
 import { isRunnableTemporalQuery, parseTemporalQuery } from "../../shared/temporalQuery";
@@ -36,6 +37,9 @@ function makeTab() {
     results: [],
     sequences: [],
     total: 0,
+    meta: null,
+    resultSource: null,
+    resultMode: null,
   };
 }
 
@@ -111,7 +115,11 @@ export default function Workstation() {
     const query = String(tab?.query || "").trim();
     if (tab?.searchType !== "IMAGE" && !query) {
       searchSeqRef.current.set(tab.key, (searchSeqRef.current.get(tab.key) || 0) + 1);
-      setTabs((prev) => prev.map((t) => (t.key === tab.key ? { ...t, status: "idle", results: [], sequences: [], total: 0, latency: 0 } : t)));
+      setTabs((prev) => prev.map((t) => (
+        t.key === tab.key
+          ? { ...t, status: "idle", results: [], sequences: [], total: 0, latency: 0, meta: null, resultSource: null, resultMode: null }
+          : t
+      )));
       return;
     }
     if (tab?.searchType === "TEMPORAL" && !isRunnableTemporalQuery(parseTemporalQuery(query))) {
@@ -127,7 +135,11 @@ export default function Workstation() {
     const effectivePivot = pivotFrame || tab?.pivotItem;
 
     if (tabKey === activeKey) setFocusedId(null);
-    setTabs((prev) => prev.map((t) => (t.key === tabKey ? { ...t, status: "running", results: [], sequences: [], total: 0, latency: 0 } : t)));
+    setTabs((prev) => prev.map((t) => (
+      t.key === tabKey
+        ? { ...t, status: "running", results: [], sequences: [], total: 0, latency: 0, meta: null, resultSource: null, resultMode: null }
+        : t
+    )));
     try {
       const res = await runSearchQuery(tab, effectivePivot);
       if (!isLatestSearch()) return;
@@ -143,21 +155,25 @@ export default function Workstation() {
                 sequences: isTemporal ? res.sequences || [] : [],
                 total: isTemporal ? res.totalItems || (res.sequences || []).length : res.totalItems,
                 latency: res.latency,
+                meta: res.meta || null,
+                resultSource: res.source || null,
+                resultMode: res.mode || null,
               }
             : t,
-        ),
+        )
       );
+      const qaDemoFallback = res.source === "fallback" && res.type === "QA";
       if (tabKey === activeKey) setFocusedId(isTemporal ? null : res.items?.[0]?.id || null);
       setBackend({
-        backend: res.source === "live" ? "online" : "offline",
+        backend: res.source === "live" || qaDemoFallback ? "online" : "offline",
         demo: res.source !== "live",
-        note: res.source === "live" ? "FASTAPI" : res.source === "fallback" ? "FASTAPI UNAVAILABLE" : "LOCAL MOCK",
+        note: res.source === "live" ? "FASTAPI" : qaDemoFallback ? "FASTAPI + QA DEMO FALLBACK" : res.source === "fallback" ? "FASTAPI UNAVAILABLE" : "LOCAL MOCK",
         at: new Date().toLocaleTimeString("en-GB", { hour12: false }),
       });
       toast.success(`${res.type} - ${res.totalItems} frames - ${res.mode} - ${res.latency}ms`);
     } catch (error) {
       if (!isLatestSearch()) return;
-      setTabs((prev) => prev.map((t) => (t.key === tabKey ? { ...t, status: "err" } : t)));
+      setTabs((prev) => prev.map((t) => (t.key === tabKey ? { ...t, status: "err", meta: null, resultSource: null, resultMode: null } : t)));
       toast.error(error instanceof Error ? error.message : "Search failed");
     }
   };
@@ -482,7 +498,7 @@ export default function Workstation() {
     });
     toast.success(`Deep search returned ${items.length} frames`);
   };
-  const applyGroundedQaResults = (query, items) => {
+  const applyGroundedQaResults = (query, items, meta = null, demo = false) => {
     if (!Array.isArray(items) || !items.length) return;
     const fresh = makeTab();
     fresh.label = `Q&A ${String(tabSeq).padStart(2, "0")}`;
@@ -492,6 +508,9 @@ export default function Workstation() {
     fresh.results = items;
     fresh.total = items.length;
     fresh.latency = 0;
+    fresh.meta = meta;
+    fresh.resultSource = demo ? "fallback" : "live";
+    fresh.resultMode = demo ? "QA DEMO" : "FASTAPI GROUNDED Q&A";
     setTabs((prev) => [...prev, fresh]);
     setActiveKey(fresh.key);
     setFocusedId(items[0]?.id || null);
@@ -502,6 +521,34 @@ export default function Workstation() {
       at: new Date().toLocaleTimeString("en-GB", { hour12: false }),
     });
     toast.success(`Q&A returned ${items.length} source frames`);
+  };
+  const selectQaCandidate = (candidate) => {
+    if (!candidate || !activeKey) return;
+    setTabs((prev) => prev.map((tab) => {
+      if (tab.key !== activeKey) return tab;
+      return {
+        ...tab,
+        meta: {
+          ...(tab.meta || {}),
+          answer: candidate.answer,
+          confidence: candidate.confidence,
+          status: candidate.status,
+          reason: candidate.reason,
+          supporting_frame_ids: candidate.supporting_frame_ids || [],
+          answer_mode: "candidate",
+          selected_candidate_id: candidate.candidate_id,
+          selected_candidate_video_id: candidate.video_id,
+        },
+      };
+    }));
+    const names = new Set([
+      ...(Array.isArray(candidate.supporting_frame_names) ? candidate.supporting_frame_names : []),
+      candidate.representative_frame_name,
+    ].filter(Boolean).map(String));
+    const matching = activeTab?.results?.find((frame) => names.has(String(frame?.frameName || "")))
+      || activeTab?.results?.find((frame) => String(frame?.videoKey || "") === String(candidate.video_id || ""));
+    if (matching) setFocusedId(matching.id);
+    toast.info(`Đã chọn ${candidate.video_id}: ${candidate.answer}`);
   };
   const formatAgentSearchMessage = (result, addedLabel) => {
     const queries = Array.isArray(result?.queriesUsed) ? result.queriesUsed : [];
@@ -600,7 +647,12 @@ export default function Workstation() {
       const result = frames.length ? await askCopilot(text, frames) : await askGroundedQa(text);
       if (Array.isArray(result?.frames) && result.frames.length) {
         if (result?.mode === "agent_search") applyAgentSearchResults(result?.searchQuery || text, { items: result.frames, totalItems: result.frames.length, latency: 0, source: "live" });
-        else if (result?.mode === "grounded_qa") applyGroundedQaResults(text, result.frames);
+        else if (result?.mode === "grounded_qa") {
+          const qaFrames = Array.isArray(result?.allFrames) && result.allFrames.length
+            ? result.allFrames
+            : result.frames;
+          applyGroundedQaResults(text, qaFrames, result.meta, result.demo);
+        }
         else applyDeepSearchResults(result?.searchQuery || text, result.frames);
       }
       const reply = {
@@ -613,6 +665,8 @@ export default function Workstation() {
         queryTitle: result?.mode === "agent_search" ? "Expanded queries" : "Queries used",
         routing: result?.routing || {},
         mustHaveChecks: result?.searchPlan?.must_have_checks || result?.searchPlan?.search_plan?.must_have_checks || [],
+        answerCandidates: result?.meta?.answer_candidates || [],
+        allFrames: result?.allFrames || result?.frames || [],
       };
       setChatMsgs((prev) => [...prev, reply]);
       setChatStatus("idle");
@@ -858,6 +912,18 @@ export default function Workstation() {
                 </span>
               </div>
             </div>
+            <QaAnswerPanel tab={activeTab} onSelectCandidate={selectQaCandidate} />
+            <ResultGrid
+              tab={activeTab}
+              keptMap={kept}
+              focusedId={focusedId}
+              onFocusItem={setFocusedId}
+              onOpen={openReview}
+              onToggleKeep={toggleKeep}
+              onExclude={removeWithUndo}
+              onPivot={pivot}
+              registerRef={registerRef}
+            />
             {activeTab?.searchType === "TEMPORAL" ? (
               <TemporalStoryboard
                 sequences={activeTab?.sequences || []}
@@ -904,6 +970,7 @@ export default function Workstation() {
             setAgentInput={setAgentSearchInput}
             onAgentSearch={sendAgentSearch}
             agentComposerRef={agentComposerRef}
+            onSelectQaCandidate={selectQaCandidate}
           />
         </div>
       </div>

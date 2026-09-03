@@ -72,6 +72,26 @@ conda activate AIChallenge2025
 pip install -r requirements.txt
 ```
 
+**GPU (optional but recommended for Jina CLIP v2):** bare `pip install torch` may
+give the CPU-only wheel (notably on Windows), which makes Jina encoding ~10x
+slower. On a machine with an NVIDIA GPU, install a CUDA build matching your
+driver, e.g. `pip install torch==2.13.0+cu126 torchvision==0.28.0+cu126
+--index-url https://download.pytorch.org/whl/cu126`. `JINA_DEVICE=auto` (the
+default) then uses the GPU automatically.
+
+### Check your Jina CLIP v2 setup
+
+Run this any time to see if this machine has everything the Jina backend needs
+(GPU-capable torch, the pinned `jinaai/jina-clip-v2` model snapshot, and the four
+checksum-verified `jina_*` cloud artifacts) — no server required:
+
+```bash
+python scripts/check_jina_setup.py
+```
+
+It prints `[ OK ]` / `[MISS]` per item with the exact fix, and exits non-zero if
+anything is missing.
+
 ### 2. Environment Variables (.env)
 
 Create a `.env` file in the root directory. For the Agentic AI features to work, you must provide an API Key:

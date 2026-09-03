@@ -73,7 +73,8 @@ class Task3SingletonTests(unittest.TestCase):
         from main import app
         client = TestClient(app)
 
-        with patch.dict(sys.modules, {"src.services.beit3_retriever": fake_module}):
+        with patch.dict(sys.modules, {"src.services.beit3_retriever": fake_module}), \
+             patch("src.services.retrieval_backend.active_backend", lambda settings=None: "beit3"):
             res1 = client.post('/users/qnasearch', json={"query": "test query", "topk": 1})
             res2 = client.post('/qnasearch', json={"query": "another query", "topk": 1})
 

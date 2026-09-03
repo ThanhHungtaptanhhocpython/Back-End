@@ -215,10 +215,13 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
        help="Which backend serves textual KIS, grounded Q&A candidate retrieval, "
             "TRAKE per-event retrieval, the video timeline and the "
             "image-similarity endpoints ('Similar' on a capture, "
-            "search-by-uploaded-image, similar-by-vector-id). BEiT3 and Jina "
-            "CLIP v2 are different embedding spaces with independent FAISS "
-            "indexes -- this never mixes vectors, or vector ids, from one into "
-            "the other's search."),
+            "search-by-uploaded-image, similar-by-vector-id). Default: "
+            "jina_clip_v2. When CLOUD_ASSETS_ENABLED is on the active backend is "
+            "forced to jina_clip_v2 and this setting is ignored (turn cloud "
+            "assets off to run the local BEiT3 backend). BEiT3 and Jina CLIP v2 "
+            "are different embedding spaces with independent FAISS indexes -- "
+            "this never mixes vectors, or vector ids, from one into the other's "
+            "search."),
 
     # -- Retrieval (BEiT3) --------------------------------------------------
     # Needed whenever RETRIEVAL_BACKEND=beit3 (every search path, image

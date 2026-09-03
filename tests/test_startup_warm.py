@@ -173,6 +173,7 @@ class TestWarmLoadsTheModel:
         monkeypatch.setattr(startup_warm, "_sync_active_backend_artifacts", lambda s: None)
         retriever = MagicMock()
         fake_rb = MagicMock()
+        fake_rb.active_backend.return_value = "jina_clip_v2"
         fake_rb.get_active_retriever.return_value = retriever
         monkeypatch.setitem(sys.modules, "src.services.retrieval_backend", fake_rb)
 
@@ -186,6 +187,7 @@ class TestWarmLoadsTheModel:
         retriever = MagicMock()
         retriever.warm_model.side_effect = RuntimeError("model download failed")
         fake_rb = MagicMock()
+        fake_rb.active_backend.return_value = "jina_clip_v2"
         fake_rb.get_active_retriever.return_value = retriever
         monkeypatch.setitem(sys.modules, "src.services.retrieval_backend", fake_rb)
 

@@ -55,7 +55,8 @@ class Task4ErrorHandlingTests(unittest.TestCase):
         from main import app
         client = TestClient(app)
 
-        with patch.dict(sys.modules, {"src.services.beit3_retriever": fake_module}):
+        with patch.dict(sys.modules, {"src.services.beit3_retriever": fake_module}), \
+             patch("src.services.retrieval_backend.active_backend", lambda settings=None: "beit3"):
             res = client.post('/users/qnasearch', json={"query": "test query", "topk": 2})
 
         self.assertEqual(res.status_code, 200)

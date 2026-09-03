@@ -129,7 +129,12 @@ class Settings(BaseSettings):
     # retrieval, and TRAKE per-event retrieval. BEiT3 and Jina CLIP v2 are two
     # different embedding spaces with two independent FAISS indexes; switching
     # this never mixes vectors from one into the other's search.
-    retrieval_backend: str = "beit3"  # "beit3" | "jina_clip_v2"
+    # Default backend. Jina CLIP v2 is the primary (Azure-hosted) retriever;
+    # BEiT3 stays available as an explicit local fallback. Note: when
+    # CLOUD_ASSETS_ENABLED is true the active backend is *forced* to
+    # jina_clip_v2 regardless of this value -- see
+    # src/services/retrieval_backend.active_backend().
+    retrieval_backend: str = "jina_clip_v2"  # "beit3" | "jina_clip_v2"
 
     # --- Jina CLIP v2 Retrieval (cloud-primary visual search) ---
     # FAISS index + parquet/json are runtime artifacts, same as BEiT3's: either

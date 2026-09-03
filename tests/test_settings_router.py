@@ -300,7 +300,21 @@ class TestCloudEndpoints:
         assert "artifacts" in body and "pct" in body and "bytes_total" in body
         assert "had_errors" in body and "ok" in body
 
-    def test_retrieval_status_ready_for_default_beit3_backend(self) -> None:
+    def test_retrieval_status_reports_the_default_jina_backend(self) -> None:
+        # Default backend is now jina_clip_v2; with no Jina index configured it
+        # reports not-ready (preparing/error) rather than a bare 200.
+        body = _client().get("/settings/retrieval/status").json()
+        assert body["backend"] == "jina_clip_v2"
+        assert body["ready"] is not True
+
+    def test_retrieval_status_ready_for_an_explicit_local_beit3_backend(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from src.api.routers import settings_router
+        from src.config.settings import Settings
+
+        s = Settings(_env_file=None, retrieval_backend="beit3", cloud_assets_enabled=False)
+        monkeypatch.setattr(settings_router, "get_settings", lambda: s)
         body = _client().get("/settings/retrieval/status").json()
         assert body["backend"] == "beit3"
         assert body["ready"] is True
@@ -332,6 +346,9 @@ class TestCloudEndpoints:
         s = Settings(_env_file=None, cloud_assets_enabled=True, cloud_assets_provider="s3_compatible",
                      cloud_assets_cache_path=str(tmp_path))
         monkeypatch.setattr(settings_router, "get_settings", lambda: s)
+        # Pin the active backend so this test exercises the BEiT3 sync-profile
+        # machinery (all-or-nothing promotion) rather than the cloud->jina policy.
+        monkeypatch.setattr("src.services.retrieval_backend.active_backend", lambda settings=None: "beit3")
         monkeypatch.setattr(assets_mod, "build_asset_store", lambda settings=None: store)
         assets_mod.reset_caches()
 
@@ -372,6 +389,7 @@ class TestCloudEndpoints:
         s = Settings(_env_file=None, cloud_assets_enabled=True, cloud_assets_provider="s3_compatible",
                      cloud_assets_cache_path=str(tmp_path))
         monkeypatch.setattr(settings_router, "get_settings", lambda: s)
+        monkeypatch.setattr("src.services.retrieval_backend.active_backend", lambda settings=None: "beit3")
         monkeypatch.setattr(assets_mod, "build_asset_store", lambda settings=None: store)
         assets_mod.reset_caches()
 

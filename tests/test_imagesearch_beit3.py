@@ -27,12 +27,15 @@ def test_image_search_by_faiss_index(monkeypatch):
     ]
 
     monkeypatch.setitem(sys.modules, "src.services.beit3_retriever", _fake_beit3_module(mock_retriever))
+    # The default backend is now jina_clip_v2 (and cloud assets force it); pin
+    # the active backend to BEiT3 for this BEiT3-path test.
+    monkeypatch.setattr("src.services.retrieval_backend.active_backend", lambda settings=None: "beit3")
 
     from main import app
     client = TestClient(app)
 
-    # `retrieval_backend` is mandatory on the id-pivot path; the default
-    # backend is BEiT3, so a BEiT3-provenanced card is accepted.
+    # `retrieval_backend` is mandatory on the id-pivot path; BEiT3 is active
+    # here, so a BEiT3-provenanced card is accepted.
     response = client.post(
         "/users/imagesearch",
         data={"faiss_index": "100", "topk": "5", "retrieval_backend": "beit3"},

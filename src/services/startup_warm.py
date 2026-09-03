@@ -49,23 +49,25 @@ def _warm(settings: Settings) -> None:
         logger.warning("startup artifact sync skipped: %s", exc)
 
     from src.services.assets.factory import cloud_enabled
+    from src.services.retrieval_backend import active_backend
 
-    if not (cloud_enabled(settings) or settings.retrieval_backend == "jina_clip_v2"):
+    backend = active_backend(settings)
+    if not (cloud_enabled(settings) or backend == "jina_clip_v2"):
         return  # local BEiT3: keep the historical lazy-load-on-first-request
 
     try:
         from src.services.retrieval_backend import get_active_retriever
 
-        retriever = get_active_retriever()
+        retriever = get_active_retriever(settings)
         # Construction only loads the FAISS index + parquet. Explicitly warm
         # the query encoder too, so "retriever ready" is truthful and the
         # first real request never pays the (pinned) model download / load.
         warm = getattr(retriever, "warm_model", None)
         if callable(warm):
             warm()
-            logger.info("startup warm: %s retriever + model ready", settings.retrieval_backend)
+            logger.info("startup warm: %s retriever + model ready", backend)
         else:
-            logger.info("startup warm: %s retriever ready", settings.retrieval_backend)
+            logger.info("startup warm: %s retriever ready", backend)
     except Exception as exc:  # noqa: BLE001
         logger.warning("startup retriever warm skipped: %s", exc)
 
@@ -79,6 +81,7 @@ def _sync_active_backend_artifacts(settings: Settings) -> None:
         get_manifest,
     )
     from src.services.assets.sync_state import run_tracked_sync
+    from src.services.retrieval_backend import active_backend
 
     if not cloud_enabled(settings):
         return
@@ -90,8 +93,9 @@ def _sync_active_backend_artifacts(settings: Settings) -> None:
         logger.info("startup warm: no manifest yet, nothing to sync")
         return
 
+    backend = active_backend(settings)
     profile = list(
-        BACKEND_ARTIFACT_NAMES.get(settings.retrieval_backend, BACKEND_ARTIFACT_NAMES["beit3"])
+        BACKEND_ARTIFACT_NAMES.get(backend, BACKEND_ARTIFACT_NAMES["jina_clip_v2"])
     )
     manifest_names = {a.name for a in manifest.artifacts}
     missing = [n for n in profile if n not in manifest_names]
@@ -103,20 +107,20 @@ def _sync_active_backend_artifacts(settings: Settings) -> None:
             "startup warm: manifest %s is missing %s profile artifact(s) %s; "
             "skipping sync (republish the manifest with the full profile)",
             manifest.version,
-            settings.retrieval_backend,
+            backend,
             missing,
         )
         return
     wanted = [a for a in manifest.artifacts if a.name in set(profile)]
     cache = get_artifact_cache(settings)
     if cache.get_current() == manifest.version and cache.is_version_verified(manifest.version, wanted):
-        logger.info("startup warm: %s artifacts already current (%s)", settings.retrieval_backend, manifest.version)
+        logger.info("startup warm: %s artifacts already current (%s)", backend, manifest.version)
         return
 
     logger.info(
         "startup warm: syncing the full %d-artifact %s profile for manifest %s",
         len(profile),
-        settings.retrieval_backend,
+        backend,
         manifest.version,
     )
     try:

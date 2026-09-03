@@ -3,7 +3,9 @@
 `RETRIEVAL_BACKEND` picks which encoder + FAISS index serves textual KIS,
 grounded Q&A candidate retrieval, TRAKE per-event retrieval, the video
 timeline, and the image-similarity paths (search-by-uploaded-image, "Similar"
-on a captured frame, similar-by-vector-id). Both retrievers are lazy
+on a captured frame, similar-by-vector-id). Jina CLIP v2 is the default;
+turning `CLOUD_ASSETS_ENABLED` on forces it regardless of `RETRIEVAL_BACKEND`
+(see `active_backend`). Both retrievers are lazy
 singletons (see `beit3_retriever.get_beit3_retriever` /
 `jina_retriever.get_jina_retriever`); importing this module, or calling
 `get_active_retriever` for one backend, never imports or loads the other
@@ -78,8 +80,20 @@ class BackendPreparingError(RuntimeError):
 
 
 def active_backend(settings: Settings | None = None) -> str:
+    """The retrieval backend that is actually serving requests right now.
+
+    Policy (single source of truth for every call site):
+
+    * ``CLOUD_ASSETS_ENABLED`` true  -> always ``jina_clip_v2``. The cloud
+      asset store exists to serve the Azure-hosted Jina index; with it on,
+      BEiT3 is not used even if ``RETRIEVAL_BACKEND`` still says ``beit3``.
+    * otherwise -> ``RETRIEVAL_BACKEND`` (normalised), defaulting to
+      ``jina_clip_v2`` when unset. ``beit3`` is the explicit local fallback.
+    """
     settings = settings or get_settings()
-    return (settings.retrieval_backend or BEIT3).strip().lower()
+    if getattr(settings, "cloud_assets_enabled", False):
+        return JINA_CLIP_V2
+    return (settings.retrieval_backend or JINA_CLIP_V2).strip().lower() or JINA_CLIP_V2
 
 
 _BACKEND_ALIASES = {
@@ -139,9 +153,10 @@ def _preparing_if_syncing(exc: Exception) -> None:
 
 
 def get_active_retriever(settings: Settings | None = None) -> Any:
-    """Return the lazily-loaded retriever singleton for the configured backend."""
+    """Return the lazily-loaded retriever singleton for the active backend
+    (see :func:`active_backend` -- cloud assets on forces Jina CLIP v2)."""
     settings = settings or get_settings()
-    backend = (settings.retrieval_backend or BEIT3).strip().lower()
+    backend = active_backend(settings)
     if backend == JINA_CLIP_V2:
         from src.services.jina_retriever import get_jina_retriever
 

@@ -86,9 +86,21 @@ class BackendSelectionTests(unittest.TestCase):
             else:
                 sys.modules.pop("src.services.beit3_retriever", None)
 
-    def test_default_backend_is_beit3(self):
-        settings = Settings(debug=False)
-        self.assertEqual(settings.retrieval_backend, BEIT3)
+    def test_default_backend_is_jina(self):
+        settings = Settings(debug=False, _env_file=None)
+        self.assertEqual(settings.retrieval_backend, JINA_CLIP_V2)
+
+    def test_cloud_assets_enabled_forces_jina_over_an_explicit_beit3(self):
+        from src.services.retrieval_backend import active_backend
+
+        s = Settings(debug=False, _env_file=None, retrieval_backend="beit3", cloud_assets_enabled=True)
+        self.assertEqual(active_backend(s), JINA_CLIP_V2)
+
+    def test_explicit_beit3_is_honoured_when_cloud_assets_off(self):
+        from src.services.retrieval_backend import active_backend
+
+        s = Settings(debug=False, _env_file=None, retrieval_backend="beit3", cloud_assets_enabled=False)
+        self.assertEqual(active_backend(s), BEIT3)
 
 
 class AssertActiveBackendTests(unittest.TestCase):

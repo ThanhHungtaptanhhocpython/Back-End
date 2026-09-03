@@ -573,9 +573,12 @@ def cloud_sync(payload: CloudSyncRequest | None = None) -> dict:
     except assets.AssetStoreError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
+    from src.services.retrieval_backend import active_backend
+
+    backend = active_backend(settings)
     manifest_names = {a.name for a in manifest.artifacts}
     profile = list(
-        assets.BACKEND_ARTIFACT_NAMES.get(settings.retrieval_backend, assets.BACKEND_ARTIFACT_NAMES["beit3"])
+        assets.BACKEND_ARTIFACT_NAMES.get(backend, assets.BACKEND_ARTIFACT_NAMES["jina_clip_v2"])
     )
 
     if payload.names:
@@ -598,7 +601,7 @@ def cloud_sync(payload: CloudSyncRequest | None = None) -> dict:
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    f"Manifest {manifest.version} is missing {settings.retrieval_backend} "
+                    f"Manifest {manifest.version} is missing {backend} "
                     f"profile artifact(s) {missing}. Rebuild/republish the manifest with "
                     f"the complete profile before syncing."
                 ),
@@ -641,8 +644,10 @@ def retrieval_status() -> dict:
     """
     from src.services import assets
 
+    from src.services.retrieval_backend import active_backend
+
     settings = get_settings()
-    backend = (settings.retrieval_backend or "beit3").strip().lower()
+    backend = active_backend(settings)
     sync_state = assets.get_sync_progress().to_dict().get("state")
     out: dict = {"backend": backend, "sync_state": sync_state}
 

@@ -26,14 +26,16 @@ _TEXT_EVIDENCE_WINDOW_S = 2.5
 
 
 def _active_backend() -> str:
-    """RETRIEVAL_BACKEND, lowercased, defaulting to 'beit3'. Used only as a
-    fallback when a visual result row does not carry `retrieval_backend`."""
+    """The active retrieval backend (see
+    ``retrieval_backend.active_backend`` -- Jina by default, forced when cloud
+    assets are on). Used only as a fallback when a visual result row does not
+    carry ``retrieval_backend``."""
     try:
-        from src.config.settings import get_settings
+        from src.services.retrieval_backend import active_backend
 
-        return (get_settings().retrieval_backend or "beit3").strip().lower()
+        return active_backend()
     except Exception:  # noqa: BLE001
-        return "beit3"
+        return "jina_clip_v2"
 
 
 def _finite_or_none(value: Any) -> float | None:

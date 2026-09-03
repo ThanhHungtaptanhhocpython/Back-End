@@ -44,6 +44,7 @@ def test_capture_similar_uses_cached_preview_and_beit3_image_query(tmp_path, mon
 
     stub_preview = _StubPreview(still)
     monkeypatch.setattr(vfps, "get_video_frame_preview_service", lambda: stub_preview)
+    monkeypatch.setattr("src.services.retrieval_backend.active_backend", lambda settings=None: "beit3")
 
     retriever = MagicMock()
     retriever.search_by_image.return_value = [
@@ -70,6 +71,7 @@ def test_capture_similar_root_prefix_alias_works(tmp_path, monkeypatch):
     still = tmp_path / "still.webp"
     still.write_bytes(b"webp-bytes")
     monkeypatch.setattr(vfps, "get_video_frame_preview_service", lambda: _StubPreview(still))
+    monkeypatch.setattr("src.services.retrieval_backend.active_backend", lambda settings=None: "beit3")
 
     retriever = MagicMock()
     retriever.search_by_image.return_value = []

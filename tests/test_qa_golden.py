@@ -57,9 +57,33 @@ class GoldenDatasetTests(unittest.TestCase):
         cases = load_golden_cases(PROJECT_ROOT / "benchmarks" / "qa_golden")
         summary = validate_golden_cases(cases)
 
-        self.assertEqual(summary["cases"], 40)
-        self.assertEqual(summary["languages"], {"en": 20, "vi": 20})
-        self.assertEqual(summary["evidence_frames"], 46)
+        # 40 language-balanced base cases (20 vi / 20 en) plus one Vietnamese
+        # competition regression case in competition_regressions_v1.jsonl.
+        # Keep these numbers in lock-step with benchmarks/qa_golden/README.md.
+        self.assertEqual(summary["cases"], 41)
+        self.assertEqual(
+            summary["datasets"],
+            {
+                "abstention_v1.jsonl": 6,
+                "competition_regressions_v1.jsonl": 1,
+                "count_ocr_v1.jsonl": 10,
+                "temporal_multievent_v1.jsonl": 2,
+                "visual_attributes_v1.jsonl": 10,
+                "visual_core_v1.jsonl": 12,
+            },
+        )
+        self.assertEqual(summary["languages"], {"en": 20, "vi": 21})
+        self.assertEqual(summary["evidence_frames"], 48)
+
+        # The only departure from a 20/20 language split is the single
+        # Vietnamese competition regression case.
+        regression_cases = [
+            case for case in cases
+            if case["_dataset_file"] == "competition_regressions_v1.jsonl"
+        ]
+        self.assertEqual(len(regression_cases), 1)
+        self.assertEqual(regression_cases[0]["language"], "vi")
+        self.assertEqual(regression_cases[0]["expected_status"], "answered")
 
     def test_relaxed_answer_accepts_missing_vietnamese_diacritics(self) -> None:
         metrics = score_answer("xe may", _case())

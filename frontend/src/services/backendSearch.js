@@ -214,7 +214,19 @@ export function normalizeBackendItem(item, rank, total, baseUrl = "") {
   const fps = positiveInteger(raw.fps, 25);
   const scoreValue = firstDefined(raw.verification_score, raw.final_score, raw.normalized_score, raw.score, raw._score);
   const frameName = String(firstDefined(raw.frame_name, raw.frameName, `${videoKey}_${frameKey}`));
-  const submissionFrameId = finiteNumber(firstDefined(raw.submission_frame_id, raw.submissionFrameId, raw.frame_id, raw.frame_key, raw.n, frameKey), rank);
+  const submissionFrameId = finiteNumber(
+    firstDefined(
+      raw.submission_frame_id,
+      raw.submissionFrameId,
+      raw.frame_idx,
+      raw.frameIdx,
+      raw.frame_id,
+      raw.frame_key,
+      raw.n,
+      frameKey,
+    ),
+    rank,
+  );
 
   let framePath = firstDefined(raw.frame_path, raw.framePath);
   // The retriever's frame_path is the canonical identity. Do not let a stale

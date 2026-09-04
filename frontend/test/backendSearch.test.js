@@ -12,6 +12,7 @@ import {
   shouldUseQaDemoFallback,
   temporalRequestBody,
 } from "../src/services/backendSearch.js";
+import { buildSubmissionCsv } from "../src/shared/submissionExport.js";
 
 const successPayload = {
   success: true,
@@ -72,6 +73,31 @@ test("normalizes submission frame id separately from FAISS vector id", () => {
   assert.equal(item.submissionFrameId, 3048);
   assert.equal(item.frameKey, "003048");
 });
+
+test("normalizes Jina frame_idx instead of keyframe ordinal or result rank", () => {
+  const payload = {
+    success: true,
+    data: {
+      total_items: 1,
+      items: [
+        {
+          vector_id: 635315,
+          video_id: "L26_V427",
+          frame_id: "keyframe_0000",
+          frame_idx: 10,
+          global_frame_id: 10,
+          frame_name: "keyframe_0000.jpg",
+        },
+      ],
+    },
+  };
+
+  const result = normalizeBackendResponse(payload, { type: "TEXT", latency: 1 });
+  assert.equal(result.items[0].submissionFrameId, 10);
+  assert.equal(result.items[0].globalFrameId, 10);
+  assert.equal(buildSubmissionCsv(result.items, "kis"), "L26_V427,10");
+});
+
 test("routes a text query to FastAPI's users endpoint", async () => {
   let call;
   await runBackendSearch(

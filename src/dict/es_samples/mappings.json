@@ -1,5 +1,12 @@
 {
   "aic_ocr": {
+    "settings": {
+      "index": {
+        "number_of_shards": 1,
+        "number_of_replicas": 0,
+        "refresh_interval": "30s"
+      }
+    },
     "mappings": {
       "properties": {
         "faiss_id": { "type": "integer" },
@@ -22,6 +29,13 @@
     }
   },
   "aic_asr": {
+    "settings": {
+      "index": {
+        "number_of_shards": 1,
+        "number_of_replicas": 0,
+        "refresh_interval": "30s"
+      }
+    },
     "mappings": {
       "properties": {
         "video_id": { "type": "keyword" },

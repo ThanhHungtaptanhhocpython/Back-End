@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import importlib.util
+import base64
 import json
 import os
 import socket
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -282,16 +284,40 @@ def _text_evidence_checks(repo_root: Path) -> list[ReadinessCheck]:
     ]
 
 
+def _redact_url(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    if not parsed.username and not parsed.password:
+        return url
+    host = parsed.hostname or ""
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+    return urllib.parse.urlunsplit((parsed.scheme, host, parsed.path, parsed.query, parsed.fragment))
+
+
 def _probe_elasticsearch(settings: Settings) -> ReadinessCheck:
-    url = (settings.elasticsearch_url or "").rstrip("/") + "/_cluster/health"
+    raw_url = (settings.elasticsearch_url or "").rstrip("/")
+    parsed = urllib.parse.urlsplit(raw_url)
+    headers = {}
+    if parsed.username or parsed.password:
+        username = urllib.parse.unquote(parsed.username or "")
+        password = urllib.parse.unquote(parsed.password or "")
+        token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+        headers["Authorization"] = f"Basic {token}"
+        host = parsed.hostname or ""
+        if parsed.port is not None:
+            host = f"{host}:{parsed.port}"
+        raw_url = urllib.parse.urlunsplit((parsed.scheme, host, parsed.path, parsed.query, parsed.fragment)).rstrip("/")
+    url = raw_url + "/_cluster/health"
+    redacted_url = _redact_url((settings.elasticsearch_url or "").rstrip("/") + "/_cluster/health")
     try:
-        with urllib.request.urlopen(url, timeout=3.0) as response:
+        request = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(request, timeout=3.0) as response:
             body = json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, OSError, ValueError, socket.timeout) as exc:
         return ReadinessCheck(
             "elasticsearch_health",
             S_FAIL,
-            f"{url} unavailable: {type(exc).__name__}: {exc}",
+            f"{redacted_url} unavailable: {type(exc).__name__}: {exc}",
             "elasticsearch",
         )
     status = str(body.get("status") or "").lower()
@@ -301,7 +327,6 @@ def _probe_elasticsearch(settings: Settings) -> ReadinessCheck:
         f"cluster status={status!r}",
         category="elasticsearch",
     )
-
 
 def _deep_retriever_check(query: str | None) -> ReadinessCheck:
     try:

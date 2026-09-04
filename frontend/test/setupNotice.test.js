@@ -4,7 +4,7 @@ import test from "node:test";
 import {
   shouldShowSetupNotice,
   summarizeReadiness,
-} from "../src/features/workspace/firstRunNotice.js";
+} from "../src/features/workspace/setupNotice.js";
 
 test("shows on a first run when readiness is unknown", () => {
   assert.equal(shouldShowSetupNotice({ dismissed: false, readiness: null }), true);

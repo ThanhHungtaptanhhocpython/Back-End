@@ -1,7 +1,8 @@
 /**
  * Logic for the one-time "you still need to download the model + index" notice
  * shown on the Workstation. Kept DOM-free so it is unit-testable with
- * `node:test` (see test/firstRunNotice.test.js).
+ * `node:test` (see test/setupNotice.test.js). Named to not collide
+ * case-insensitively with the sibling FirstRunNotice.jsx component.
  */
 
 export const SETUP_NOTICE_KEY = "hcmai.setupNoticeDismissed";

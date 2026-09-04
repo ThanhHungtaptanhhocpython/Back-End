@@ -7,7 +7,7 @@ import {
   SETUP_NOTICE_KEY,
   shouldShowSetupNotice,
   summarizeReadiness,
-} from "./firstRunNotice.js";
+} from "./setupNotice.js";
 
 function readDismissed() {
   try {

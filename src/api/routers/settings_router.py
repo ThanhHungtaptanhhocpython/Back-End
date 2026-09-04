@@ -668,6 +668,17 @@ def retrieval_status() -> dict:
     return out
 
 
+@router.get("/jina/readiness")
+def jina_readiness() -> dict:
+    """3-check readiness report for the Jina CLIP v2 backend (GPU / model /
+    index), each with a status (ok | warn | miss) and an inline fix. Read-only:
+    never loads the model or the FAISS index. Rendered on the Cloud Assets tab
+    and mirrored by ``python scripts/check_jina_setup.py``."""
+    from src.services.jina_readiness import jina_readiness as _report
+
+    return _report(get_settings())
+
+
 @router.get("/cloud/cache")
 def cloud_cache() -> dict:
     from src.services import assets

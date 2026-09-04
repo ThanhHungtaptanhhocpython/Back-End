@@ -22,6 +22,7 @@ import {
 } from "../../services/settingsApi.js";
 import { formatBytes } from "./settingsModel.js";
 import { shouldKeepPolling, summarizeSyncProgress } from "./cloudSyncView.js";
+import JinaReadinessCard from "./JinaReadinessCard.jsx";
 
 const ART_STATUS_COLOR = {
   synced: "success",
@@ -189,12 +190,15 @@ export default function CloudAssetsTab({ active }) {
 
   if (!status.active) {
     return (
-      <Alert
-        type="info"
-        showIcon
-        message="Cloud assets are disabled"
-        description="Set CLOUD_ASSETS_ENABLED and CLOUD_ASSETS_PROVIDER (azure_blob or s3_compatible) in the Configuration tab, add the credentials, then restart."
-      />
+      <div className="set-cloud">
+        <JinaReadinessCard active={active} reloadToken={0} />
+        <Alert
+          type="info"
+          showIcon
+          message="Cloud assets are disabled"
+          description="Set CLOUD_ASSETS_ENABLED and CLOUD_ASSETS_PROVIDER (azure_blob or s3_compatible) in the Configuration tab, add the credentials, then restart."
+        />
+      </div>
     );
   }
 
@@ -219,6 +223,8 @@ export default function CloudAssetsTab({ active }) {
 
   return (
     <div className="set-cloud">
+      <JinaReadinessCard active={active} reloadToken={syncProg?.finished_at || 0} />
+
       <Descriptions bordered size="small" column={2} style={{ marginBottom: 16 }}>
         <Descriptions.Item label="Provider">{status.provider}</Descriptions.Item>
         <Descriptions.Item label="Manifest key">{status.manifest_key}</Descriptions.Item>

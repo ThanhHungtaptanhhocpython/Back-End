@@ -319,6 +319,29 @@ class TestCloudEndpoints:
         assert body["backend"] == "beit3"
         assert body["ready"] is True
 
+    def test_jina_readiness_reports_the_three_checks(self) -> None:
+        body = _client().get("/settings/jina/readiness").json()
+        assert set(body) >= {"ok", "active_backend", "checks"}
+        ids = [c["id"] for c in body["checks"]]
+        assert ids == ["gpu", "model", "index"]
+        for c in body["checks"]:
+            assert c["status"] in {"ok", "warn", "miss"}
+            assert c["summary"]
+        # ``ok`` is true only when no check is a hard MISS.
+        assert body["ok"] == all(c["status"] != "miss" for c in body["checks"])
+
+    def test_jina_readiness_gpu_check_reflects_torch_cuda(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import torch
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        gpu = next(
+            c for c in _client().get("/settings/jina/readiness").json()["checks"] if c["id"] == "gpu"
+        )
+        assert gpu["resolved_device"] == "cpu"
+        assert gpu["status"] in {"warn", "miss"}
+        if gpu["status"] == "warn":
+            assert "download.pytorch.org/whl" in gpu["fix"]
+
     @staticmethod
     def _full_beit3_store(version: str = "vX"):
         import hashlib

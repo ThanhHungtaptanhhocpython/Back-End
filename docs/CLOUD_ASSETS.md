@@ -307,5 +307,40 @@ keyframes stream on demand.
 * The synced-artifact cache lives at `CLOUD_ASSETS_CACHE_PATH`
   (default `<app-data>/HCMAI2026/assets-cache`); the keyframe LRU cap is
   `CLOUD_ASSETS_KEYFRAME_CACHE_MAX_BYTES`.
+
+## Jina fine-keyframe runtime
+
+The final Jina artifacts live under:
+
+```text
+embeddings/indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/
+```
+
+Publish a separate manifest from the size/SHA-256 blob metadata written by the
+merge notebook. This does not download the FAISS index:
+
+```powershell
+python scripts\cloud\publish_jina_manifest_from_azure.py --upload
+```
+
+Then configure and restart:
+
+```env
+CLOUD_ASSETS_ENABLED=true
+CLOUD_ASSETS_PROVIDER=azure_blob
+CLOUD_ASSETS_MANIFEST_KEY=hcmai-assets-jina.json
+VISUAL_RETRIEVER=jina
+JINA_MODEL_NAME_OR_PATH=jinaai/jina-clip-v2
+JINA_MODEL_REVISION=
+JINA_DEVICE=cpu
+JINA_TRUNCATE_DIM=1024
+JINA_QUERY_TASK=retrieval.query
+```
+
+In Settings -> Cloud Assets, run **Test connection**, **Load manifest**, and
+**Sync artifacts** before switching `VISUAL_RETRIEVER` to `jina`. The Jina
+retriever resolves checksum-verified artifact names prefixed with `jina_`.
+BEiT3 remains an explicit rollback by setting `VISUAL_RETRIEVER=beit3`;
+startup errors never silently cross embedding spaces.
 * Loading a multi-GB FAISS index + model still needs enough local RAM — cloud
   mode changes where the files come from, not how much memory the search uses.

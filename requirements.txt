@@ -12,6 +12,8 @@ transformers
 # instead, matching your driver -- e.g. for a CUDA 12.x driver:
 #   pip install torch==2.13.0+cu126 torchvision==0.28.0+cu126 \
 #     --index-url https://download.pytorch.org/whl/cu126
+einops
+timm
 torch
 Pillow
 sentence-transformers

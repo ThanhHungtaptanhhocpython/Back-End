@@ -564,29 +564,34 @@ export default function Workstation() {
       "Routing:",
       routeLine,
       "",
-      `Results added to ${addedLabel}: ${result?.totalItems || 0} keyframes.`,
+      `Results added to ${addedLabel}: ${result?.totalItems || 0} ${result?.type === "TEMPORAL" ? "sequences" : "keyframes"}.`,
     ].join("\n");
   };
 
   const applyAgentSearchResults = (query, result) => {
     const items = Array.isArray(result?.items) ? result.items : [];
+    const sequences = Array.isArray(result?.sequences) ? result.sequences : [];
+    const isTemporal = result?.type === "TEMPORAL" || sequences.length > 0;
     const fresh = makeTab();
-    fresh.searchType = "AGENT";
+    fresh.searchType = isTemporal ? "TEMPORAL" : "AGENT";
     fresh.query = query;
     fresh.status = "done";
     fresh.results = items;
-    fresh.total = result?.totalItems || items.length;
+    fresh.sequences = sequences;
+    fresh.total = result?.totalItems || (isTemporal ? sequences.length : items.length);
     fresh.latency = result?.latency || 0;
+    fresh.meta = { ...(result?.meta || {}), agentPlan: result?.plan || null };
+    fresh.resultMode = result?.mode || (isTemporal ? "FASTAPI AGENT - TRAKE" : "FASTAPI AGENT");
     setTabs((prev) => [...prev, fresh]);
     setActiveKey(fresh.key);
-    setFocusedId(items[0]?.id || null);
+    setFocusedId(isTemporal ? null : items[0]?.id || null);
     setBackend({
       backend: result?.source === "live" ? "online" : "offline",
       demo: result?.source !== "live",
-      note: result?.source === "live" ? "FASTAPI AGENT" : "LOCAL MOCK",
+      note: result?.source === "live" ? fresh.resultMode : "LOCAL MOCK",
       at: new Date().toLocaleTimeString("en-GB", { hour12: false }),
     });
-    toast.success(`Agent Search added ${fresh.total} frames to ${fresh.label}`);
+    toast.success(`Agent Search added ${fresh.total} ${isTemporal ? "sequences" : "frames"} to ${fresh.label}`);
     return fresh.label;
   };
 
@@ -913,17 +918,6 @@ export default function Workstation() {
               </div>
             </div>
             <QaAnswerPanel tab={activeTab} onSelectCandidate={selectQaCandidate} />
-            <ResultGrid
-              tab={activeTab}
-              keptMap={kept}
-              focusedId={focusedId}
-              onFocusItem={setFocusedId}
-              onOpen={openReview}
-              onToggleKeep={toggleKeep}
-              onExclude={removeWithUndo}
-              onPivot={pivot}
-              registerRef={registerRef}
-            />
             {activeTab?.searchType === "TEMPORAL" ? (
               <TemporalStoryboard
                 sequences={activeTab?.sequences || []}

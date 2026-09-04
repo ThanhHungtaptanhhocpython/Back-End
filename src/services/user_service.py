@@ -115,7 +115,18 @@ def getImageDataSingleTextSearch(query, k):
     """
     from src.services.retrieval_backend import get_active_retriever
 
-    return get_active_retriever().search_visual(query, top_k=k)
+    retriever = get_active_retriever()
+    results = retriever.search_visual(query, top_k=k)
+    if getattr(retriever, "backend_id", None) == "jina_clip_v2" and bool(
+        getattr(settings, "jina_reranker_enabled", False)
+    ):
+        try:
+            from src.services.jina_reranker import rerank_kis_results
+
+            results = rerank_kis_results(query, results, settings=settings)
+        except Exception as exc:  # noqa: BLE001 - first-stage recall wins
+            logging.warning("Jina reranker failed; retaining first-stage order: %s", exc)
+    return results
 
 
 def getGroundedQASearch(query, k):

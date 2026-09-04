@@ -1,0 +1,43 @@
+{
+  "version": "fine-keyframes-jina-v2-2026-09-02",
+  "generated_at": "2026-09-02T16:56:02Z",
+  "artifacts": [
+    {
+      "name": "jina_faiss_index",
+      "container": "embeddings",
+      "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/jina_faiss.index",
+      "size": 2844580986,
+      "sha256": "8d3904b34b27ed0adb0185231d7b50dd707daae98dc978931fa9577fa193d87d",
+      "kind": "artifact"
+    },
+    {
+      "name": "jina_global_ids",
+      "container": "embeddings",
+      "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/global_ids.parquet",
+      "size": 10721963,
+      "sha256": "bfe641b01c9615d51e7f574029f919a53c6f5a8b3fc5b9f8b1a506144742bc12",
+      "kind": "artifact"
+    },
+    {
+      "name": "jina_video_metadata",
+      "container": "embeddings",
+      "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/video_metadata.parquet",
+      "size": 22265,
+      "sha256": "c9fb803af5ff4b24c669328f92c91c7462283e58177118e5631613ccb6e7f374",
+      "kind": "artifact"
+    },
+    {
+      "name": "jina_index_meta",
+      "container": "embeddings",
+      "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/index_meta.json",
+      "size": 249,
+      "sha256": "e29c01e583be0959eecd970df2e44c2c4c5356487e1f5b740ea9d1188cdb3847",
+      "kind": "artifact"
+    }
+  ],
+  "keyframes": {
+    "container": "keyframes",
+    "prefix": "",
+    "layout": "{namespace}/{video_id}/keyframe_{ordinal:04d}.jpg"
+  }
+}

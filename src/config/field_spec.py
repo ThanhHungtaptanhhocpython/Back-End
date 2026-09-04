@@ -79,6 +79,7 @@ _BASIC_KEYS = {
     "BEIT3_INDEX_META_PATH", "BEIT3_CHECKPOINT_PATH", "BEIT3_TOKENIZER_PATH", "BEIT3_DEVICE",
     "JINA_FAISS_INDEX_PATH", "JINA_GLOBAL_IDS_PATH", "JINA_INDEX_META_PATH",
     "JINA_MODEL_PATH", "JINA_MODEL_REVISION", "JINA_DEVICE",
+    "JINA_TRUNCATE_DIM", "JINA_LOCAL_FILES_ONLY", "JINA_MODEL_AUTO_BOOTSTRAP",
     # AI gateway essentials
     "AI_GATEWAY_ENABLED", "AI_TEXT_PRIORITY", "AI_VISION_PRIORITY", "AI_LOCAL_FALLBACK_ENABLED",
     "OPENROUTER_API_KEY", "OPENROUTER_MODEL",
@@ -289,9 +290,35 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
        hide_when={"RETRIEVAL_BACKEND": "beit3"},
        help="`task` for model.encode_text. Default blank => task=None: no "
             "query-instruction prefix (matches how the image corpus was "
-            "encoded; A/B via scripts/evaluate_kis_retrieval.py favoured this). "
-            "Set 'retrieval.query' to prepend Jina's English query prefix. The "
-            "LoRA adapter applies either way."),
+             "encoded; A/B via scripts/evaluate_kis_retrieval.py favoured this). "
+             "Set 'retrieval.query' to prepend Jina's English query prefix. The "
+             "LoRA adapter applies either way."),
+    _f("JINA_VIDEO_METADATA_PATH", G_RETRIEVAL, PATH, path_kind="file",
+       hide_when={"RETRIEVAL_BACKEND": "beit3"},
+       help="Optional compatibility metadata path for older Azure-published schemas."),
+    _f("JINA_CACHE_DIR", G_RETRIEVAL, PATH, path_kind="dir",
+       hide_when={"RETRIEVAL_BACKEND": "beit3"},
+       help="Optional HuggingFace cache dir for the pinned model snapshot; "
+            "blank uses the default huggingface_hub cache."),
+    _f("JINA_RERANKER_ENABLED", G_RETRIEVAL, BOOL,
+       hide_when={"RETRIEVAL_BACKEND": "beit3"},
+       help="Rerank the first KIS candidates with Jina's multimodal cloud API."),
+    _f("JINA_RERANKER_API_KEY", G_RETRIEVAL, SECRET, secret=True,
+       hide_when={"RETRIEVAL_BACKEND": "beit3"},
+       help="Jina API key for jina-reranker-m0. Kept server-side only."),
+    _f("JINA_RERANKER_BASE_URL", G_RETRIEVAL, URL,
+       hide_when={"RETRIEVAL_BACKEND": "beit3"}, help="Jina reranker API endpoint."),
+    _f("JINA_RERANKER_MODEL", G_RETRIEVAL, STR, placeholder="jina-reranker-m0",
+       hide_when={"RETRIEVAL_BACKEND": "beit3"},
+       help="Multimodal Jina model used for KIS keyframe reranking."),
+    _f("JINA_RERANKER_CANDIDATE_POOL", G_RETRIEVAL, INT, minimum=1, maximum=100,
+       hide_when={"RETRIEVAL_BACKEND": "beit3"},
+       help="Maximum first-stage KIS frames sent to the Jina reranker per query."),
+    _f("JINA_RERANKER_IMAGE_MAX_SIDE", G_RETRIEVAL, INT, minimum=128, maximum=1600,
+       hide_when={"RETRIEVAL_BACKEND": "beit3"},
+       help="Longest side of each JPEG submitted to the Jina reranker."),
+    _f("JINA_RERANKER_TIMEOUT_SECONDS", G_RETRIEVAL, FLOAT, minimum=1, maximum=300,
+       hide_when={"RETRIEVAL_BACKEND": "beit3"}),
 
     # -- AI: legacy single-provider LLM knobs (used only when the gateway is OFF) --
     _f("LLM_PROVIDER", G_AI, CHOICE, label="Legacy LLM provider",
@@ -454,6 +481,10 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
        label="Verifier: cache max entries"),
     _f("AGENT_VLM_CACHE_TTL_SECONDS", G_AGENT, INT, minimum=1,
        label="Verifier: cache entry TTL (s)"),
+    _f("AGENT_MIN_VERIFICATION_SCORE", G_AGENT, FLOAT, minimum=0.0, maximum=1.0,
+       label="Verifier: minimum accepted score"),
+    _f("AGENT_REQUIRE_VLM_MATCH", G_AGENT, BOOL,
+       label="Verifier: require an explicit VLM match"),
     # legacy os.getenv knobs, now first-class
     _f("KIS_VQA_RERANK", G_AGENT, BOOL, help="Validate top KIS hits with the reranker."),
     _f("KIS_VQA_RERANK_CANDIDATES", G_AGENT, INT, minimum=1, maximum=60),
@@ -464,6 +495,17 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
 
     # -- TRAKE ------------------------------------------------------------------
     _f("TRAKE_RETRIEVAL_TOP_K", G_TRAKE, INT, minimum=1, maximum=2000),
+    _f("TRAKE_ADAPTIVE_RETRIEVAL_TOP_K", G_TRAKE, INT, minimum=1, maximum=5000,
+       help="Retry recall per event when no video contains every ordered event."),
+    _f("TRAKE_ANCHOR_EXPANSION_ENABLED", G_TRAKE, BOOL,
+       help="Use strong first-event videos as local timeline anchors for later events."),
+    _f("TRAKE_ANCHOR_VIDEO_LIMIT", G_TRAKE, INT, minimum=1, maximum=30,
+       help="Distinct high-ranking videos contributed by each event to local timeline expansion."),
+    _f("TRAKE_ANCHOR_TIMELINE_TOP_K", G_TRAKE, INT, minimum=1, maximum=200),
+    _f("TRAKE_TRACE_CANDIDATES", G_TRAKE, BOOL,
+       help="Log a bounded per-video, per-event retrieval trace for diagnosing temporal recall."),
+    _f("TRAKE_TRACE_VIDEO_LIMIT", G_TRAKE, INT, minimum=1, maximum=200,
+       help="Maximum videos included in one TRAKE retrieval trace."),
     _f("TRAKE_CANDIDATES_PER_EVENT_VIDEO", G_TRAKE, INT, minimum=1, maximum=200),
     _f("TRAKE_BEAM_WIDTH", G_TRAKE, INT, minimum=1, maximum=500),
     _f("TRAKE_MIN_EVENT_GAP_SECONDS", G_TRAKE, FLOAT, minimum=0, maximum=3600),

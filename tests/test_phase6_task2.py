@@ -30,22 +30,27 @@ class TestExponentialDecay(unittest.TestCase):
         event_candidates = [event1, event2]
         
         sequences = trake.beam_search_sequences("V001", event_candidates, beam_width=5)
-        
-        # Both sequences have base score of 2.0
+
         # The short sequence (10s gap) should have higher total_score than long sequence (300s gap)
         self.assertEqual(len(sequences), 2)
-        
+
         # Since they are sorted descending by score, the first one should be the short gap
         self.assertEqual(sequences[0]['frames'][1], "img2_short")
         self.assertEqual(sequences[1]['frames'][1], "img2_long")
-        
-        # Verify scores mathematically
+
+        # Verify scores mathematically. The merged (adaptive) TRAKE scoring
+        # normalises by the number of events -- total = (base_score / n_events)
+        # * exp(-temporal_decay * span) -- so the 2-event base score of 2.0
+        # yields a semantic score of 1.0 before the temporal penalty.
         import math
-        short_expected = 2.0 * math.exp(-0.01 * 10.0)
-        long_expected = 2.0 * math.exp(-0.01 * 300.0)
-        
+        decay = trake.temporal_decay
+        short_expected = (2.0 / 2) * math.exp(-decay * 10.0)
+        long_expected = (2.0 / 2) * math.exp(-decay * 300.0)
+
         self.assertAlmostEqual(sequences[0]['total_score'], short_expected, places=5)
         self.assertAlmostEqual(sequences[1]['total_score'], long_expected, places=5)
+        # The core property under test: a longer gap is penalised harder.
+        self.assertGreater(sequences[0]['total_score'], sequences[1]['total_score'])
 
 if __name__ == "__main__":
     unittest.main()

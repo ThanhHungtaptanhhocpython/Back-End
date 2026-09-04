@@ -43,7 +43,11 @@ class Retriever(Protocol):
     def get_nearest_frame(self, video_id: str, timestamp: float) -> dict | None: ...
 
     def get_video_timeline(
-        self, video_id: str, around_frame_id: str | None = None, limit: int = 60
+        self,
+        video_id: str,
+        around_frame_id: str | None = None,
+        limit: int = 60,
+        full_video: bool = False,
     ) -> list[dict]: ...
 
 

@@ -237,13 +237,14 @@ def handle_trake_search(request: TemporalSearchRequest):
 
     context = (request.context or "").strip()
 
-    def _fold(event_query: str) -> str:
-        text = (event_query or "").strip()
-        if not context or context.lower() in text.lower():
-            return text
-        return f"{context}\n{text}"
-
-    query_dicts = [{"query": _fold(ev.query)} for ev in request.query]
+    # Retrieve one atomic visual event at a time. The shared narrative remains
+    # available to the final sequence verifier, but must not dilute every
+    # individual event embedding.
+    query_dicts = [
+        {"query": (ev.query or "").strip(), "context": context}
+        for ev in request.query
+        if (ev.query or "").strip()
+    ]
 
     res = GetImageDataTrakeSearch(query_dicts, top_results=request.topk)
     _prefetch_result_keyframes(res)
@@ -303,11 +304,12 @@ def handle_agent_search(request: TextSearchRequest):
 
     result = run_agent_query_search(request.query, request.topk)
     frames = result.get("frames", [])
-    _prefetch_result_keyframes(frames)
+    items = result.get("sequences") if result.get("sequences") is not None else frames
+    _prefetch_result_keyframes(items)
     return AgentSearchResponse(
         success=True,
         response=result.get("answer", "Agent Search completed."),
-        data=DataResponse(items=frames, total_items=len(frames)),
+        data=DataResponse(items=items, total_items=len(items)),
         plan=result.get("plan", {}),
     )
 
@@ -341,12 +343,20 @@ def handle_multimodal_search(request: TextSearchRequest):
 def handle_video_keyframes(
     video_id: str,
     around: Optional[str] = None,
-    limit: Optional[int] = 60
+    limit: Optional[int] = 60,
+    scope: str = "around",
 ):
     from src.services.retrieval_backend import BackendPreparingError, get_active_retriever
     try:
         retriever = get_active_retriever()
-        items = retriever.get_video_timeline(video_id=video_id, around_frame_id=around, limit=limit or 60)
+        full_video = scope.strip().lower() == "full"
+        items = retriever.get_video_timeline(
+            video_id=video_id,
+            around_frame_id=around,
+            limit=limit or 60,
+            full_video=full_video,
+        )
+        _prefetch_result_keyframes(items)
         return BaseResponse(
             success=True,
             data=DataResponse(items=items, total_items=len(items))

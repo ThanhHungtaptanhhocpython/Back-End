@@ -26,9 +26,9 @@ const payload = {
         verification: { method: "openrouter_sequence_vlm", summary: { status: "verified" } },
         event_queries: ["bột vào tô", "miến gặp dầu", "miến rời chảo"],
         frames: [
-          { event_index: 1, video_key: "L21_V001", frame_key: "000100", submission_frame_id: 100, timestamp: 4.0, image: "aaa", vector_id: 918273 },
-          { event_index: 2, video_key: "L21_V001", frame_key: "000220", submission_frame_id: 220, timestamp: 8.8, image: "bbb", vector_id: 918280 },
-          { event_index: 3, video_key: "L21_V001", frame_key: "000540", submission_frame_id: 540, timestamp: 21.6, image: "ccc", vector_id: 918290 },
+          { event_index: 1, video_key: "L21_V001", frame_key: "000100", submission_frame_id: 100, timestamp: 4.0, image: "aaa", image_mime: "image/jpeg", vector_id: 918273 },
+          { event_index: 2, video_key: "L21_V001", frame_key: "000220", submission_frame_id: 220, timestamp: 8.8, image: "bbb", image_mime: "image/png", vector_id: 918280 },
+          { event_index: 3, video_key: "L21_V001", frame_key: "000540", submission_frame_id: 540, timestamp: 21.6, image: "ccc", image_mime: "image/webp", vector_id: 918290 },
         ],
       },
       {
@@ -50,6 +50,26 @@ test("keeps sequences nested instead of flattening into frame cards", () => {
   assert.equal(result.sequences[0].frames.length, 3);
   assert.equal(result.sequences[0].videoKey, "L21_V001");
   assert.deepEqual(result.sequences[0].timestamps, [4.0, 8.8, 21.6]);
+  assert.deepEqual(result.sequences[0].frames.map((frame) => frame.gapSeconds), [0, 4.8, 12.8]);
+});
+
+test("uses the MIME type supplied by the backend for temporal base64 previews", () => {
+  const result = normalizeTemporalResponse(payload, { latency: 0 });
+  assert.equal(result.sequences[0].frames[0].image, "data:image/jpeg;base64,aaa");
+  assert.equal(result.sequences[0].frames[1].image, "data:image/png;base64,bbb");
+  assert.equal(result.sequences[0].frames[2].image, "data:image/webp;base64,ccc");
+});
+
+test("prefers the backend keyframe route when the sequence includes a frame path", () => {
+  const withPaths = structuredClone(payload);
+  withPaths.data.items[0].frames[0].frame_path = "L21_a/L21_V001/keyframe_0001.jpg";
+  const result = normalizeTemporalResponse(withPaths, {
+    baseUrl: "http://127.0.0.1:8000/users",
+  });
+  assert.equal(
+    result.sequences[0].frames[0].image,
+    "http://127.0.0.1:8000/keyframes/L21_a/L21_V001/keyframe_0001.jpg?asset=v2",
+  );
 });
 
 test("submission id is the per-video frame index, never a vector id", () => {

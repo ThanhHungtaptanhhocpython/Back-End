@@ -39,10 +39,16 @@ from src.services.jina_retriever import (
 
 def _bare_retriever(settings: Settings | None = None) -> JinaRetriever:
     """Build a JinaRetriever instance without running __init__."""
+    import threading
+
     obj = JinaRetriever.__new__(JinaRetriever)
     obj._settings = settings or Settings(debug=False)
     obj._device = "cpu"
     obj._model = None
+    # __init__ creates these; the encode paths (encode_text_batch / encode_image)
+    # acquire them, so tests that bypass __init__ still need real locks.
+    obj._model_lock = threading.Lock()
+    obj._encode_lock = threading.Lock()
     return obj
 
 
@@ -140,6 +146,129 @@ class SearchVisualIntegrationTests(unittest.TestCase):
         self.assertEqual(len(timeline), 5)
         timestamps = [row["timestamp"] for row in timeline]
         self.assertEqual(timestamps, sorted(timestamps))
+
+
+class BatchAndTimelineTests(unittest.TestCase):
+    """Batched KIS retrieval + per-video timeline scoring (used by TRAKE
+    adaptive retrieval and anchor expansion). Ported/adapted from the main
+    branch's Jina tests onto this branch's canonical retriever architecture."""
+
+    def setUp(self):
+        ids = [100, 200, 300, 400, 500]
+        self.index, self.df, self.vectors = _synthetic_index_and_rows(1, ids)
+        r = _bare_retriever()
+        r._index = self.index
+        r._global_ids = self.df
+        r._id_to_row = {int(row["vector_id"]): row for row in self.df.to_dict(orient="records")}
+        r._video_to_rows = r._build_video_to_rows()
+        self.retriever = r
+
+    def test_search_visual_batch_encodes_once_and_maps_every_row(self):
+        calls: list[list[str]] = []
+
+        def fake_batch(queries):
+            calls.append(list(queries))
+            # exact-match rows: query 0 -> id 100, query 1 -> id 300
+            return np.stack([self.vectors[0], self.vectors[2]]).astype(np.float32)
+
+        self.retriever.encode_text_batch = fake_batch
+        batches = self.retriever.search_visual_batch(["q one", "q two"], top_k=3)
+
+        self.assertEqual(calls, [["q one", "q two"]])  # a single batched call
+        self.assertEqual(len(batches), 2)
+        self.assertEqual(batches[0][0]["vector_id"], 100)
+        self.assertEqual(batches[1][0]["vector_id"], 300)
+        for results in batches:
+            self.assertEqual([row["rank"] for row in results], [1, 2, 3])
+            self.assertEqual(results[0]["retrieval_backend"], "jina_clip_v2")
+            scores = [row["score"] for row in results]
+            self.assertEqual(scores, sorted(scores, reverse=True))
+
+    def test_search_visual_batch_rejects_bad_top_k(self):
+        self.retriever.encode_text_batch = lambda queries: self.vectors[: len(queries)]
+        with self.assertRaises(JinaRetrieverError):
+            self.retriever.search_visual_batch(["x"], top_k=0)
+
+    def test_search_video_timelines_scores_only_that_videos_keyframes(self):
+        calls: list[list[str]] = []
+
+        def fake_batch(queries):
+            calls.append(list(queries))
+            return np.stack([self.vectors[1], self.vectors[4]]).astype(np.float32)
+
+        self.retriever.encode_text_batch = fake_batch
+        out = self.retriever.search_video_timelines(["e1", "e2"], ["L21_V001", "L21_V001"], top_k=2)
+
+        self.assertEqual(calls, [["e1", "e2"]])  # encoded once for both events
+        self.assertIn("L21_V001", out)
+        self.assertEqual(len(out["L21_V001"]), 2)  # one result list per query
+        self.assertEqual(out["L21_V001"][0][0]["vector_id"], 200)  # e1 ~ vectors[1] -> id 200
+        self.assertEqual(out["L21_V001"][1][0]["vector_id"], 500)  # e2 ~ vectors[4] -> id 500
+        # scores are real reconstructed-vector similarities, ranked
+        first = out["L21_V001"][0]
+        self.assertEqual([row["rank"] for row in first], [1, 2])
+        self.assertGreaterEqual(first[0]["score"], first[1]["score"])
+        self.assertEqual(first[0]["retrieval_backend"], "jina_clip_v2")
+
+    def test_search_video_timelines_unknown_video_yields_empty_per_query(self):
+        self.retriever.encode_text_batch = lambda queries: self.vectors[: len(queries)]
+        out = self.retriever.search_video_timelines(["e1", "e2"], ["NO_SUCH_VIDEO"], top_k=2)
+        self.assertEqual(out, {"NO_SUCH_VIDEO": [[], []]})
+
+    def test_search_video_timeline_is_a_single_query_wrapper(self):
+        self.retriever.encode_text_batch = lambda queries: np.stack(
+            [self.vectors[3]]
+        ).astype(np.float32)
+        results = self.retriever.search_video_timeline("only event", "L21_V001", top_k=1)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["vector_id"], 400)  # vectors[3] -> id 400
+
+    def test_get_video_timeline_full_video_evenly_samples_and_keeps_the_anchor(self):
+        big_ids = list(range(1000, 1100))
+        index, df, _ = _synthetic_index_and_rows(2, big_ids, video_id="L24_V018")
+        r = _bare_retriever()
+        r._index = index
+        r._global_ids = df
+        r._id_to_row = {int(row["vector_id"]): row for row in df.to_dict(orient="records")}
+        r._video_to_rows = r._build_video_to_rows()
+
+        timeline = r.get_video_timeline(
+            "L24_V018", around_frame_id="50", limit=5, full_video=True
+        )
+        ordinals = [row["keyframe_ordinal"] for row in timeline]
+        # evenly spaced across 100 rows (ordinals 1..100), first + last present,
+        # and the anchor ordinal (50) pulled into the strip.
+        self.assertEqual(ordinals, [1, 25, 50, 75, 100])
+
+
+class EncodeTextBatchCacheTests(unittest.TestCase):
+    """`encode_text_batch` must encode each distinct query once and reuse a
+    bounded exact-query cache on repeat calls."""
+
+    def test_batched_encoding_reuses_the_bounded_query_cache(self):
+        r = _bare_retriever()
+        r._text_embedding_cache = {}
+
+        seen: list[list[str]] = []
+
+        class FakeModel:
+            def encode_text(self, texts, task=None, truncate_dim=None):
+                seen.append(list(texts))
+                rows = np.arange(len(texts) * EXPECTED_DIM, dtype=np.float64)
+                return rows.reshape(len(texts), EXPECTED_DIM) + 1.0
+
+        r._model = FakeModel()
+
+        first = r.encode_text_batch(["event one", "event two"])
+        second = r.encode_text_batch(["event two", "event one"])
+
+        self.assertEqual(first.shape, (2, EXPECTED_DIM))
+        self.assertEqual(first.dtype, np.float32)
+        self.assertTrue(first.flags["C_CONTIGUOUS"])
+        # second call: both queries already cached -> no new model call
+        self.assertEqual(seen, [["event one", "event two"]])
+        np.testing.assert_allclose(second[0], first[1])
+        np.testing.assert_allclose(second[1], first[0])
 
 
 class MergeSchemaNormalizationTests(unittest.TestCase):
@@ -870,6 +999,52 @@ class ResolveDeviceTests(unittest.TestCase):
 
         with self.assertRaises(jr.JinaRetrieverError):
             self._resolve("tpu", cuda_available=False)
+
+
+class AliasCompatibilityTests(unittest.TestCase):
+    """VISUAL_RETRIEVER -> RETRIEVAL_BACKEND and JINA_MODEL_NAME_OR_PATH ->
+    JINA_MODEL_PATH are supported only as deprecated *input* aliases. The new
+    names win when both are set; an alias never becomes a second selector."""
+
+    def _settings(self, **kw) -> Settings:
+        return Settings(_env_file=None, **kw)
+
+    def test_visual_retriever_jina_aliases_map_to_the_canonical_backend(self):
+        for value in ("jina", "jina_clip_v2", "jina-clip-v2"):
+            self.assertEqual(self._settings(visual_retriever=value).retrieval_backend, "jina_clip_v2")
+
+    def test_visual_retriever_beit3_alias_selects_beit3(self):
+        self.assertEqual(self._settings(visual_retriever="beit3").retrieval_backend, "beit3")
+
+    def test_alias_only_backend_logs_a_deprecation_warning(self):
+        with self.assertLogs("src.config.settings", level="WARNING") as cm:
+            self._settings(visual_retriever="jina")
+        self.assertIn("VISUAL_RETRIEVER is deprecated", "\n".join(cm.output))
+
+    def test_new_backend_name_wins_over_a_conflicting_alias(self):
+        with self.assertLogs("src.config.settings", level="WARNING") as cm:
+            settings = self._settings(retrieval_backend="beit3", visual_retriever="jina")
+        self.assertEqual(settings.retrieval_backend, "beit3")
+        self.assertIn("is ignored because RETRIEVAL_BACKEND", "\n".join(cm.output))
+
+    def test_jina_model_name_or_path_alias_populates_the_model_path(self):
+        with self.assertLogs("src.config.settings", level="WARNING") as cm:
+            settings = self._settings(jina_model_name_or_path="/models/jina-clip-v2")
+        self.assertEqual(settings.jina_model_path, "/models/jina-clip-v2")
+        self.assertIn("JINA_MODEL_NAME_OR_PATH is deprecated", "\n".join(cm.output))
+
+    def test_new_model_path_wins_over_a_conflicting_model_alias(self):
+        settings = self._settings(
+            jina_model_path="jinaai/jina-clip-v2",
+            jina_model_name_or_path="/other/path",
+        )
+        self.assertEqual(settings.jina_model_path, "jinaai/jina-clip-v2")
+
+    def test_active_backend_honours_the_alias_without_a_second_selector(self):
+        from src.services.retrieval_backend import active_backend
+
+        self.assertEqual(active_backend(self._settings(visual_retriever="jina")), "jina_clip_v2")
+        self.assertEqual(active_backend(self._settings(visual_retriever="beit3")), "beit3")
 
 
 if __name__ == "__main__":

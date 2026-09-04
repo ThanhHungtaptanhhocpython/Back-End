@@ -39,8 +39,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +64,24 @@ _RELEASE_ENVS = {"production", "prod", "release", "staging"}
 _IMMUTABLE_REV_RE = re.compile(r"\A[0-9a-fA-F]{7,64}\Z")
 _MOVING_REFS = {"main", "master", "head", "latest", "dev", "develop", "stable"}
 _LOCAL_REVISION_SIDECARS = ("jina_model_revision", "jina_model_revision.txt", ".jina_model_revision")
+
+
+@contextmanager
+def _hf_offline_if(enabled: bool):
+    """Temporarily force Hugging Face libraries into offline mode."""
+    keys = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE")
+    previous = {key: os.environ.get(key) for key in keys}
+    if enabled:
+        for key in keys:
+            os.environ[key] = "1"
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def _revisions_match(a: str, b: str) -> bool:
@@ -240,6 +260,10 @@ class JinaRetriever:
         self._index_meta = self._load_optional_json(
             self._artifact("jina_index_meta", self._settings.jina_index_meta_path)
         )
+        self._video_metadata = self._load_optional_parquet(
+            self._artifact("jina_video_metadata", self._settings.jina_video_metadata_path),
+            "jina_video_metadata.parquet",
+        )
         # Resolved *before* the consistency checks: a missing / non-immutable
         # pin, or a model/index revision disagreement, must fail construction
         # -- never surface at first query. Always a validated commit SHA.
@@ -249,11 +273,15 @@ class JinaRetriever:
         self._id_to_row: dict[int, dict] = {
             int(row[_COL_VECTOR_ID]): row for row in self._global_ids.to_dict(orient="records")
         }
+        self._video_meta_by_id = self._build_video_metadata_lookup()
         self._video_to_rows: dict[str, list[dict]] = self._build_video_to_rows()
+        self._media_info_by_id = self._load_media_info_dir(self._settings.get_media_info_path())
 
         self._device = self._resolve_device(self._settings.jina_device)
         self._model = None  # loaded on first encode_text() call
         self._model_lock = threading.Lock()
+        self._encode_lock = threading.Lock()
+        self._text_embedding_cache: dict[str, np.ndarray] = {}
 
         logger.info(
             "JinaRetriever ready: device=%s ntotal=%d rows=%d videos=%d",
@@ -355,6 +383,48 @@ class JinaRetriever:
                 return json.load(f)
             except json.JSONDecodeError as exc:
                 raise JinaRetrieverError(f"Failed to parse jina_index_meta.json at {resolved}: {exc}") from exc
+
+    def _load_optional_parquet(self, path: Path | None, label: str) -> pd.DataFrame | None:
+        """Load optional video metadata without making it a startup requirement."""
+        if path is None:
+            return None
+        resolved = self._require_path(path, f"path for {label}")
+        try:
+            return pd.read_parquet(resolved)
+        except Exception as exc:  # noqa: BLE001
+            raise JinaRetrieverError(f"Failed to read {label} at {resolved}: {exc}") from exc
+
+    def _build_video_metadata_lookup(self) -> dict[str, dict] | None:
+        if self._video_metadata is None:
+            return None
+        video_column = next(
+            (column for column in ("video_id", "video", "video_key") if column in self._video_metadata.columns),
+            None,
+        )
+        if video_column is None:
+            logger.warning(
+                "jina_video_metadata.parquet has no recognizable video-id column; enrichment skipped."
+            )
+            return None
+        return {
+            str(row[video_column]): row
+            for row in self._video_metadata.to_dict(orient="records")
+            if row.get(video_column) is not None
+        }
+
+    def _load_media_info_dir(self, path: Path) -> dict[str, dict]:
+        """Load optional per-video playback metadata for result enrichment."""
+        if not path.exists() or not path.is_dir():
+            return {}
+        lookup: dict[str, dict] = {}
+        for json_path in path.glob("*.json"):
+            try:
+                value = json.loads(json_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(value, dict):
+                lookup[json_path.stem] = value
+        return lookup
 
     def _is_release_mode(self) -> bool:
         return str(getattr(self._settings, "env", "") or "").strip().lower() in _RELEASE_ENVS
@@ -758,6 +828,13 @@ class JinaRetriever:
             self._model = model
             return self._model
 
+    @property
+    def loaded_model_revision(self) -> str | None:
+        """Return the immutable revision reported by the loaded model."""
+        config = getattr(getattr(self, "_model", None), "config", None)
+        value = getattr(config, "_commit_hash", None)
+        return str(value) if value else None
+
     # ------------------------------------------------------------------
     # Query encoding
     # ------------------------------------------------------------------
@@ -791,17 +868,47 @@ class JinaRetriever:
         if not query or not query.strip():
             raise JinaRetrieverError("Query text must be a non-empty string.")
 
-        model = self._load_model()
-        import torch
+        return self.encode_text_batch([query])[0:1]
 
-        task = (getattr(self._settings, "jina_query_task", "") or "").strip() or None
-        with torch.inference_mode():
-            vec = model.encode_text(
-                [query.strip()],
-                task=task,
-                truncate_dim=int(self._settings.jina_truncate_dim),
-            )
-        return self._finalize_query_vector(vec)
+    def encode_text_batch(self, queries: list[str]) -> np.ndarray:
+        """Encode a validated batch with a bounded exact-query cache."""
+        if not isinstance(queries, list):
+            raise JinaRetrieverError("Query texts must be a list of non-empty strings.")
+        cleaned = [query.strip() for query in queries if isinstance(query, str) and query.strip()]
+        if len(cleaned) != len(queries) or not cleaned:
+            raise JinaRetrieverError("Query texts must be a non-empty list of non-empty strings.")
+
+        self._load_model()
+        cache = getattr(self, "_text_embedding_cache", None)
+        if cache is None:
+            cache = self._text_embedding_cache = {}
+        missing = list(dict.fromkeys(query for query in cleaned if query not in cache))
+        if missing:
+            import torch
+
+            task = (getattr(self._settings, "jina_query_task", "") or "").strip() or None
+            with self._encode_lock, torch.inference_mode():
+                value = self._model.encode_text(
+                    missing,
+                    task=task,
+                    truncate_dim=int(self._settings.jina_truncate_dim),
+                )
+            if hasattr(value, "detach"):
+                value = value.detach().cpu().numpy()
+            encoded = np.asarray(value, dtype=np.float32)
+            if encoded.ndim == 1:
+                encoded = encoded.reshape(1, -1)
+            if encoded.shape != (len(missing), EXPECTED_DIM):
+                raise JinaRetrieverError(
+                    f"Query embedding batch has shape {encoded.shape}, expected ({len(missing)}, {EXPECTED_DIM})."
+                )
+            for query, vector in zip(missing, encoded):
+                cache[query] = self._finalize_query_vector(vector)[0].copy()
+            while len(cache) > 256:
+                cache.pop(next(iter(cache)))
+        return np.ascontiguousarray(
+            np.stack([cache[query] for query in cleaned]).astype(np.float32, copy=False)
+        )
 
     def _finalize_query_vector(self, vec: Any) -> np.ndarray:
         """Common tail for encode_text / encode_image: -> contiguous,
@@ -917,6 +1024,118 @@ class JinaRetriever:
 
         return self._search(self.encode_text(query), top_k)
 
+    def search_visual_batch(self, queries: list[str], top_k: int = 20) -> list[list[dict]]:
+        """Encode several KIS queries in one model call, then search the exact
+        FAISS index once per query.
+
+        Essential for TRAKE batch retrieval: planning N events must not invoke
+        the text encoder N times on CPU. Each hit carries a real Jina vector id
+        reconstructed only in this index -- the two backends never cross.
+        """
+        if not isinstance(top_k, int) or isinstance(top_k, bool) or top_k <= 0:
+            raise JinaRetrieverError(f"top_k must be a positive integer, got {top_k!r}.")
+
+        vectors = self.encode_text_batch(queries)
+        scores, ids = self._index.search(vectors, top_k)
+        batches: list[list[dict]] = []
+        for row_scores, row_ids in zip(scores, ids):
+            results: list[dict] = []
+            for score, vector_id in zip(row_scores, row_ids):
+                if vector_id == -1:
+                    continue
+                row = self._id_to_row.get(int(vector_id))
+                if row is None:
+                    logger.error(
+                        "Jina FAISS returned vector_id=%s with no matching row in jina global_ids.parquet.",
+                        vector_id,
+                    )
+                    continue
+                results.append(
+                    self._build_result(len(results) + 1, float(score), int(vector_id), row)
+                )
+            batches.append(results)
+        return batches
+
+    def _timeline_rows(self, video_id: str) -> list[dict]:
+        """Chronologically sorted rows for one video (case-insensitive lookup)."""
+        clean = str(video_id or "").strip()
+        if not clean:
+            return []
+        rows = self._video_to_rows.get(clean)
+        if rows:
+            return rows
+        lowered = clean.lower()
+        for key, value in self._video_to_rows.items():
+            if key.lower() == lowered:
+                return value
+        return []
+
+    def search_video_timelines(
+        self,
+        queries: list[str],
+        video_ids: list[str],
+        top_k: int = 20,
+    ) -> dict[str, list[list[dict]]]:
+        """Score several event queries against several local video timelines.
+
+        Query text is encoded once as a batch -- critical for TRAKE anchor
+        expansion, where anchoring a dozen videos for several events must not
+        call the text model dozens of times on CPU. Each keyframe vector is
+        reconstructed from *this* Jina index, so a BEiT3 id can never leak in.
+        """
+        if not queries or not video_ids:
+            return {}
+
+        query_vectors = self.encode_text_batch(queries)
+        output: dict[str, list[list[dict]]] = {}
+        for video_id in dict.fromkeys(str(item or "").strip() for item in video_ids):
+            rows = self._timeline_rows(video_id)
+            if not rows:
+                output[video_id] = [[] for _ in queries]
+                continue
+
+            vector_ids: list[int] = []
+            metadata_rows: list[dict] = []
+            embeddings: list[np.ndarray] = []
+            for row in rows:
+                try:
+                    vector_id = int(row.get(_COL_VECTOR_ID))
+                except (TypeError, ValueError):
+                    continue
+                if vector_id < 0:
+                    continue
+                try:
+                    embeddings.append(self._index.reconstruct(vector_id))
+                except Exception as exc:  # noqa: BLE001 - FAISS backend-specific error
+                    logger.debug("Could not reconstruct Jina vector %s: %s", vector_id, exc)
+                    continue
+                vector_ids.append(vector_id)
+                metadata_rows.append(row)
+            if not embeddings:
+                output[video_id] = [[] for _ in queries]
+                continue
+
+            matrix = np.ascontiguousarray(np.asarray(embeddings, dtype=np.float32))
+            batches: list[list[dict]] = []
+            for query_vector in query_vectors:
+                similarity = matrix @ np.asarray(query_vector, dtype=np.float32)
+                order = np.argsort(-similarity)[: max(1, int(top_k))]
+                batches.append(
+                    [
+                        self._build_result(
+                            rank, float(similarity[index]), vector_ids[index], metadata_rows[index]
+                        )
+                        for rank, index in enumerate(order, start=1)
+                    ]
+                )
+            output[video_id] = batches
+        return output
+
+    def search_video_timeline(self, query: str, video_id: str, top_k: int = 20) -> list[dict]:
+        """Score every indexed keyframe in one video against ``query``."""
+        key = str(video_id or "").strip()
+        return self.search_video_timelines([query], [key], top_k).get(key, [[]])[0]
+
     def _search(self, query_vec: np.ndarray, top_k: int) -> list[dict]:
         scores, ids = self._index.search(query_vec, top_k)
         scores = scores[0]
@@ -1012,23 +1231,27 @@ class JinaRetriever:
         return result
 
     def get_video_timeline(
-        self, video_id: str, around_frame_id: str | None = None, limit: int = 60
+        self,
+        video_id: str,
+        around_frame_id: str | None = None,
+        limit: int = 60,
+        full_video: bool = False,
     ) -> list[dict]:
-        """Return chronological keyframes for a given video."""
-        rows = self._video_to_rows.get(video_id)
-        if not rows:
-            v_lower = video_id.lower()
-            for k, v in self._video_to_rows.items():
-                if k.lower() == v_lower:
-                    rows = v
-                    break
+        """Return chronological keyframes for a given video.
+
+        ``full_video`` returns evenly spaced samples spanning the whole video
+        (the ``around_frame_id`` frame, if given, is kept in the strip); the
+        default keeps the local temporal context around that frame.
+        """
+        rows = self._timeline_rows(video_id)
         if not rows:
             return []
 
+        safe_limit = max(1, int(limit or 60))
+        match_idx = -1
         if around_frame_id:
             target = str(around_frame_id).strip()
             target_num = target.lstrip("0") or "0"
-            match_idx = -1
             for i, row in enumerate(rows):
                 candidates = set()
                 for col in (_COL_RAW_FRAME_ID, _COL_SOURCE_FRAME_ID, _COL_KEYFRAME_ORDINAL, _COL_EMBEDDING_ROW):
@@ -1041,16 +1264,34 @@ class JinaRetriever:
                 if target in candidates or target_num in candidates:
                     match_idx = i
                     break
-            if match_idx != -1:
-                half = limit // 2
-                start = max(0, match_idx - half)
-                end = min(len(rows), start + limit)
-                start = max(0, end - limit)
-                selected_rows = rows[start:end]
-            else:
-                selected_rows = rows[:limit]
+
+        if full_video and len(rows) > safe_limit:
+            # Integer arithmetic avoids float-rounding duplicates and always
+            # includes the first and last keyframe. Keep the opened frame in
+            # the strip so its details and Prev/Next still work.
+            selected_indices = (
+                [(index * (len(rows) - 1)) // (safe_limit - 1) for index in range(safe_limit)]
+                if safe_limit > 1
+                else [len(rows) // 2]
+            )
+            if match_idx != -1 and match_idx not in selected_indices:
+                closest = min(
+                    range(len(selected_indices)),
+                    key=lambda index: abs(selected_indices[index] - match_idx),
+                )
+                selected_indices[closest] = match_idx
+                selected_indices.sort()
+            selected_rows = [rows[index] for index in selected_indices]
+        elif full_video:
+            selected_rows = rows
+        elif around_frame_id and match_idx != -1:
+            half = safe_limit // 2
+            start = max(0, match_idx - half)
+            end = min(len(rows), start + safe_limit)
+            start = max(0, end - safe_limit)
+            selected_rows = rows[start:end]
         else:
-            selected_rows = rows[:limit]
+            selected_rows = rows[:safe_limit]
 
         results: list[dict] = []
         for rank, row in enumerate(selected_rows, start=1):

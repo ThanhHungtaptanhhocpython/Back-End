@@ -8,7 +8,11 @@ if BACKEND_ROOT not in sys.path:
     sys.path.insert(0, BACKEND_ROOT)
 from src.config.settings import get_settings
 from src.services.openrouter_agent_planner import _normalise_llm_plan
-from src.services.agent_query_coordinator import build_agent_plan, _rerank_with_light_verifier
+from src.services.agent_query_coordinator import (
+    _rerank_with_light_verifier,
+    build_agent_plan,
+    run_agent_query_search,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -48,6 +52,49 @@ def test_agent_plan_executes_primary_visual_query_by_default():
     assert plan["executed_visual_queries"] == [plan["visual_query"]]
     assert plan["support_visual_queries"] == plan["visual_queries"][1:]
     assert plan["execution_strategy"]["mode"] == "primary_holistic_first"
+
+
+def test_agent_detects_and_splits_ordered_temporal_query():
+    query = (
+        "Canh phim lan luot gioi thieu cac nguyen lieu qua 3 chuyen canh: "
+        "may quay cheo len va ket thuc o nguyen lieu hai san dau tien; "
+        "quay tu tren xuong can canh nguyen lieu hai san thu hai roi chuyen sang cac nguyen lieu nhieu mau sac; "
+        "cuoi cung la cu may tinh toan canh toan bo nguyen lieu."
+    )
+
+    plan = build_agent_plan(query, topk=20)
+
+    assert plan["intent_type"] == "temporal_sequence"
+    assert plan["event_count"] == 3
+    assert plan["execution_strategy"]["mode"] == "trake_temporal_sequence"
+    assert len(plan["event_queries"]) == 3
+    assert "hai san dau tien" in plan["event_queries"][0]
+    assert "hai san thu hai" in plan["event_queries"][1]
+    assert "toan bo nguyen lieu" in plan["event_queries"][2]
+    assert [item["kind"] for item in plan["expanded_queries"]] == ["temporal_event"] * 3
+
+
+def test_agent_temporal_query_dispatches_to_trake(monkeypatch):
+    from src.services import user_service
+
+    calls = []
+
+    def fake_trake(queries, top_results=20):
+        calls.append((queries, top_results))
+        return [{"sequence_id": 1, "frames": [{"event_index": 1}, {"event_index": 2}, {"event_index": 3}]}]
+
+    monkeypatch.setattr(user_service, "GetImageDataTrakeSearch", fake_trake)
+    result = run_agent_query_search(
+        "Lan luot qua 3 chuyen canh: first seafood ingredient; second seafood ingredient; finally all ingredients",
+        topk=100,
+    )
+
+    assert len(calls) == 1
+    assert calls[0][1] == 20
+    assert len(calls[0][0]) == 3
+    assert result["frames"] == []
+    assert len(result["sequences"]) == 1
+    assert result["plan"]["verification"]["scope"] == "ordered_sequence"
 
 
 def test_agent_visual_query_limit_can_be_raised(monkeypatch):

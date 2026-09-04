@@ -78,6 +78,7 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
       return;
     }
 
+    setTimeline([]);
     setLoadingTimeline(true);
     fetchVideoTimeline(item.videoKey, item.frameKey || item.id, 60)
       .then((frames) => {
@@ -401,20 +402,21 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
                 <span className="ws-filmstrip-tag">
                   {filmstripLabel}
                 </span>
-                {timeline.length > 0 ? (
-                  <button
-                    className="ws-btn small"
-                    style={{ fontSize: "11px", padding: "1px 8px", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "4px" }}
-                    onClick={() => setStripMode((m) => (m === "timeline" ? "results" : "timeline"))}
-                    title="Toggle strip mode between video sequence and search results"
-                  >
-                    {stripMode === "timeline" ? (
-                      <><OrderedListOutlined /> Show Search Results</>
-                    ) : (
-                      <><VideoCameraOutlined /> Show {item.videoKey} Timeline</>
-                    )}
-                  </button>
-                ) : null}
+                <button
+                  className="ws-btn small"
+                  style={{ fontSize: "11px", padding: "1px 8px", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "4px" }}
+                  onClick={() => setStripMode((m) => (m === "timeline" ? "results" : "timeline"))}
+                  title="Toggle strip mode between video timeline and search results"
+                  disabled={loadingTimeline || timeline.length === 0}
+                >
+                  {loadingTimeline ? (
+                    <><VideoCameraOutlined /> Loading timeline...</>
+                  ) : stripMode === "timeline" ? (
+                    <><OrderedListOutlined /> Show Search Results</>
+                  ) : (
+                    <><VideoCameraOutlined /> Show {item.videoKey} Timeline</>
+                  )}
+                </button>
               </div>
               {compareItem ? (
                 <button className="ws-filmstrip-clear" onClick={() => setCompareId(null)}>

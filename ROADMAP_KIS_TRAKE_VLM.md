@@ -205,6 +205,84 @@ Verification:
 python -m pytest tests\test_grounded_qa_service.py tests\test_task3.py tests\test_task4.py
 ```
 
+Next checkpoint:
+
+### Checkpoint 7: Jina Fine-Keyframe Runtime Integration
+
+Status: implemented; production activation pending.
+
+Implemented:
+
+- [x] Added explicit `VISUAL_RETRIEVER=beit3|jina` selection with no silent
+  cross-corpus fallback.
+- [x] Added typed Jina model/device/revision/index/parquet settings.
+- [x] Added a lazy singleton Jina CLIP v2 retriever using normalized
+  1024-dimensional text/image embeddings and the final FAISS index.
+- [x] Added startup validation for metric, dimension, count, contiguous IDs,
+  duplicate keys, timestamps, and per-video totals.
+- [x] Jina results use `source_frame_idx` for submission IDs and retain
+  `keyframe_XXXX` only as keyframe identity.
+- [x] Text Search, Agent Search, Q&A, TRAKE, timeline, vector-ID similarity,
+  and image similarity use the selected retriever.
+- [x] Added Jina cloud artifact names, manifest publisher, and
+  `/health/retrieval?deep=true`.
+- [x] Regression result: 99 passed, 1 skipped.
+
+Activation still required:
+
+- [ ] Publish `metadata/hcmai-assets-jina.json` using Azure credentials.
+- [ ] Sync the four Jina artifacts into the backend cache.
+- [ ] Pin the exact Hugging Face model revision used by image embedding.
+- [ ] Switch `VISUAL_RETRIEVER=jina` and pass a real end-to-end query.
+- [ ] Compare Jina and BEiT3 on the golden query set before removing rollback.
+
+### Checkpoint 8: Remove BEiT3 After Jina Cutover
+
+Status: blocked until Checkpoint 7 activation and evaluation pass.
+
+Entry criteria:
+
+- [ ] Jina passes `/health/retrieval?deep=true` with the real 693,124-vector corpus.
+- [ ] KIS, Agent Search, Similar Search, Q&A, and TRAKE pass end-to-end tests on Jina.
+- [ ] Jina meets or exceeds BEiT3 on the agreed golden-query retrieval metrics.
+- [ ] The deployed Jina runtime completes a competition-style rehearsal without
+  requiring BEiT3 rollback.
+- [ ] Final Jina index, parquet metadata, model revision, and Azure manifest are
+  backed up and reproducible.
+
+Removal work:
+
+- [ ] Make Jina the only visual retriever and remove `VISUAL_RETRIEVER=beit3`.
+- [ ] Remove `src/services/beit3_retriever.py` and BEiT3-specific imports/tests.
+- [ ] Move model-independent search, timeline, and result-mapping helpers out of
+  the BEiT3 class before deleting it.
+- [ ] Remove BEiT3 settings, Cloud Asset names, manifest entries, dependencies,
+  documentation, and deployment variables.
+- [ ] Remove or archive BEiT3 FAISS/metadata artifacts only after confirming no
+  production process references them.
+- [ ] Run the full backend regression suite and a fresh-deployment smoke test.
+
+Exit criteria:
+
+- [ ] Repository search finds no runtime BEiT3 references.
+- [ ] Backend starts with only Jina artifacts and no BEiT3 environment variables.
+- [ ] Search, Q&A, TRAKE, media mapping, and submission frame IDs remain correct.
+- [ ] Rollback is provided by a tagged release/container and artifact backup,
+  rather than BEiT3 code remaining in the active branch.
+
+### Checkpoint 7A: Remap Legacy OCR Evidence To Jina
+
+Status: implemented; waiting for the final Jina `global_ids.parquet` to run.
+
+- [x] Added `scripts/data_extraction/new/remap_ocr_to_jina.py`.
+- [x] Maps old OCR by `video_id + timestamp` to the nearest Jina keyframe.
+- [x] Keeps Jina `vector_id`, `frame_path`, `source_frame_idx`, and alignment
+  delta while preserving the original OCR text and legacy IDs for audit.
+- [x] Rejects unmapped videos and suspicious timestamp matches beyond a
+  configurable delta; it never overwrites the source OCR JSON.
+- [ ] Run against `ocr_results (1).json` and the final Jina `global_ids.parquet`.
+- [ ] Review alignment statistics and sample output before indexing `aic_ocr`.
+
 Mục tiêu: cải thiện khả năng tìm đúng keyframe theo mô tả tự nhiên, đặc biệt cho KIS, TRAKE, Q&A và Agent Search.
 
 ## Trạng thái hiện tại

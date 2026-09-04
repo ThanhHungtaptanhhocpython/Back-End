@@ -266,6 +266,22 @@ def _keyframe_missing_response(video_id: str, stem: str):
     )
 
 
+def _keyframe_media_type(path) -> str:
+    """Detect image bytes because Azure keyframe suffixes are not reliable."""
+    try:
+        with open(path, "rb") as image_file:
+            header = image_file.read(12)
+    except OSError:
+        return "application/octet-stream"
+    if header.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if header.startswith(b"RIFF") and header[8:12] == b"WEBP":
+        return "image/webp"
+    return "application/octet-stream"
+
+
 @app.get("/keyframes/{image_path:path}")
 def serve_keyframe(image_path: str):
     """Serve a keyframe image.
@@ -302,7 +318,9 @@ def serve_keyframe(image_path: str):
             cloud_file = None
         if cloud_file is not None and cloud_file.is_file():
             return FileResponse(
-                str(cloud_file), headers={"Cache-Control": _KEYFRAME_CACHE_CONTROL}
+                str(cloud_file),
+                media_type=_keyframe_media_type(cloud_file),
+                headers={"Cache-Control": _KEYFRAME_CACHE_CONTROL},
             )
         return _keyframe_missing_response(video_id, stem)
 
@@ -314,7 +332,9 @@ def serve_keyframe(image_path: str):
             for target in (root_path / image_path, root_path / "keyframes" / image_path):
                 if target.is_file():
                     return FileResponse(
-                        str(target), headers={"Cache-Control": _KEYFRAME_CACHE_CONTROL}
+                        str(target),
+                        media_type=_keyframe_media_type(target),
+                        headers={"Cache-Control": _KEYFRAME_CACHE_CONTROL},
                     )
 
             try:
@@ -342,6 +362,7 @@ def serve_keyframe(image_path: str):
                             if test_file.is_file():
                                 return FileResponse(
                                     str(test_file),
+                                    media_type=_keyframe_media_type(test_file),
                                     headers={"Cache-Control": _KEYFRAME_CACHE_CONTROL},
                                 )
 
@@ -350,6 +371,7 @@ def serve_keyframe(image_path: str):
                     if test_file.is_file():
                         return FileResponse(
                             str(test_file),
+                            media_type=_keyframe_media_type(test_file),
                             headers={"Cache-Control": _KEYFRAME_CACHE_CONTROL},
                         )
 

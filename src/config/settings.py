@@ -17,7 +17,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 logger = logging.getLogger(__name__)
@@ -102,7 +102,13 @@ class Settings(BaseSettings):
     # (credentials will be disabled automatically in that case).
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000"
 
-    # --- BEiT3 Retrieval (real visual-search path) ---
+    # --- Retrieval backend selection ---
+    # This is the only internal selector. The compatibility field below is an
+    # input alias only and is normalized into this value.
+    retrieval_backend: str = "jina_clip_v2"
+    visual_retriever: str | None = Field(default=None, exclude=True)
+
+    # --- BEiT3 Retrieval (stable rollback path) ---
     # All paths are machine-specific runtime artifacts and must be set via
     # the environment; there is no in-repo default because the checkpoint,
     # FAISS index, and parquet files are not committed to Git.
@@ -123,18 +129,6 @@ class Settings(BaseSettings):
     beit3_col_frame_path: str | None = None
     beit3_col_timestamp: str | None = None
     beit3_col_namespace: str | None = None
-
-    # --- Retrieval backend selection ---
-    # Which visual-retrieval backend serves textual KIS, grounded Q&A candidate
-    # retrieval, and TRAKE per-event retrieval. BEiT3 and Jina CLIP v2 are two
-    # different embedding spaces with two independent FAISS indexes; switching
-    # this never mixes vectors from one into the other's search.
-    # Default backend. Jina CLIP v2 is the primary (Azure-hosted) retriever;
-    # BEiT3 stays available as an explicit local fallback. Note: when
-    # CLOUD_ASSETS_ENABLED is true the active backend is *forced* to
-    # jina_clip_v2 regardless of this value -- see
-    # src/services/retrieval_backend.active_backend().
-    retrieval_backend: str = "jina_clip_v2"  # "beit3" | "jina_clip_v2"
 
     # --- Jina CLIP v2 Retrieval (cloud-primary visual search) ---
     # FAISS index + parquet/json are runtime artifacts, same as BEiT3's: either
@@ -172,6 +166,21 @@ class Settings(BaseSettings):
     # "retrieval.query" to restore the prefix. `task=None` still applies the
     # LoRA adapter via config.json `default_lora_task`.
     jina_query_task: str = ""
+    # Optional HuggingFace cache dir for the pinned model snapshot. Blank ->
+    # the default huggingface_hub cache. Independent of `jina_model_path`.
+    jina_cache_dir: Path | None = None
+    # Optional compatibility input for older Azure-published metadata.
+    jina_video_metadata_path: Path | None = None
+    jina_model_name_or_path: str | None = Field(default=None, exclude=True)
+
+    # --- Jina CLIP v2 reranker (optional second stage) ---
+    jina_reranker_enabled: bool = False
+    jina_reranker_api_key: str | None = None
+    jina_reranker_base_url: str = "https://api.jina.ai/v1/rerank"
+    jina_reranker_model: str = "jina-reranker-m0"
+    jina_reranker_candidate_pool: int = 20
+    jina_reranker_image_max_side: int = 768
+    jina_reranker_timeout_seconds: float = 45.0
 
     # --- Logging ---
     log_level: str = "INFO"
@@ -207,18 +216,29 @@ class Settings(BaseSettings):
     agent_vlm_cache_path: Path | None = None
     agent_vlm_cache_max_entries: int = 5000
     agent_vlm_cache_ttl_seconds: int = 2592000
+    agent_min_verification_score: float = 0.45
+    agent_require_vlm_match: bool = True
     trake_retrieval_top_k: int = 120
+    trake_adaptive_retrieval_top_k: int = 1500
+    trake_anchor_expansion_enabled: bool = True
+    trake_anchor_video_limit: int = 12
+    trake_anchor_timeline_top_k: int = 24
+    trake_trace_candidates: bool = False
+    trake_trace_video_limit: int = 20
     trake_candidates_per_event_video: int = 12
     trake_beam_width: int = 40
     trake_min_event_gap_seconds: float = 0.0
     trake_max_event_gap_seconds: float = 300.0
     trake_max_sequence_span_seconds: float = 900.0
-    trake_temporal_decay: float = 0.01
+    trake_temporal_decay: float = 0.001
+    trake_consecutive_compact_span_seconds: float = 15.0
+    trake_consecutive_span_decay: float = 0.08
     trake_evidence_window_seconds: float = 12.0
     trake_ocr_enabled: bool = True
     trake_asr_enabled: bool = True
     trake_vlm_enabled: bool = True
-    trake_vlm_max_sequences: int = 5
+    trake_vlm_max_sequences: int = 8
+    trake_vlm_max_total_sequences: int = 32
     qa_retrieval_pool: int = 120
     qa_visual_query_limit: int = 8
     qa_max_frames: int = 16
@@ -398,6 +418,8 @@ class Settings(BaseSettings):
         "beit3_tokenizer_path",
         "jina_faiss_index_path",
         "jina_global_ids_path",
+        "jina_cache_dir",
+        "jina_video_metadata_path",
         "jina_index_meta_path",
         "agent_vlm_cache_path",
         "cloud_assets_cache_path",
@@ -419,6 +441,7 @@ class Settings(BaseSettings):
         "openrouter_translate_model",
         "agent_llm_model",
         "jina_model_revision",
+        "jina_reranker_api_key",
         "nim_api_key",
         "cerebras_api_key",
         "groq_api_key",
@@ -436,6 +459,52 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @model_validator(mode="after")
+    def _normalize_legacy_retrieval_aliases(self) -> "Settings":
+        """Normalize old selector/model names into the canonical fields."""
+        backend_new = "retrieval_backend" in self.model_fields_set
+        backend_old = "visual_retriever" in self.model_fields_set
+        old_backend = (self.visual_retriever or "").strip().lower()
+        backend_alias = {
+            "jina": "jina_clip_v2",
+            "jina_clip_v2": "jina_clip_v2",
+            "jina-clip-v2": "jina_clip_v2",
+            "beit-3": "beit3",
+            "beit_3": "beit3",
+        }
+        if backend_old and old_backend:
+            normalized_old = backend_alias.get(old_backend, old_backend)
+            normalized_new = (self.retrieval_backend or "").strip().lower()
+            if backend_new:
+                if normalized_new != normalized_old:
+                    logger.warning(
+                        "VISUAL_RETRIEVER=%r is ignored because RETRIEVAL_BACKEND=%r is set.",
+                        self.visual_retriever,
+                        self.retrieval_backend,
+                    )
+            else:
+                logger.warning(
+                    "VISUAL_RETRIEVER is deprecated; use RETRIEVAL_BACKEND instead."
+                )
+                self.retrieval_backend = normalized_old
+
+        model_new = "jina_model_path" in self.model_fields_set
+        model_old = "jina_model_name_or_path" in self.model_fields_set
+        if model_old and self.jina_model_name_or_path:
+            if model_new:
+                if self.jina_model_path != self.jina_model_name_or_path:
+                    logger.warning(
+                        "JINA_MODEL_NAME_OR_PATH=%r is ignored because JINA_MODEL_PATH=%r is set.",
+                        self.jina_model_name_or_path,
+                        self.jina_model_path,
+                    )
+            else:
+                logger.warning(
+                    "JINA_MODEL_NAME_OR_PATH is deprecated; use JINA_MODEL_PATH instead."
+                )
+                self.jina_model_path = self.jina_model_name_or_path
+        return self
 
     def get_cors_origins(self) -> list[str]:
         """Return the parsed list of allowed CORS origins."""

@@ -14,13 +14,12 @@ function VerificationBadge({ verification }) {
       </span>
     );
   }
-  // No VLM verdict: the sequence is ranked by BEiT3 visual + temporal evidence.
-  // "disabled" just means the optional OpenRouter VLM check was not run.
+  // No VLM verdict: temporal ordering is valid, but semantic correctness is unverified.
   const status = String(verification.status || "").toLowerCase();
   if (status === "disabled" || status === "" || status === "mock") {
     return (
-      <span className="ws-sb-badge" title="Ranked by BEiT3 visual similarity + temporal-evidence score. The optional VLM sequence check is off.">
-        NO VLM
+      <span className="ws-sb-badge warn" title="Ordered sequence from visual retrieval. The semantic sequence verifier was not run.">
+        UNVERIFIED
       </span>
     );
   }
@@ -120,6 +119,7 @@ export default function TemporalStoryboard({ sequences = [], status, onOpenEvent
                 )}
                 <span className="ws-sb-frame-tc">
                   {frame.timecode} · {fmtDur(frame.timestamp)}
+                  {frame.eventIndex > 1 ? ` · +${fmtDur(frame.gapSeconds)}` : ""}
                 </span>
                 <span className="ws-sb-frame-id">
                   #{frame.submissionFrameId ?? "?"}

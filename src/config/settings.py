@@ -305,10 +305,10 @@ class Settings(BaseSettings):
     cloudflare_vision_model: str = ""
     cloudflare_timeout_seconds: float = 45.0
 
-    # Kilo AI Gateway (OpenRouter-compatible aggregator, kilocode.ai)
+    # Kilo AI Gateway (OpenRouter-compatible aggregator, kilo.ai)
     kilo_enabled: bool = False
     kilo_api_key: str | None = None
-    kilo_base_url: str = "https://kilocode.ai/api/openrouter"
+    kilo_base_url: str = "https://api.kilo.ai/api/gateway"
     kilo_text_model: str = ""
     kilo_vision_model: str = ""
     kilo_timeout_seconds: float = 45.0

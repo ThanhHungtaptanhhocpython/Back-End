@@ -116,7 +116,7 @@ PROVIDER_DEFS: dict[str, ProviderDef] = {
     ),
     "kilo": ProviderDef(
         id="kilo", label="Kilo AI Gateway",
-        default_base_url="https://kilocode.ai/api/openrouter",
+        default_base_url="https://api.kilo.ai/api/gateway",
         key_field="kilo_api_key", base_url_field="kilo_base_url",
         text_model_field="kilo_text_model", vision_model_field="kilo_vision_model",
         timeout_field="kilo_timeout_seconds", enabled_field="kilo_enabled",

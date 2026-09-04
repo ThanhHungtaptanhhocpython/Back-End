@@ -389,10 +389,10 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     _f("CLOUDFLARE_TEXT_MODEL", G_AI, STR),
     _f("CLOUDFLARE_VISION_MODEL", G_AI, STR),
     _f("CLOUDFLARE_TIMEOUT_SECONDS", G_AI, FLOAT, minimum=1, maximum=600),
-    # Kilo AI Gateway (kilocode.ai -- OpenRouter-compatible aggregator)
+    # Kilo AI Gateway (kilo.ai -- OpenRouter-compatible aggregator)
     _f("KILO_ENABLED", G_AI, BOOL),
-    _f("KILO_API_KEY", G_AI, SECRET, secret=True, help="Kilo Code API key (kilocode.ai)."),
-    _f("KILO_BASE_URL", G_AI, URL, placeholder="https://kilocode.ai/api/openrouter",
+    _f("KILO_API_KEY", G_AI, SECRET, secret=True, help="Kilo API key (kilo.ai)."),
+    _f("KILO_BASE_URL", G_AI, URL, placeholder="https://api.kilo.ai/api/gateway",
        help="Kilo gateway base (OpenRouter-compatible). Confirm with Test."),
     _f("KILO_TEXT_MODEL", G_AI, STR, help="Model ID via Kilo, e.g. anthropic/claude-3.5-sonnet. Confirm via Test."),
     _f("KILO_VISION_MODEL", G_AI, STR, help="Vision-capable model ID; confirm via Test."),

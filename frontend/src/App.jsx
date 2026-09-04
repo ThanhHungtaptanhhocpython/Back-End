@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { App as AntApp, ConfigProvider, theme } from "antd";
 import Workstation from "./features/workspace/Workstation";
+import FirstRunNotice from "./features/workspace/FirstRunNotice";
 import SettingsPage from "./features/settings/SettingsPage";
 import "./styles/tokens.css";
 import "./features/workspace/workspace.css";
@@ -47,7 +48,14 @@ export default function App() {
   return (
     <ConfigProvider theme={lightTheme}>
       <AntApp>
-        {settingsOpen ? <SettingsPage onClose={closeSettings} /> : <Workstation />}
+        {settingsOpen ? (
+          <SettingsPage onClose={closeSettings} />
+        ) : (
+          <>
+            <FirstRunNotice />
+            <Workstation />
+          </>
+        )}
       </AntApp>
     </ConfigProvider>
   );

@@ -13,12 +13,24 @@ import "./settings.css";
 
 const { Title } = Typography;
 
+const TABS = ["config", "providers", "cloud", "history"];
+
+/** Initial tab from the deep link, e.g. `#/settings/cloud` -> "cloud". */
+function tabFromHash() {
+  try {
+    const seg = (window.location.hash || "").split("/")[2];
+    return TABS.includes(seg) ? seg : "config";
+  } catch {
+    return "config";
+  }
+}
+
 export default function SettingsPage({ onClose }) {
   const [schema, setSchema] = useState(null);
   const [config, setConfig] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [tab, setTab] = useState("config");
+  const [tab, setTab] = useState(tabFromHash);
   const [pendingRevision, setPendingRevision] = useState(null);
   const [reloadKey, setReloadKey] = useState(0);
 

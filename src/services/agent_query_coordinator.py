@@ -14,6 +14,12 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 logger = logging.getLogger(__name__)
+
+TEMPORAL_MARKERS = (
+    "lan luot", "dau tien", "sau do", "tiep theo", "ke tiep",
+    "roi den", "cuoi cung", "chuyen canh", "theo thu tu",
+    "before", "after", "then", "next", "finally", "in order",
+)
 COLOR_TERMS = (
     ("xanh duong", "blue"),
     ("xanh la", "green"),
@@ -718,6 +724,7 @@ def _build_local_structured_search_plan(prompt: str) -> Dict[str, Any]:
 
 def _build_structured_search_plan(prompt: str) -> Dict[str, Any]:
     local_plan = _build_local_structured_search_plan(prompt)
+    local_plan.update(_temporal_plan(prompt, local_plan))
     local_plan.setdefault("planner_source", "local")
     try:
         from src.services.openrouter_agent_planner import plan_agent_query_with_openrouter
@@ -820,6 +827,54 @@ def _select_executed_visual_queries(visual_queries: List[str], primary_query: st
     return selected
 
 
+def _split_temporal_events(prompt: str) -> List[str]:
+    """Extract ordered event clauses without requiring the LLM planner."""
+    text = _clean(prompt)
+    if not text:
+        return []
+
+    event_text = text.split(":", 1)[1].strip() if ":" in text else text
+    parts = [_clean(part.strip(" .,:;!?-")) for part in re.split(r"\s*;\s*", event_text)]
+    parts = [part for part in parts if len(part.split()) >= 3]
+    if len(parts) >= 2:
+        return parts[:5]
+
+    marker_pattern = (
+        r"\b(?:dau tien|đầu tiên|sau do|sau đó|tiep theo|tiếp theo|"
+        r"ke tiep|kế tiếp|roi den|rồi đến|cuoi cung|cuối cùng|"
+        r"first|then|next|finally|after that)\b"
+    )
+    chunks = [
+        _clean(chunk.strip(" .,:;!?-"))
+        for chunk in re.split(marker_pattern, event_text, flags=re.IGNORECASE)
+    ]
+    chunks = [chunk for chunk in chunks if len(chunk.split()) >= 3]
+    if len(chunks) >= 2:
+        return chunks[:5]
+
+    sentences = [_clean(part.strip(" .,:;!?-")) for part in re.split(r"[.!?]+", event_text)]
+    return [part for part in sentences if len(part.split()) >= 3][:5]
+
+
+def _temporal_plan(prompt: str, structured_plan: Dict[str, Any]) -> Dict[str, Any]:
+    normalised = _normalise_text(prompt)
+    marker_count = sum(1 for marker in TEMPORAL_MARKERS if marker in normalised)
+    llm_events = [
+        _clean(event)
+        for event in structured_plan.get("event_queries", [])
+        if _clean(event)
+    ][:5]
+    local_events = _split_temporal_events(prompt) if marker_count >= 2 else []
+    events = llm_events if len(llm_events) >= 2 else local_events
+    llm_temporal = _clean(structured_plan.get("intent_type")).lower() == "temporal_sequence"
+    is_temporal = llm_temporal or (marker_count >= 2 and len(events) >= 2)
+    return {
+        "intent_type": "temporal_sequence" if is_temporal else "single_scene",
+        "event_count": len(events) if is_temporal else 0,
+        "event_queries": events if is_temporal else [],
+    }
+
+
 def build_agent_plan(message: str, topk: int = 100) -> Dict[str, Any]:
     prompt = _clean(message)
     parsed = _parse_query_light(prompt)
@@ -850,6 +905,12 @@ def build_agent_plan(message: str, topk: int = 100) -> Dict[str, Any]:
         for query in visual_queries
         if query and query.lower() not in executed_query_keys
     ]
+    temporal = _temporal_plan(prompt, structured_plan)
+    if temporal["intent_type"] == "temporal_sequence":
+        expanded = [
+            {"kind": "temporal_event", "query": event, "query_en": event}
+            for event in temporal["event_queries"]
+        ]
 
     return {
         "original_query": prompt,
@@ -860,8 +921,9 @@ def build_agent_plan(message: str, topk: int = 100) -> Dict[str, Any]:
         "visual_queries": visual_queries,
         "executed_visual_queries": executed_visual_queries,
         "support_visual_queries": support_visual_queries,
+        **temporal,
         "execution_strategy": {
-            "mode": "primary_holistic_first",
+            "mode": "trake_temporal_sequence" if temporal["intent_type"] == "temporal_sequence" else "primary_holistic_first",
             "visual_query_limit": len(executed_visual_queries),
             "note": "Support queries are kept for explanation/checklist context; only executed queries are sent to visual search.",
         },
@@ -1354,6 +1416,37 @@ def run_agent_query_search(message: str, topk: int = 100, added_to: Optional[str
             "plan": plan,
             "frames": [],
             "total_candidates": 0,
+        }
+
+    if plan.get("intent_type") == "temporal_sequence":
+        from src.services.user_service import GetImageDataTrakeSearch
+
+        events = plan.get("event_queries") or []
+        sequences = GetImageDataTrakeSearch(
+            [{"query": event} for event in events],
+            top_results=min(topk, 20),
+        )
+        plan["verification"] = {
+            **plan.get("verification", {}),
+            "method": "trake_sequence_vlm",
+            "scope": "ordered_sequence",
+        }
+        target = added_to or "the temporal storyboard"
+        answer = "\n".join([
+            "Temporal events:",
+            *(f"{index}. {event}" for index, event in enumerate(events, 1)),
+            "",
+            "Routing:",
+            "TRAKE (same video, increasing timestamps, beam search, sequence VLM)",
+            "",
+            f"Results added to {target}: {len(sequences)} sequences.",
+        ])
+        return {
+            "answer": answer,
+            "plan": plan,
+            "frames": [],
+            "sequences": sequences,
+            "total_candidates": len(sequences),
         }
 
     query_results: List[Tuple[str, List[Dict[str, Any]]]] = []

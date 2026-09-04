@@ -106,14 +106,17 @@ def generate_random_answer():
 
 
 def getImageDataSingleTextSearch(query, k):
-    """Real visual text search: BEiT3 text encoder -> exact FAISS IP search.
+    """Real visual text search through the explicitly selected embedding space.
 
     This is the production `/singletextsearch` path. Returned scores are the
     real FAISS inner-product similarity, never a rank-derived placeholder.
     """
-    from src.services.beit3_retriever import get_beit3_retriever
+    from src.services.visual_retriever import get_visual_retriever
 
-    return get_beit3_retriever().search_visual(query, top_k=k)
+    results = get_visual_retriever().search_visual(query, top_k=k)
+    from src.services.jina_reranker import rerank_kis_results
+
+    return rerank_kis_results(query, results)
 
 
 def getGroundedQASearch(query, k):
@@ -132,12 +135,12 @@ def getImageDataQAndASearch(query, k):
     return frames
 
 def getImageSearchById(image_id, k):
-    """Search similar keyframes using BEiT-3 vector ID."""
-    from src.services.beit3_retriever import get_beit3_retriever
+    """Search similar keyframes using an ID from the active FAISS corpus."""
+    from src.services.visual_retriever import get_visual_retriever
     try:
-        return get_beit3_retriever().search_by_vector_id(int(image_id), top_k=k)
+        return get_visual_retriever().search_by_vector_id(int(image_id), top_k=k)
     except Exception as e:
-        logging.error(f"Error during BEiT-3 image search by id: {e}")
+        logging.error(f"Error during visual image search by id: {e}")
         return []
 
 
@@ -145,30 +148,30 @@ def getImageSearchById(image_id, k):
 def getCaptureSimilarSearch(image_path, k):
     """Similar-frame search seeded by a captured frame's exact preview still.
 
-    Encodes the server-extracted WebP with BEiT-3's vision tower and searches
-    the same 1024-d FAISS index as visual text search. The captured frame's
+    Encodes the server-extracted WebP with the active vision tower and searches
+    the same FAISS index as visual text search. The captured frame's
     per-video ``frame_idx`` is never passed as a global FAISS vector id, so this
     cannot silently return matches for an unrelated corpus frame. Errors
     propagate so the caller can report them instead of inventing results.
     """
-    from src.services.beit3_retriever import get_beit3_retriever
+    from src.services.visual_retriever import get_visual_retriever
 
-    return get_beit3_retriever().search_by_image(image_path, top_k=k)
+    return get_visual_retriever().search_by_image(image_path, top_k=k)
 
 
 def getImageSearchByFile(image_file, k):
-    """Search similar keyframes from an uploaded image via BEiT-3's vision tower.
+    """Search similar keyframes from an uploaded image in the active corpus.
 
     The uploaded image is encoded the same way indexed keyframes were and
     searched against the shared 1024-d FAISS index, so results carry real
     FAISS vector ids (a follow-up pivot on them is well defined).
     """
-    from src.services.beit3_retriever import get_beit3_retriever
+    from src.services.visual_retriever import get_visual_retriever
 
     try:
-        return get_beit3_retriever().search_by_image(image_file, top_k=k)
+        return get_visual_retriever().search_by_image(image_file, top_k=k)
     except Exception as e:
-        logging.error(f"Error during BEiT-3 image file search: {e}")
+        logging.error(f"Error during visual image file search: {e}")
         return []
 
 def GetImageDataTrakeSearch(query, top_results=100): 

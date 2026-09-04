@@ -33,6 +33,7 @@ from src.config.secret_box import SecretBox, SecretBoxError
 MAX_REVISIONS = 10
 SCHEMA_VERSION = 1
 DISABLE_ENV = "HCMAI_DISABLE_CONFIG_STORE"
+APP_DATA_ENV = "HCMAI_APP_DATA_DIR"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -445,12 +446,23 @@ def load_effective_overrides(repo_root: Path | None = None) -> dict[str, str]:
     * store empty + ``.env``    -> bootstrap revision 1, then return its values
     * store has active revision -> that revision's decrypted values
     """
+    root = repo_root or Path(__file__).resolve().parents[2]
+    env_path = root / ".env"
+    if APP_DATA_ENV not in os.environ and env_path.is_file():
+        app_data = _read_env_file(env_path).get(APP_DATA_ENV)
+        if app_data:
+            os.environ[APP_DATA_ENV] = app_data
+            try:
+                from src.config import app_paths
+
+                app_paths.reset_cache()
+            except Exception:
+                pass
+
     store = get_store()
     if store is None:
         return {}
     if not store.has_revisions():
-        root = repo_root or Path(__file__).resolve().parents[2]
-        env_path = root / ".env"
         if env_path.is_file():
             store.bootstrap_from_env(_read_env_file(env_path))
     return store.effective_values()

@@ -28,6 +28,7 @@ def test_openrouter_vlm_verifier_reranks_candidates_and_keeps_tail(monkeypatch):
     monkeypatch.setenv("AGENT_VLM_BATCH_SIZE", "3")
     monkeypatch.setenv("AGENT_VLM_MODEL", "google/gemini-2.5-flash")
     monkeypatch.setenv("AGENT_VLM_CACHE_ENABLED", "false")
+    monkeypatch.setenv("AGENT_REQUIRE_VLM_MATCH", "false")
     get_settings.cache_clear()
 
     def fake_request(messages, model, max_tokens, timeout):

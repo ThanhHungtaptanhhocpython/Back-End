@@ -17,7 +17,8 @@ Return strict JSON only. Do not include markdown.
 
 Goal:
 - Convert the user's natural-language description, often Vietnamese, into enriched English search queries.
-- Prefer one holistic visual query that describes the whole scene.
+- For a single scene, prefer one holistic visual query that describes the whole scene.
+- For an ordered multi-event description, set intent_type to temporal_sequence and split it into short event_queries in chronological order. Do not send the whole long description as one visual query.
 - Add at most two extra visual queries only when they are full-scene variants, not keyword fragments.
 - Preserve concrete details: subjects, count, clothing colors, action, camera angle, sequence, objects, visible text.
 - Do not infer colors. In Vietnamese, "bi do" means pumpkin/squash, not a red object; "do hai nguoi dieu khien" means controlled by two people, not red.
@@ -30,6 +31,8 @@ JSON schema:
 {
   "profile": "llm_enriched",
   "intent": "short English intent",
+  "intent_type": "single_scene or temporal_sequence",
+  "event_queries": ["ordered event 1", "ordered event 2", "ordered event 3"],
   "visual_queries": ["one rich English scene query", "optional rich variant", "optional rich variant"],
   "ocr_queries": [],
   "asr_queries": [],
@@ -196,13 +199,19 @@ def _local_summary(local_plan: Dict[str, Any]) -> str:
         "ocr_queries": local_plan.get("ocr_queries", [])[:2],
         "asr_queries": local_plan.get("asr_queries", [])[:2],
         "must_have_checks": local_plan.get("must_have_checks", [])[:8],
+        "intent_type": local_plan.get("intent_type", "single_scene"),
+        "event_queries": local_plan.get("event_queries", [])[:5],
     }
     return json.dumps(summary, ensure_ascii=False)
 
 
 def _normalise_llm_plan(payload: Dict[str, Any], prompt: str, local_plan: Dict[str, Any]) -> Dict[str, Any]:
+    intent_type = "temporal_sequence" if _clean(payload.get("intent_type")).lower() == "temporal_sequence" else "single_scene"
+    event_queries = _clean_string_list(payload.get("event_queries"), limit=5, min_words=3)
     visual_queries = [_sanitize_visual_query(query, prompt) for query in _clean_string_list(payload.get("visual_queries"), limit=3, min_words=6)]
     visual_queries = [query for query in visual_queries if query]
+    if not visual_queries and intent_type == "temporal_sequence" and event_queries:
+        visual_queries = [event_queries[0]]
     if not visual_queries:
         return {}
 
@@ -224,6 +233,8 @@ def _normalise_llm_plan(payload: Dict[str, Any], prompt: str, local_plan: Dict[s
     return {
         "profile": profile,
         "intent": _clean(payload.get("intent")) or _clean(prompt),
+        "intent_type": intent_type,
+        "event_queries": event_queries,
         "planner_source": "openrouter",
         "must_have_checks": must_have,
         "negative_checks": negative,

@@ -1,0 +1,31 @@
+{
+  "_comment": "Download the four final Jina artifacts, set local paths, then build/upload hcmai-assets.json with scripts/cloud/build_asset_manifest.py.",
+  "version": "fine-keyframes-jina-v2-2026-09-02",
+  "artifacts": {
+    "jina_faiss_index": {
+      "local": "D:/aic-runtime/jina/jina_faiss.index",
+      "container": "embeddings",
+      "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/jina_faiss.index"
+    },
+    "jina_global_ids": {
+      "local": "D:/aic-runtime/jina/global_ids.parquet",
+      "container": "embeddings",
+      "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/global_ids.parquet"
+    },
+    "jina_video_metadata": {
+      "local": "D:/aic-runtime/jina/video_metadata.parquet",
+      "container": "embeddings",
+      "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/video_metadata.parquet"
+    },
+    "jina_index_meta": {
+      "local": "D:/aic-runtime/jina/index_meta.json",
+      "container": "embeddings",
+      "key": "indexes/fine_keyframes_jina_clip_v2_1024d_v2/jina/index_meta.json"
+    }
+  },
+  "keyframes": {
+    "container": "keyframes",
+    "prefix": "",
+    "layout": "{namespace}/{video_id}/keyframe_{ordinal:04d}.jpg"
+  }
+}

@@ -102,7 +102,12 @@ class Settings(BaseSettings):
     # (credentials will be disabled automatically in that case).
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000"
 
-    # --- BEiT3 Retrieval (real visual-search path) ---
+    # --- Visual retrieval selector ---
+    # Switching is explicit. A failed Jina startup must not silently search the
+    # legacy BEiT3 corpus because their vector IDs and frame mappings differ.
+    visual_retriever: str = "beit3"
+
+    # --- BEiT3 Retrieval (stable rollback path) ---
     # All paths are machine-specific runtime artifacts and must be set via
     # the environment; there is no in-repo default because the checkpoint,
     # FAISS index, and parquet files are not committed to Git.
@@ -123,6 +128,26 @@ class Settings(BaseSettings):
     beit3_col_frame_path: str | None = None
     beit3_col_timestamp: str | None = None
     beit3_col_namespace: str | None = None
+
+    # --- Jina CLIP v2 Retrieval (fine-keyframe target path) ---
+    jina_model_name_or_path: str = "jinaai/jina-clip-v2"
+    jina_model_revision: str | None = None
+    jina_cache_dir: Path | None = None
+    jina_local_files_only: bool = False
+    jina_device: str = "cpu"
+    jina_truncate_dim: int = 1024
+    jina_query_task: str = "retrieval.query"
+    jina_faiss_index_path: Path | None = None
+    jina_global_ids_path: Path | None = None
+    jina_video_metadata_path: Path | None = None
+    jina_index_meta_path: Path | None = None
+    jina_reranker_enabled: bool = False
+    jina_reranker_api_key: str | None = None
+    jina_reranker_base_url: str = "https://api.jina.ai/v1/rerank"
+    jina_reranker_model: str = "jina-reranker-m0"
+    jina_reranker_candidate_pool: int = 20
+    jina_reranker_image_max_side: int = 768
+    jina_reranker_timeout_seconds: float = 45.0
 
     # --- Logging ---
     log_level: str = "INFO"
@@ -158,18 +183,29 @@ class Settings(BaseSettings):
     agent_vlm_cache_path: Path | None = None
     agent_vlm_cache_max_entries: int = 5000
     agent_vlm_cache_ttl_seconds: int = 2592000
+    agent_min_verification_score: float = 0.45
+    agent_require_vlm_match: bool = True
     trake_retrieval_top_k: int = 120
+    trake_adaptive_retrieval_top_k: int = 1500
+    trake_anchor_expansion_enabled: bool = True
+    trake_anchor_video_limit: int = 12
+    trake_anchor_timeline_top_k: int = 24
+    trake_trace_candidates: bool = False
+    trake_trace_video_limit: int = 20
     trake_candidates_per_event_video: int = 12
     trake_beam_width: int = 40
     trake_min_event_gap_seconds: float = 0.0
     trake_max_event_gap_seconds: float = 300.0
     trake_max_sequence_span_seconds: float = 900.0
-    trake_temporal_decay: float = 0.01
+    trake_temporal_decay: float = 0.001
+    trake_consecutive_compact_span_seconds: float = 15.0
+    trake_consecutive_span_decay: float = 0.08
     trake_evidence_window_seconds: float = 12.0
     trake_ocr_enabled: bool = True
     trake_asr_enabled: bool = True
     trake_vlm_enabled: bool = True
-    trake_vlm_max_sequences: int = 5
+    trake_vlm_max_sequences: int = 8
+    trake_vlm_max_total_sequences: int = 32
     qa_retrieval_pool: int = 120
     qa_visual_query_limit: int = 8
     qa_max_frames: int = 16
@@ -331,6 +367,11 @@ class Settings(BaseSettings):
         "beit3_index_meta_path",
         "beit3_checkpoint_path",
         "beit3_tokenizer_path",
+        "jina_cache_dir",
+        "jina_faiss_index_path",
+        "jina_global_ids_path",
+        "jina_video_metadata_path",
+        "jina_index_meta_path",
         "agent_vlm_cache_path",
         "cloud_assets_cache_path",
         "launcher_frontend_dir",
@@ -350,6 +391,8 @@ class Settings(BaseSettings):
         "google_api_key",
         "openrouter_translate_model",
         "agent_llm_model",
+        "jina_model_revision",
+        "jina_reranker_api_key",
         "nim_api_key",
         "cerebras_api_key",
         "groq_api_key",

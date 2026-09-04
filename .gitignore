@@ -27,6 +27,11 @@ benchmarks/qa_runs/
 # Local runtime state
 .runlogs/
 .venv-broken-*/
+.pytest-tmp-*/
+.test-tmp-*/
+qa_tmp_pytest/
+_pytest_remap_tmp/
+scratch/pytest-readiness/
 
 .idea/
 docs/_build/
@@ -59,6 +64,7 @@ src/dict/faiss_index.bin
 .gstack/
 src/dict/metadata_beit3.json
 src/dict/*.json.bak_*
+src/dict/ocr_results (1).json
 aic2026_05_beit3_faiss/faiss_index_downloaded.bin
 aic2026_05_beit3_faiss/metadata_beit3_downloaded.json
 
@@ -70,3 +76,5 @@ aic2026_05_beit3_faiss/metadata_beit3_downloaded.json
 .terraform/
 .terraform.lock.hcl
 crash.log
+src/dict/ocr_results_jina.json
+src/dict/asr_results_jina.json

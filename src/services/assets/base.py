@@ -31,6 +31,10 @@ ARTIFACT_NAMES = (
     "tokenizer",
     "media_info",
     "map_keyframes",
+    "jina_faiss_index",
+    "jina_global_ids",
+    "jina_video_metadata",
+    "jina_index_meta",
 )
 
 

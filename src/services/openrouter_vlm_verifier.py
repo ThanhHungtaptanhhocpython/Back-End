@@ -653,8 +653,22 @@ def verify_frames_with_openrouter_vlm(frames: List[Dict[str, Any]], plan: Dict[s
 
     evaluated_identities = {identity for _candidate_id, _item, _path, identity in candidates}
     tail = [item for item in frames if _frame_identity(item, "") not in evaluated_identities]
+    threshold = max(0.0, min(float(settings.agent_min_verification_score), 1.0))
+    require_match = bool(settings.agent_require_vlm_match)
+    accepted = []
+    for item in reranked:
+        verification = item.get("agent_verification") or {}
+        decision = str(verification.get("vlm_decision") or "")
+        score = float(item.get("vlm_score") or 0.0)
+        if score < threshold or decision == "wrong":
+            continue
+        if require_match and decision != "match":
+            continue
+        accepted.append(item)
+    rejected = len(reranked) - len(accepted)
+    reranked = accepted
     reranked.sort(key=lambda item: float(item.get("verification_score") or 0.0), reverse=True)
-    combined_frames = reranked + remainder + tail
+    combined_frames = reranked if require_match else reranked + remainder + tail
     for index, item in enumerate(combined_frames, start=1):
         item["rank"] = index
 
@@ -674,6 +688,9 @@ def verify_frames_with_openrouter_vlm(frames: List[Dict[str, Any]], plan: Dict[s
         "cache_misses": len(uncached_candidates),
         "api_calls": api_calls,
         "retries": retries_used,
+        "minimum_score": threshold,
+        "require_match": require_match,
+        "rejected": rejected,
         "contract_errors": contract_errors[:6],
         "errors": errors[:3],
     }

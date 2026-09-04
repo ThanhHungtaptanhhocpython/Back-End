@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   BackendSearchError,
   isTransportError,
+  normalizeAgentSearchResponse,
   normalizeBackendResponse,
   probeBackend,
   runAgentChat,
@@ -159,6 +160,51 @@ test("routes a temporal query to /users/temporalsearch with event objects", asyn
   assert.deepEqual(result.items, []);
 });
 
+test("keeps Agent TRAKE results as ordered sequences", () => {
+  const payload = {
+    success: true,
+    response: "Found one sequence.",
+    plan: {
+      intent_type: "temporal_sequence",
+      event_queries: ["event one", "event two"],
+      expanded_queries: [
+        { kind: "temporal_event", query: "event one" },
+        { kind: "temporal_event", query: "event two" },
+      ],
+    },
+    data: {
+      total_items: 1,
+      items: [{
+        video_id: "L21_V001",
+        timestamps: [1, 2],
+        frames: [
+          { event_index: 1, video_key: "L21_V001", frame_key: "000010", submission_frame_id: 10, timestamp: 1 },
+          { event_index: 2, video_key: "L21_V001", frame_key: "000040", submission_frame_id: 40, timestamp: 2 },
+        ],
+      }],
+    },
+  };
+
+  const result = normalizeAgentSearchResponse(payload, { latency: 12 });
+
+  assert.equal(result.type, "TEMPORAL");
+  assert.equal(result.mode, "FASTAPI AGENT - TRAKE");
+  assert.equal(result.sequences.length, 1);
+  assert.deepEqual(result.sequences[0].frames.map((frame) => frame.submissionFrameId), [10, 40]);
+  assert.equal(result.queriesUsed.length, 2);
+});
+
+test("keeps an empty temporal Agent response in temporal mode", () => {
+  const result = normalizeAgentSearchResponse({
+    success: true,
+    plan: { intent_type: "temporal_sequence", event_queries: ["one", "two"] },
+    data: { total_items: 0, items: [] },
+  }, { latency: 10 });
+
+  assert.equal(result.type, "TEMPORAL");
+  assert.deepEqual(result.sequences, []);
+});
+
 test("routes an image pivot as multipart data", async () => {
   let body;
   await runBackendSearch(
@@ -297,7 +343,7 @@ test("normalizes OCR results into keyframe image URLs", () => {
   };
 
   const result = normalizeBackendResponse(payload, { type: "OCR", latency: 66 }, "http://localhost:3000/users");
-  assert.equal(result.items[0].image, "http://localhost:3000/keyframes/L25/L25_V041/181.jpg");
+  assert.equal(result.items[0].image, "http://localhost:3000/keyframes/L25/L25_V041/181.jpg?asset=v2");
   assert.equal(result.items[0].ocrText, "remember");
 });
 test("deduplicates repeated backend keyframes before rendering", () => {

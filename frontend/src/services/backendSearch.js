@@ -1,6 +1,6 @@
 import { toTimecode } from "../shared/format.js";
 import { buildTemporalEventQueries, MAX_TEMPORAL_TOPK, parseTemporalQuery } from "../shared/temporalQuery.js";
-import { normalizeTemporalResponse } from "../shared/temporalNormalize.js";
+import { looksLikeTemporalPayload, normalizeTemporalResponse } from "../shared/temporalNormalize.js";
 
 const SEARCH_ENDPOINTS = Object.freeze({
   TEXT: "singletextsearch",
@@ -203,7 +203,10 @@ export function normalizeBackendItem(item, rank, total, baseUrl = "") {
   const submissionFrameId = finiteNumber(firstDefined(raw.submission_frame_id, raw.submissionFrameId, raw.frame_id, raw.frame_key, raw.n, frameKey), rank);
 
   let framePath = firstDefined(raw.frame_path, raw.framePath);
-  let resolvedImage = firstDefined(raw.image, raw.thumbnail, raw.image_url);
+  // The retriever's frame_path is the canonical identity. Do not let a stale
+  // thumbnail/data URL override it: an earlier asset fallback could otherwise
+  // display bytes belonging to a different keyframe.
+  let resolvedImage = framePath ? "" : firstDefined(raw.image, raw.thumbnail, raw.image_url);
   if (!resolvedImage && !framePath && videoKey && videoKey !== "unknown-video") {
     const split = String(firstDefined(raw.split, raw.folder_key, raw.folderKey, raw.namespace, videoKey.split("_")[0], "UNKNOWN"));
     let frameFile = String(firstDefined(raw.frame_id, raw.frame_idx, raw.keyframe_number, raw.frame_name, frameKey)).trim();
@@ -215,9 +218,9 @@ export function normalizeBackendItem(item, rank, total, baseUrl = "") {
   if (!resolvedImage && framePath) {
     if (baseUrl) {
       const imageBaseUrl = baseUrl.replace(/\/users$/i, "").replace(/\/+$/, "");
-      resolvedImage = `${imageBaseUrl}/keyframes/${framePath.replace(/^\/+/, "")}`;
+      resolvedImage = `${imageBaseUrl}/keyframes/${framePath.replace(/^\/+/, "")}?asset=v2`;
     } else {
-      resolvedImage = `/keyframes/${framePath.replace(/^\/+/, "")}`;
+      resolvedImage = `/keyframes/${framePath.replace(/^\/+/, "")}?asset=v2`;
     }
   }
 
@@ -331,15 +334,18 @@ function normalizePlanQueries(queries = []) {
 }
 
 export function normalizeAgentSearchResponse(payload, { latency, type = "AGENT" }, baseUrl = "") {
-  const base = normalizeBackendResponse(payload, { type, latency }, baseUrl);
   const plan = payload?.plan || payload?.data?.plan || {};
+  const isTemporalAgent = plan?.intent_type === "temporal_sequence" || looksLikeTemporalPayload(payload);
+  const base = isTemporalAgent
+    ? normalizeTemporalResponse(payload, { latency, baseUrl })
+    : normalizeBackendResponse(payload, { type, latency }, baseUrl);
   return {
     ...base,
     plan,
     response: String(payload?.response || payload?.message || "").trim(),
     queriesUsed: normalizePlanQueries(plan.expanded_queries || payload?.data?.queries_used || []),
     routing: plan.routing || payload?.data?.routing || {},
-    mode: "FASTAPI AGENT",
+    mode: base.type === "TEMPORAL" ? "FASTAPI AGENT - TRAKE" : "FASTAPI AGENT",
   };
 }
 
@@ -455,7 +461,7 @@ export async function runBackendSearch(tab, pivot, { config = getSearchConfig(),
 
   const latency = Date.now() - startedAt;
   if ((tab?.searchType || "TEXT") === "TEMPORAL") {
-    const normalized = normalizeTemporalResponse(payload, { latency });
+    const normalized = normalizeTemporalResponse(payload, { latency, baseUrl: config.baseUrl });
     // Keep the flat-result contract populated so generic callers stay safe.
     return { ...normalized, items: [], mode: "FASTAPI LIVE", source: "live" };
   }
@@ -492,11 +498,12 @@ export async function probeBackend({ config = getSearchConfig(), fetchImpl = glo
 }
 
 /** Fetch sequential keyframes for a specific video to power the Review timeline strip. */
-export async function fetchVideoTimeline(videoId, aroundFrameId = null, limit = 60, { config = getSearchConfig(), fetchImpl = globalThis.fetch } = {}) {
+export async function fetchVideoTimeline(videoId, aroundFrameId = null, limit = 60, { scope = "around", config = getSearchConfig(), fetchImpl = globalThis.fetch } = {}) {
   if (!videoId || videoId === "unknown-video") return [];
   const queryParams = new URLSearchParams();
   if (aroundFrameId) queryParams.set("around", String(aroundFrameId));
   if (limit) queryParams.set("limit", String(limit));
+  queryParams.set("scope", scope);
 
   const url = `${config.baseUrl ? config.baseUrl.replace(/\/+$/, "") : ""}/users/video_keyframes/${encodeURIComponent(videoId)}?${queryParams.toString()}`;
   try {

@@ -675,9 +675,9 @@ def _question_plan(question: str, visual_query_limit: int = 3) -> Dict[str, Any]
 
 
 def _get_retriever() -> Any:
-    from src.services.beit3_retriever import get_beit3_retriever
+    from src.services.visual_retriever import get_visual_retriever
 
-    return get_beit3_retriever()
+    return get_visual_retriever()
 
 
 def _search_visual_queries(

@@ -752,9 +752,17 @@ class BEiT3Retriever:
         return lookup
 
     def get_video_timeline(
-        self, video_id: str, around_frame_id: str | None = None, limit: int = 60
+        self,
+        video_id: str,
+        around_frame_id: str | None = None,
+        limit: int = 60,
+        full_video: bool = False,
     ) -> list[dict]:
-        """Return chronological keyframes for a given video."""
+        """Return chronological keyframes for a given video.
+
+        ``full_video`` returns evenly spaced samples across the entire video;
+        the default keeps the original local temporal context around a frame.
+        """
         rows = self._video_to_rows.get(video_id)
         if not rows:
             v_lower = video_id.lower()
@@ -765,12 +773,13 @@ class BEiT3Retriever:
         if not rows:
             return []
 
+        safe_limit = max(1, int(limit or 60))
         frame_col = self._columns.get("frame_id") or "frame_id"
+        match_idx = -1
         if around_frame_id:
             target = str(around_frame_id).strip()
             target_clean = target.lstrip("0")
             target_numbers = set(self._candidate_frame_numbers(target))
-            match_idx = -1
             for i, r in enumerate(rows):
                 fid = str(r.get(frame_col) or "").strip()
                 row_path = r.get(self._columns["frame_path"]) if self._columns.get("frame_path") else None
@@ -782,16 +791,37 @@ class BEiT3Retriever:
                 ):
                     match_idx = i
                     break
+
+        if full_video and len(rows) > safe_limit:
+            # Integer arithmetic avoids float rounding duplicates and includes
+            # both first and last keyframe in the review strip. Keep the
+            # opened frame in the strip so its details and Prev/Next work.
+            selected_indices = (
+                [(index * (len(rows) - 1)) // (safe_limit - 1) for index in range(safe_limit)]
+                if safe_limit > 1
+                else [len(rows) // 2]
+            )
+            if match_idx != -1 and match_idx not in selected_indices:
+                closest = min(
+                    range(len(selected_indices)),
+                    key=lambda index: abs(selected_indices[index] - match_idx),
+                )
+                selected_indices[closest] = match_idx
+                selected_indices.sort()
+            selected_rows = [rows[index] for index in selected_indices]
+        elif full_video:
+            selected_rows = rows
+        elif around_frame_id:
             if match_idx != -1:
-                half = limit // 2
+                half = safe_limit // 2
                 start = max(0, match_idx - half)
-                end = min(len(rows), start + limit)
-                start = max(0, end - limit)
+                end = min(len(rows), start + safe_limit)
+                start = max(0, end - safe_limit)
                 selected_rows = rows[start:end]
             else:
-                selected_rows = rows[:limit]
+                selected_rows = rows[:safe_limit]
         else:
-            selected_rows = rows[:limit]
+            selected_rows = rows[:safe_limit]
 
         results: list[dict] = []
         for rank, row in enumerate(selected_rows, start=1):

@@ -3,11 +3,19 @@
     "mappings": {
       "properties": {
         "faiss_id": { "type": "integer" },
+        "vector_id": { "type": "integer" },
         "video_id": { "type": "keyword" },
+        "parent_namespace": { "type": "keyword" },
+        "frame_id": { "type": "keyword" },
         "frame_name": { "type": "keyword" },
+        "frame_path": { "type": "keyword" },
         "split": { "type": "keyword" },
+        "source_frame_idx": { "type": "integer" },
         "global_frame_id": { "type": "integer" },
         "timestamp": { "type": "float" },
+        "ocr_source_timestamp": { "type": "float" },
+        "alignment_delta_seconds": { "type": "float" },
+        "alignment_source": { "type": "keyword" },
         "ocr_text": { "type": "text" },
         "language": { "type": "keyword" }
       }
@@ -21,7 +29,12 @@
         "end_time": { "type": "float" },
         "text": { "type": "text" },
         "nearest_faiss_id": { "type": "integer" },
+        "nearest_vector_id": { "type": "integer" },
+        "parent_namespace": { "type": "keyword" },
+        "nearest_frame_id": { "type": "keyword" },
         "nearest_frame_name": { "type": "keyword" },
+        "nearest_frame_path": { "type": "keyword" },
+        "nearest_source_frame_idx": { "type": "integer" },
         "nearest_global_frame_id": { "type": "integer" },
         "nearest_timestamp": { "type": "float" },
         "alignment_delta_seconds": { "type": "float" },

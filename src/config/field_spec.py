@@ -53,7 +53,7 @@ GROUP_HELP = {
     G_SERVER: "Where the API binds and which browser origins may call it.",
     G_DATA: "Local dataset / media paths for keyframes, playback and captures.",
     G_ELASTIC: "Elasticsearch cluster used for OCR / ASR text search.",
-    G_RETRIEVAL: "BEiT3 visual-search runtime artifacts (checkpoint, index, parquet).",
+    G_RETRIEVAL: "Selectable BEiT3/Jina visual-search model, index, and parquet artifacts.",
     G_AI: "Optional multi-provider gateway and per-provider keys / models.",
     G_AGENT: "Agent Search planner and VLM candidate-verification tuning.",
     G_TRAKE: "Ordered-event (TRAKE) retrieval and scoring parameters.",
@@ -74,8 +74,12 @@ _BASIC_KEYS = {
     # Elasticsearch
     "ELASTICSEARCH_URL",
     # Retrieval
+    "VISUAL_RETRIEVER",
     "BEIT3_FAISS_INDEX_PATH", "BEIT3_GLOBAL_IDS_PATH", "BEIT3_VIDEO_METADATA_PATH",
     "BEIT3_INDEX_META_PATH", "BEIT3_CHECKPOINT_PATH", "BEIT3_TOKENIZER_PATH", "BEIT3_DEVICE",
+    "JINA_MODEL_NAME_OR_PATH", "JINA_MODEL_REVISION", "JINA_DEVICE", "JINA_TRUNCATE_DIM",
+    "JINA_FAISS_INDEX_PATH", "JINA_GLOBAL_IDS_PATH", "JINA_VIDEO_METADATA_PATH", "JINA_INDEX_META_PATH",
+    "JINA_RERANKER_ENABLED", "JINA_RERANKER_API_KEY", "JINA_RERANKER_MODEL", "JINA_RERANKER_CANDIDATE_POOL",
     # AI gateway essentials
     "AI_GATEWAY_ENABLED", "AI_TEXT_PRIORITY", "AI_VISION_PRIORITY", "AI_LOCAL_FALLBACK_ENABLED",
     "OPENROUTER_API_KEY", "OPENROUTER_MODEL",
@@ -208,7 +212,11 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     _f("ELASTICSEARCH_URL", G_ELASTIC, URL, placeholder="http://localhost:9200",
        help="Base URL of the Elasticsearch cluster used for OCR/ASR search."),
 
-    # -- Retrieval (BEiT3) --------------------------------------------------
+    # -- Retrieval selector -------------------------------------------------
+    _f("VISUAL_RETRIEVER", G_RETRIEVAL, CHOICE, choices=("beit3", "jina"),
+       help="Active visual embedding space. Switching is explicit; startup failures do not silently cross corpora."),
+
+    # -- Retrieval (BEiT3 rollback) ----------------------------------------
     _f("BEIT3_FAISS_INDEX_PATH", G_RETRIEVAL, PATH, path_kind="file",
        help="FAISS index file for the BEiT3 visual-search path."),
     _f("BEIT3_GLOBAL_IDS_PATH", G_RETRIEVAL, PATH, path_kind="file", help="global_ids.parquet."),
@@ -225,6 +233,43 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     _f("BEIT3_COL_FRAME_PATH", G_RETRIEVAL, STR, help="Optional parquet column override."),
     _f("BEIT3_COL_TIMESTAMP", G_RETRIEVAL, STR, help="Optional parquet column override."),
     _f("BEIT3_COL_NAMESPACE", G_RETRIEVAL, STR, help="Optional parquet column override."),
+
+    # -- Retrieval (Jina CLIP v2) ------------------------------------------
+    _f("JINA_MODEL_NAME_OR_PATH", G_RETRIEVAL, STR, placeholder="jinaai/jina-clip-v2",
+       help="Pinned Hugging Face model ID or local snapshot used for Jina query/image encoding."),
+    _f("JINA_MODEL_REVISION", G_RETRIEVAL, STR,
+       help="Optional Hugging Face commit hash. Pin this for reproducible query embeddings."),
+    _f("JINA_CACHE_DIR", G_RETRIEVAL, PATH, path_kind="dir",
+       help="Optional Hugging Face model cache directory."),
+    _f("JINA_LOCAL_FILES_ONLY", G_RETRIEVAL, BOOL,
+       help="Disallow Hugging Face network downloads; requires a complete local model snapshot."),
+    _f("JINA_DEVICE", G_RETRIEVAL, CHOICE, choices=("cpu", "cuda"),
+       help="Torch device for Jina query/image encoding. FAISS remains CPU-backed."),
+    _f("JINA_TRUNCATE_DIM", G_RETRIEVAL, INT, minimum=64, maximum=1024,
+       help="Must equal the image embedding dimension used to build the Jina index."),
+    _f("JINA_QUERY_TASK", G_RETRIEVAL, STR, placeholder="retrieval.query",
+       help="Jina text adapter task used for retrieval queries."),
+    _f("JINA_FAISS_INDEX_PATH", G_RETRIEVAL, PATH, path_kind="file",
+       help="Final Jina FAISS index (jina_faiss.index)."),
+    _f("JINA_GLOBAL_IDS_PATH", G_RETRIEVAL, PATH, path_kind="file",
+       help="Jina global_ids.parquet in exact FAISS vector order."),
+    _f("JINA_VIDEO_METADATA_PATH", G_RETRIEVAL, PATH, path_kind="file",
+       help="Jina video_metadata.parquet."),
+    _f("JINA_INDEX_META_PATH", G_RETRIEVAL, PATH, path_kind="file",
+       help="Jina index_meta.json."),
+    _f("JINA_RERANKER_ENABLED", G_RETRIEVAL, BOOL,
+       help="Rerank the first KIS candidates with Jina's multimodal cloud API."),
+    _f("JINA_RERANKER_API_KEY", G_RETRIEVAL, SECRET, secret=True,
+       help="Jina API key for jina-reranker-m0. Kept server-side only."),
+    _f("JINA_RERANKER_BASE_URL", G_RETRIEVAL, URL,
+       help="Jina reranker API endpoint."),
+    _f("JINA_RERANKER_MODEL", G_RETRIEVAL, STR, placeholder="jina-reranker-m0",
+       help="Multimodal Jina model used for KIS keyframe reranking."),
+    _f("JINA_RERANKER_CANDIDATE_POOL", G_RETRIEVAL, INT, minimum=1, maximum=100,
+       help="Maximum first-stage KIS frames sent to the Jina reranker per query."),
+    _f("JINA_RERANKER_IMAGE_MAX_SIDE", G_RETRIEVAL, INT, minimum=128, maximum=1600,
+       help="Longest side of each JPEG submitted to the Jina reranker."),
+    _f("JINA_RERANKER_TIMEOUT_SECONDS", G_RETRIEVAL, FLOAT, minimum=1, maximum=300),
 
     # -- AI: legacy single-provider LLM knobs (used only when the gateway is OFF) --
     _f("LLM_PROVIDER", G_AI, CHOICE, label="Legacy LLM provider",
@@ -387,6 +432,10 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
        label="Verifier: cache max entries"),
     _f("AGENT_VLM_CACHE_TTL_SECONDS", G_AGENT, INT, minimum=1,
        label="Verifier: cache entry TTL (s)"),
+    _f("AGENT_MIN_VERIFICATION_SCORE", G_AGENT, FLOAT, minimum=0.0, maximum=1.0,
+       label="Verifier: minimum accepted score"),
+    _f("AGENT_REQUIRE_VLM_MATCH", G_AGENT, BOOL,
+       label="Verifier: require an explicit VLM match"),
     # legacy os.getenv knobs, now first-class
     _f("KIS_VQA_RERANK", G_AGENT, BOOL, help="Validate top KIS hits with the reranker."),
     _f("KIS_VQA_RERANK_CANDIDATES", G_AGENT, INT, minimum=1, maximum=60),
@@ -397,6 +446,17 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
 
     # -- TRAKE ------------------------------------------------------------------
     _f("TRAKE_RETRIEVAL_TOP_K", G_TRAKE, INT, minimum=1, maximum=2000),
+    _f("TRAKE_ADAPTIVE_RETRIEVAL_TOP_K", G_TRAKE, INT, minimum=1, maximum=5000,
+       help="Retry recall per event when no video contains every ordered event."),
+    _f("TRAKE_ANCHOR_EXPANSION_ENABLED", G_TRAKE, BOOL,
+       help="Use strong first-event videos as local timeline anchors for later events."),
+    _f("TRAKE_ANCHOR_VIDEO_LIMIT", G_TRAKE, INT, minimum=1, maximum=30,
+       help="Distinct high-ranking videos contributed by each event to local timeline expansion."),
+    _f("TRAKE_ANCHOR_TIMELINE_TOP_K", G_TRAKE, INT, minimum=1, maximum=200),
+    _f("TRAKE_TRACE_CANDIDATES", G_TRAKE, BOOL,
+       help="Log a bounded per-video, per-event retrieval trace for diagnosing temporal recall."),
+    _f("TRAKE_TRACE_VIDEO_LIMIT", G_TRAKE, INT, minimum=1, maximum=200,
+       help="Maximum videos included in one TRAKE retrieval trace."),
     _f("TRAKE_CANDIDATES_PER_EVENT_VIDEO", G_TRAKE, INT, minimum=1, maximum=200),
     _f("TRAKE_BEAM_WIDTH", G_TRAKE, INT, minimum=1, maximum=500),
     _f("TRAKE_MIN_EVENT_GAP_SECONDS", G_TRAKE, FLOAT, minimum=0, maximum=3600),

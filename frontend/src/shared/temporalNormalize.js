@@ -18,10 +18,13 @@ function finiteNumber(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function imageSource(value) {
+function imageSource(value, mimeType = "image/jpeg") {
   if (!value || typeof value !== "string") return "";
   if (/^(data:|blob:|https?:\/\/|\/)/i.test(value)) return value;
-  return `data:image/webp;base64,${value}`;
+  const safeMime = /^image\/(?:jpeg|png|webp)$/i.test(String(mimeType || ""))
+    ? mimeType
+    : "image/jpeg";
+  return `data:${safeMime};base64,${value}`;
 }
 
 /** Integer submission frame id — original per-video frame index only. */
@@ -49,7 +52,21 @@ export function resolveSubmissionFrameId(raw) {
   return null;
 }
 
-function normalizeFrame(raw, index, sequence, videoKey) {
+function keyframeUrl(framePath, baseUrl) {
+  if (!framePath || !baseUrl) return "";
+  const origin = String(baseUrl).trim().replace(/\/users\/?$/i, "").replace(/\/+$/, "");
+  const encodedPath = String(framePath)
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "")
+    .split("/")
+    .map((part) => encodeURIComponent(part))
+    .join("/");
+  // v2 bypasses previews cached before the keyframe resolver used canonical
+  // Jina paths. The path remains the sole asset identity.
+  return `${origin}/keyframes/${encodedPath}?asset=v2`;
+}
+
+function normalizeFrame(raw, index, sequence, videoKey, baseUrl) {
   const record = raw && typeof raw === "object" ? raw : {};
   const eventIndex = finiteNumber(firstDefined(record.event_index, record.eventIndex, index + 1), index + 1);
   const timestamp = finiteNumber(firstDefined(record.timestamp, sequence?.timestamps?.[index]), 0);
@@ -57,6 +74,7 @@ function normalizeFrame(raw, index, sequence, videoKey) {
   const frameKey = String(firstDefined(record.frame_key, record.frameKey, record.frame_id, ""));
   const submissionFrameId = resolveSubmissionFrameId(record);
   const frameVideoKey = String(firstDefined(record.video_key, record.videoKey, videoKey, "unknown-video"));
+  const framePath = String(firstDefined(record.frame_path, record.framePath, record.image_path, record.imagePath, ""));
   const evidenceRow = sequence?.evidence?.[index] || record.evidence || {};
 
   return {
@@ -74,7 +92,12 @@ function normalizeFrame(raw, index, sequence, videoKey) {
     timestamp,
     timecode: toTimecode(timestamp, fps),
     fps,
-    image: imageSource(firstDefined(record.image, record.thumbnail, record.image_url)),
+    // Prefer the backend image route: Azure blobs with a .jpg suffix can
+    // contain WebP bytes, which breaks a MIME-labelled data URI.
+    image: keyframeUrl(framePath, baseUrl) || imageSource(
+      firstDefined(record.image, record.thumbnail, record.image_url),
+      firstDefined(record.image_mime, record.imageMime),
+    ),
     link: String(firstDefined(record.link, record.youtube_url, "") ?? ""),
     evidence: {
       scores: evidenceRow.scores || evidenceRow.evidence_scores || {},
@@ -86,7 +109,7 @@ function normalizeFrame(raw, index, sequence, videoKey) {
   };
 }
 
-function normalizeSequence(raw, index) {
+function normalizeSequence(raw, index, baseUrl) {
   const record = raw && typeof raw === "object" ? raw : {};
   const videoKey = String(firstDefined(record.video_id, record.videoKey, record.video_key, "unknown-video"));
   const rawFrames = Array.isArray(record.frames) ? record.frames : [];
@@ -109,7 +132,14 @@ function normalizeSequence(raw, index) {
     timestamps: record.timestamps,
     score: finiteNumber(firstDefined(record.verification_score, record.score), 0),
   };
-  const frames = rawFrames.map((frame, frameIndex) => normalizeFrame(frame, frameIndex, seqShell, videoKey));
+  const frames = rawFrames
+    .map((frame, frameIndex) => normalizeFrame(frame, frameIndex, seqShell, videoKey, baseUrl))
+    .map((frame, frameIndex, normalized) => ({
+      ...frame,
+      gapSeconds: frameIndex === 0
+        ? 0
+        : finiteNumber(record.temporal_gaps?.[frameIndex - 1], frame.timestamp - normalized[frameIndex - 1].timestamp),
+    }));
 
   const timestamps = frames.map((frame) => frame.timestamp);
   const orderOk = timestamps.every((value, i) => i === 0 || value >= timestamps[i - 1]);
@@ -144,7 +174,7 @@ function normalizeSequence(raw, index) {
 }
 
 /** Normalize a FastAPI BaseResponse whose items are temporal sequences. */
-export function normalizeTemporalResponse(payload, { latency = 0 } = {}) {
+export function normalizeTemporalResponse(payload, { latency = 0, baseUrl = "" } = {}) {
   if (!payload || typeof payload !== "object") {
     throw new Error("Backend returned an invalid temporal response.");
   }
@@ -157,7 +187,7 @@ export function normalizeTemporalResponse(payload, { latency = 0 } = {}) {
   }
 
   const sequences = items
-    .map((item, index) => normalizeSequence(item, index))
+    .map((item, index) => normalizeSequence(item, index, baseUrl))
     .map((sequence, index) => ({ ...sequence, rank: index + 1 }));
 
   return {

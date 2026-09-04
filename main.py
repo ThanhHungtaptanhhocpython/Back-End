@@ -193,11 +193,33 @@ def _closest_numeric_frame_file(vdir, target_number: int):
     return best
 
 
+def _keyframe_media_type(path) -> str:
+    """Detect image bytes because Azure keyframe suffixes are not reliable."""
+    try:
+        with open(path, "rb") as image_file:
+            header = image_file.read(12)
+    except OSError:
+        return "application/octet-stream"
+    if header.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if header.startswith(b"RIFF") and header[8:12] == b"WEBP":
+        return "image/webp"
+    return "application/octet-stream"
+
+
+def _keyframe_response(path):
+    from fastapi.responses import FileResponse
+
+    return FileResponse(str(path), media_type=_keyframe_media_type(path))
+
+
 @app.get("/keyframes/{image_path:path}")
 async def serve_keyframe(image_path: str):
     """Serve keyframe image file with tolerant video-folder and frame-id fallback."""
     from pathlib import Path
-    from fastapi.responses import FileResponse, Response
+    from fastapi.responses import Response
 
     parts = Path(image_path).parts
     filename = parts[-1] if parts else image_path
@@ -225,7 +247,7 @@ async def serve_keyframe(image_path: str):
             ]
             for target in exact_candidates:
                 if target.is_file():
-                    return FileResponse(str(target))
+                    return _keyframe_response(target)
 
             try:
                 requested_number = int(stem)
@@ -251,21 +273,25 @@ async def serve_keyframe(image_path: str):
                         ]:
                             test_file = vdir / candidate_name
                             if test_file.is_file():
-                                return FileResponse(str(test_file))
+                                return _keyframe_response(test_file)
 
                     closest_target = mapped_frame_idx if mapped_frame_idx is not None else requested_number
                     closest = _closest_numeric_frame_file(vdir, closest_target)
                     if closest is not None:
-                        return FileResponse(str(closest))
+                        return _keyframe_response(closest)
 
                 for ext in [".webp", ".jpg", ".png", ".jpeg"]:
                     test_file = vdir / f"{stem}{ext}"
                     if test_file.is_file():
-                        return FileResponse(str(test_file))
+                        return _keyframe_response(test_file)
 
+                # Jina paths are canonical (``keyframe_XXXX.jpg``).  Falling
+                # back to an arbitrary first local file for one of these paths
+                # silently serves a frame from a different video instead of
+                # proceeding to the Azure-backed cache below.
                 all_frames = sorted([f for f in vdir.iterdir() if f.is_file()])
-                if all_frames:
-                    return FileResponse(str(all_frames[0]))
+                if all_frames and not stem.lower().startswith("keyframe_"):
+                    return _keyframe_response(all_frames[0])
 
     # Last resort before the placeholder: if cloud assets are configured, fetch
     # this keyframe on demand and LRU-cache it locally.
@@ -274,7 +300,7 @@ async def serve_keyframe(image_path: str):
 
         cloud_file = resolve_keyframe_file(image_path)
         if cloud_file is not None and cloud_file.is_file():
-            return FileResponse(str(cloud_file))
+            return _keyframe_response(cloud_file)
     except Exception:  # noqa: BLE001 - never let this break image serving
         pass
 

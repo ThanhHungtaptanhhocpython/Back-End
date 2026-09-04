@@ -1,17 +1,29 @@
-import { useRef } from "react";
-import { SearchOutlined, UploadOutlined, VideoCameraOutlined } from "@ant-design/icons";
+import { useRef, useState } from "react";
+import { QuestionCircleOutlined, SearchOutlined, UploadOutlined, VideoCameraOutlined } from "@ant-design/icons";
 import { SEARCH_TYPES } from "../../shared/constants";
 import Keycap from "../../components/Keycap";
 import TemporalEditor from "./TemporalEditor";
+import SearchGuide from "./SearchGuide";
 
 export default function SearchBar({ tab, onPatch, onRun, onAgentRun, searchRef, toast }) {
   const fileRef = useRef(null);
+  const [guideOpen, setGuideOpen] = useState(false);
   const isImage = tab.searchType === "IMAGE";
   const isTemporal = tab.searchType === "TEMPORAL";
   return (
     <div className="ws-searchbar">
-      <div className="ws-panel-tag">
-        <VideoCameraOutlined /> Query controls
+      <div className="ws-searchbar-head">
+        <div className="ws-panel-tag">
+          <VideoCameraOutlined /> Query controls
+        </div>
+        <button
+          type="button"
+          className="ws-guide-open"
+          onClick={() => setGuideOpen(true)}
+          title="Chế độ nào cho việc gì? (Q&A vs Agent Search...)"
+        >
+          <QuestionCircleOutlined /> Dùng chế độ nào?
+        </button>
       </div>
 
       <div className="ws-types">
@@ -25,6 +37,8 @@ export default function SearchBar({ tab, onPatch, onRun, onAgentRun, searchRef, 
           </button>
         ))}
       </div>
+
+      <SearchGuide open={guideOpen} onClose={() => setGuideOpen(false)} />
 
       {isTemporal ? (
         <>

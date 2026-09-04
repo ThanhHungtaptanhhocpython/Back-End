@@ -329,3 +329,199 @@
   flex: 1;
   justify-content: center;
 }
+
+/* ---------- "which mode?" guide ---------- */
+.ws-searchbar-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ws-searchbar-head .ws-panel-tag {
+  flex: 1;
+  min-width: 0;
+}
+
+.ws-guide-open {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--ws-border-strong);
+  border-radius: 999px;
+  background: var(--ws-surface);
+  color: var(--ws-muted);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+
+.ws-guide-open:hover {
+  border-color: var(--ws-primary);
+  color: var(--ws-primary);
+  background: var(--ws-primary-soft);
+}
+
+.ws-guide-lead {
+  margin: 0 0 14px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ws-text);
+}
+
+.ws-guide-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .ws-guide-cards {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ws-guide-card {
+  border: 1px solid var(--ws-border);
+  border-top: 3px solid var(--ws-primary);
+  border-radius: 10px;
+  padding: 14px;
+  background: var(--ws-surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ws-guide-card-tag {
+  align-self: flex-start;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--ws-primary);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.ws-guide-card-headline {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ws-text);
+  line-height: 1.4;
+}
+
+.ws-guide-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ws-text);
+}
+
+.ws-guide-field-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ws-muted);
+}
+
+.ws-guide-field-muted {
+  color: var(--ws-muted);
+}
+
+.ws-guide-examples {
+  margin: 2px 0 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ws-guide-examples li {
+  font-style: italic;
+}
+
+.ws-guide-section-title {
+  margin: 20px 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ws-muted);
+}
+
+.ws-guide-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--ws-border);
+  border-radius: 8px;
+}
+
+.ws-guide-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.ws-guide-table th,
+.ws-guide-table td {
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--ws-border);
+}
+
+.ws-guide-table thead th {
+  background: var(--ws-surface-2);
+  font-weight: 700;
+  color: var(--ws-text);
+}
+
+.ws-guide-table tbody th {
+  width: 128px;
+  font-weight: 700;
+  color: var(--ws-muted);
+  background: var(--ws-surface-2);
+}
+
+.ws-guide-table tbody tr:last-child th,
+.ws-guide-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.ws-guide-other {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ws-guide-other-row {
+  display: flex;
+  gap: 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ws-text);
+}
+
+.ws-guide-other-name {
+  flex-shrink: 0;
+  width: 96px;
+  font-weight: 700;
+  color: var(--ws-primary-strong);
+}
+
+.ws-guide-tips {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ws-text);
+}

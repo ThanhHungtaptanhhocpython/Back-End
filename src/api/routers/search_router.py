@@ -15,6 +15,36 @@ router = APIRouter()
 def _empty_query_response() -> BaseResponse:
     return BaseResponse(success=True, message="Empty query ignored.", data=DataResponse(items=[], total_items=0))
 
+
+def _prefetch_result_keyframes(items) -> None:
+    """Warm the cloud keyframe LRU cache for a just-produced result set so the
+    browser's thumbnail requests mostly hit locally. No-op when cloud assets
+    are off; never allowed to break a search response."""
+    try:
+        from src.services.assets.keyframe_prefetch import prefetch
+
+        def _rows(seq):
+            for it in seq or []:
+                if not isinstance(it, dict):
+                    continue
+                yield it
+                # TRAKE / Q&A rows nest the actual frames one level down.
+                for nested_key in ("frames", "items"):
+                    nested = it.get(nested_key)
+                    if isinstance(nested, list):
+                        yield from (n for n in nested if isinstance(n, dict))
+
+        paths = [
+            path
+            for row in _rows(items)
+            for path in (row.get("frame_path") or row.get("image_path") or row.get("asset_key"),)
+            if path
+        ]
+        if paths:
+            prefetch(paths)
+    except Exception:  # noqa: BLE001
+        logging.debug("keyframe prefetch skipped", exc_info=True)
+
 @router.post("/translate", response_model=TranslateResponse)
 def handle_translate(request: TranslateRequest, response: Response):
     """Translate ``text`` from ``from_lang`` to ``to_lang``.
@@ -61,6 +91,7 @@ def handle_single_text_search(request: TextSearchRequest):
     from src.services.user_service import getImageDataSingleTextSearch
     
     res = getImageDataSingleTextSearch(request.query, request.topk)
+    _prefetch_result_keyframes(res)
     return BaseResponse(
         success=True,
         data=DataResponse(items=res, total_items=len(res))
@@ -73,6 +104,7 @@ def handle_qna_search(request: TextSearchRequest):
     from src.services.user_service import getGroundedQASearch
     
     res, summary = getGroundedQASearch(request.query, request.topk)
+    _prefetch_result_keyframes(res)
     return BaseResponse(
         success=True,
         message=summary.get("answer"),
@@ -214,6 +246,7 @@ def handle_trake_search(request: TemporalSearchRequest):
     query_dicts = [{"query": _fold(ev.query)} for ev in request.query]
 
     res = GetImageDataTrakeSearch(query_dicts, top_results=request.topk)
+    _prefetch_result_keyframes(res)
     return BaseResponse(
         success=True,
         data=DataResponse(items=res, total_items=len(res))
@@ -270,6 +303,7 @@ def handle_agent_search(request: TextSearchRequest):
 
     result = run_agent_query_search(request.query, request.topk)
     frames = result.get("frames", [])
+    _prefetch_result_keyframes(frames)
     return AgentSearchResponse(
         success=True,
         response=result.get("answer", "Agent Search completed."),
@@ -296,7 +330,7 @@ def handle_multimodal_search(request: TextSearchRequest):
         topk=request.topk,
         original_query=request.query
     )
-    
+    _prefetch_result_keyframes(res)
     return BaseResponse(
         success=True,
         data=DataResponse(items=res, total_items=len(res))

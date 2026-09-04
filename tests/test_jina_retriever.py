@@ -668,8 +668,9 @@ class QueryVectorValidationTests(unittest.TestCase):
 
 class EncodeTextContractTests(unittest.TestCase):
     """`encode_text` must hand FAISS an L2-normalized, contiguous float32 row,
-    and must use the official `encode_text(..., task="retrieval.query")`
-    interface -- not some other call shape."""
+    and must call the official `model.encode_text(..., task=...)` interface --
+    with `task=None` by default (JINA_QUERY_TASK defaults to "": no query
+    instruction prefix)."""
 
     def test_encode_text_normalizes_contiguous_float32(self):
         r = _bare_retriever()
@@ -691,7 +692,7 @@ class EncodeTextContractTests(unittest.TestCase):
 
         vec = r.encode_text("một người đàn ông")
         self.assertEqual(captured["texts"], ["một người đàn ông"])
-        self.assertEqual(captured["task"], "retrieval.query")
+        self.assertIsNone(captured["task"])  # JINA_QUERY_TASK default "" -> task=None
         self.assertEqual(vec.shape, (1, EXPECTED_DIM))
         self.assertEqual(vec.dtype, np.float32)
         self.assertTrue(vec.flags["C_CONTIGUOUS"])

@@ -178,6 +178,10 @@ class ArtifactCache:
 class KeyframeCache:
     """LRU cache of on-demand keyframe downloads, keyed by ``frame_path``."""
 
+    # get() only touches an in-memory atime; the index file is flushed at most
+    # once per this many seconds (and once on shutdown via flush()).
+    _FLUSH_DEBOUNCE_SECONDS = 5.0
+
     def __init__(self, root: Path, max_bytes: int) -> None:
         self.root = Path(root) / "keyframes"
         self.root.mkdir(parents=True, exist_ok=True)
@@ -185,6 +189,11 @@ class KeyframeCache:
         self._index_path = self.root / ".index.json"
         self._lock = threading.RLock()
         self._index: dict[str, dict] = self._load_index()
+        # Running total maintained by get()/put()/_evict_if_needed()/clear() so
+        # a put() never re-sums the whole (potentially 6-figure) index.
+        self._total_bytes: int = sum(int(e.get("size", 0)) for e in self._index.values())
+        self._dirty: bool = False
+        self._last_flush: float = time.time()
 
     def _load_index(self) -> dict[str, dict]:
         try:
@@ -197,6 +206,20 @@ class KeyframeCache:
         tmp = self._index_path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(self._index, separators=(",", ":")), encoding="utf-8")
         os.replace(tmp, self._index_path)
+        self._dirty = False
+        self._last_flush = time.time()
+
+    def _flush_debounced(self) -> None:
+        """Persist the index only if it's been dirty for longer than the
+        debounce window. Called from the cache-hit path, which must stay cheap."""
+        if self._dirty and (time.time() - self._last_flush) >= self._FLUSH_DEBOUNCE_SECONDS:
+            self._save_index()
+
+    def flush(self) -> None:
+        """Force-persist a pending in-memory index (app shutdown)."""
+        with self._lock:
+            if self._dirty:
+                self._save_index()
 
     def _abs(self, rel_path: str) -> Path:
         rel = rel_path.replace("\\", "/").lstrip("/")
@@ -215,11 +238,19 @@ class KeyframeCache:
             except ValueError:
                 return None
             if not path.is_file():
-                self._index.pop(rel_path, None)
+                stale = self._index.pop(rel_path, None)
+                if stale is not None:
+                    self._total_bytes -= int(stale.get("size", 0))
+                    self._dirty = True
                 return None
-            entry = self._index.setdefault(rel_path, {"size": path.stat().st_size})
+            entry = self._index.get(rel_path)
+            if entry is None:
+                entry = {"size": path.stat().st_size}
+                self._index[rel_path] = entry
+                self._total_bytes += int(entry["size"])
             entry["atime"] = time.time()
-            self._save_index()
+            self._dirty = True
+            self._flush_debounced()
             return path
 
     def put(self, rel_path: str, data: bytes) -> Path:
@@ -229,7 +260,11 @@ class KeyframeCache:
             tmp = path.with_name(path.name + ".tmp")
             tmp.write_bytes(data)
             os.replace(tmp, path)
+            previous = self._index.get(rel_path)
+            if previous is not None:
+                self._total_bytes -= int(previous.get("size", 0))
             self._index[rel_path] = {"size": len(data), "atime": time.time()}
+            self._total_bytes += len(data)
             self._evict_if_needed()
             self._save_index()
             return path
@@ -237,18 +272,17 @@ class KeyframeCache:
     def _evict_if_needed(self) -> None:
         if self.max_bytes <= 0:
             return
-        total = sum(int(e.get("size", 0)) for e in self._index.values())
-        if total <= self.max_bytes:
+        if self._total_bytes <= self.max_bytes:
             return
         by_atime = sorted(self._index.items(), key=lambda kv: kv[1].get("atime", 0.0))
         for rel_path, entry in by_atime:
-            if total <= self.max_bytes:
+            if self._total_bytes <= self.max_bytes:
                 break
             try:
                 self._abs(rel_path).unlink(missing_ok=True)
             except OSError:
                 pass
-            total -= int(entry.get("size", 0))
+            self._total_bytes -= int(entry.get("size", 0))
             self._index.pop(rel_path, None)
 
     def clear(self) -> int:
@@ -264,6 +298,7 @@ class KeyframeCache:
                 else:
                     child.unlink(missing_ok=True)
             self._index = {}
+            self._total_bytes = 0
             self._save_index()
             return freed
 

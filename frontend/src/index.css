@@ -22,3 +22,19 @@ body {
   margin: 0;
   background-color: #f8fafc;
 }
+
+/* Generic fallback for a keyframe <img> that failed to load (server 404 on a
+   missing keyframe). Feature CSS may override with a richer overlay; this at
+   least replaces the broken-image glyph with a quiet placeholder box. The
+   miss is served no-store, so a later re-render can still succeed. */
+img[data-img-state="error"] {
+  opacity: 0.35;
+  filter: grayscale(1);
+  background: repeating-linear-gradient(
+    45deg,
+    #eef2f7,
+    #eef2f7 8px,
+    #e4e9f2 8px,
+    #e4e9f2 16px
+  );
+}

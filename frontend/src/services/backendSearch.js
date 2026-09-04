@@ -218,13 +218,19 @@ export function normalizeBackendItem(item, rank, total, baseUrl = "") {
 
   let framePath = firstDefined(raw.frame_path, raw.framePath);
   let resolvedImage = firstDefined(raw.image, raw.thumbnail, raw.image_url);
+  // Derive a keyframe path from loose fields ONLY when a real image filename is
+  // already present (OCR/ASR hits carry e.g. `frame_name: "181.jpg"`). Never
+  // fabricate an extension: the old `${name}.webp` guess never matched the
+  // Jina/Azure `.jpg` fine-keyframe set and silently produced 404s.
   if (!resolvedImage && !framePath && videoKey && videoKey !== "unknown-video") {
     const split = String(firstDefined(raw.split, raw.folder_key, raw.folderKey, raw.namespace, videoKey.split("_")[0], "UNKNOWN"));
-    let frameFile = String(firstDefined(raw.frame_id, raw.frame_idx, raw.keyframe_number, raw.frame_name, frameKey)).trim();
+    const candidates = [raw.frame_name, raw.frameName, raw.frame_id, raw.frame_idx, raw.keyframe_number, frameKey]
+      .map((value) => (value == null ? "" : String(value).trim()))
+      .filter(Boolean);
+    let frameFile = candidates.find((value) => /\.(webp|jpe?g|png)$/i.test(value)) || "";
     const prefix = `${videoKey}_`;
     if (frameFile.startsWith(prefix)) frameFile = frameFile.slice(prefix.length);
-    if (!/\.(webp|jpe?g|png)$/i.test(frameFile)) frameFile = `${frameFile}.webp`;
-    framePath = `${split}/${videoKey}/${frameFile}`;
+    if (frameFile) framePath = `${split}/${videoKey}/${frameFile}`;
   }
   if (!resolvedImage && framePath) {
     if (baseUrl) {

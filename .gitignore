@@ -23,6 +23,7 @@ cover/
 src/data/
 data/
 benchmarks/qa_runs/
+benchmarks/kis_runs/
 
 # Local runtime state
 .runlogs/

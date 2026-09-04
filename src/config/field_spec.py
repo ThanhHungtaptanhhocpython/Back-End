@@ -285,6 +285,13 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     _f("JINA_TRUNCATE_DIM", G_RETRIEVAL, INT, minimum=64, maximum=4096,
        hide_when={"RETRIEVAL_BACKEND": "beit3"},
        help="Must match the dimension the FAISS index was built with (1024)."),
+    _f("JINA_QUERY_TASK", G_RETRIEVAL, STR, placeholder="(blank = no prefix)",
+       hide_when={"RETRIEVAL_BACKEND": "beit3"},
+       help="`task` for model.encode_text. Default blank => task=None: no "
+            "query-instruction prefix (matches how the image corpus was "
+            "encoded; A/B via scripts/evaluate_kis_retrieval.py favoured this). "
+            "Set 'retrieval.query' to prepend Jina's English query prefix. The "
+            "LoRA adapter applies either way."),
 
     # -- AI: legacy single-provider LLM knobs (used only when the gateway is OFF) --
     _f("LLM_PROVIDER", G_AI, CHOICE, label="Legacy LLM provider",
@@ -493,6 +500,9 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
        help="Local cache root for synced artifacts. Blank -> <app-data>/assets-cache."),
     _f("CLOUD_ASSETS_KEYFRAME_CACHE_MAX_BYTES", G_CLOUD, INT, minimum=1_000_000,
        help="LRU cap for on-demand keyframe downloads."),
+    _f("CLOUD_ASSETS_KEYFRAME_PREFETCH_WORKERS", G_CLOUD, INT, minimum=1, maximum=64,
+       help="Threads that warm the keyframe cache from cloud storage ahead of "
+            "the browser's thumbnail requests. No effect when cloud assets are off."),
     _f("CLOUD_ASSETS_AUTOSYNC", G_CLOUD, BOOL,
        help="At startup (cloud mode), sync the active backend's artifacts and "
             "warm its retriever in the background so the first search isn't "

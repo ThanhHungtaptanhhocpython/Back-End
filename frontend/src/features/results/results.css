@@ -372,6 +372,34 @@
   display: block;
 }
 
+/* Keyframe that 404'd (missing on the server): hide the broken-image glyph and
+   show a clear "unavailable" state. The backend sends no-store on the miss, so
+   a later re-render can still succeed. */
+[data-img-state="error"] > img {
+  opacity: 0;
+}
+
+.ws-thumb[data-img-state="error"]::after,
+.ws-sb-frame[data-img-state="error"]::after {
+  content: "frame unavailable";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ws-muted);
+  background: repeating-linear-gradient(
+    45deg,
+    #eef2f7,
+    #eef2f7 8px,
+    #e4e9f2 8px,
+    #e4e9f2 16px
+  );
+}
+
 .ws-rank {
   position: absolute;
   top: 6px;

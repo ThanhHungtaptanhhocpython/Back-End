@@ -1,3 +1,5 @@
+import { keyframeImgProps } from "../../shared/imageFallback";
+
 function numberOrNull(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
@@ -47,7 +49,7 @@ export default function QaCandidateList({
               {previewFrames.length ? (
                 <div className="ws-qa-candidate-images">
                   {previewFrames.map((frame) => (
-                    <img key={frame.id} src={frame.image} alt={frame.frameName || candidate.video_id} />
+                    <img key={frame.id} src={frame.image} alt={frame.frameName || candidate.video_id} {...keyframeImgProps} />
                   ))}
                 </div>
               ) : null}

@@ -1,5 +1,6 @@
 import { CheckCircleOutlined, PushpinFilled, PushpinOutlined, WarningOutlined } from "@ant-design/icons";
 import { fmtDur } from "../../shared/format";
+import { keyframeImgProps } from "../../shared/imageFallback";
 
 function VerificationBadge({ verification }) {
   if (!verification) return null;
@@ -113,7 +114,7 @@ export default function TemporalStoryboard({ sequences = [], status, onOpenEvent
               >
                 <span className="ws-sb-frame-tag">E{frame.eventIndex}</span>
                 {frame.image ? (
-                  <img src={frame.image} alt={`Event ${frame.eventIndex}`} loading="lazy" />
+                  <img src={frame.image} alt={`Event ${frame.eventIndex}`} {...keyframeImgProps} />
                 ) : (
                   <div className="ws-sb-frame-missing">no preview</div>
                 )}

@@ -11,6 +11,7 @@ import {
   OrderedListOutlined,
 } from "@ant-design/icons";
 import { fmtDur, toTimecode } from "../../shared/format";
+import { keyframeImgProps } from "../../shared/imageFallback";
 import { getFramePool } from "../../mocks/searchEngine";
 import { fetchVideoTimeline } from "../../shared/adapters";
 import { buildVideoPlayback, youtubeVideoId } from "../../services/videoPlayback";
@@ -293,11 +294,11 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
               <div className="ws-review-cmp">
                 <div className="ws-review-cmp-item">
                   <span className="ws-review-cmp-label">CURRENT - {item.frameName}</span>
-                  <img src={item.image} alt={item.frameName} />
+                  <img src={item.image} alt={item.frameName} {...keyframeImgProps} />
                 </div>
                 <div className="ws-review-cmp-item">
                   <span className="ws-review-cmp-label">COMPARE - {compareItem.frameName}</span>
-                  <img src={compareItem.image} alt={compareItem.frameName} />
+                  <img src={compareItem.image} alt={compareItem.frameName} {...keyframeImgProps} />
                 </div>
               </div>
             ) : showVideo && videoPlayback ? (
@@ -370,7 +371,7 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
                 title={videoPlayback ? "Play video from this timestamp" : hydratedItem.frameName}
               >
                 {hydratedItem.image ? (
-                  <img className="ws-review-img" src={hydratedItem.image} alt={hydratedItem.frameName} />
+                  <img className="ws-review-img" src={hydratedItem.image} alt={hydratedItem.frameName} {...keyframeImgProps} />
                 ) : (
                   <div className="ws-review-img ws-review-img-missing" role="img" aria-label="Exact preview unavailable">
                     <VideoCameraOutlined />
@@ -429,7 +430,7 @@ export default function ReviewOverlay({ item, results, isKept, onClose, onNaviga
                   onClick={() => onSelect(f)}
                   title={f.frameName}
                 >
-                  <img src={f.image} alt={f.frameName} loading="lazy" />
+                  <img src={f.image} alt={f.frameName} {...keyframeImgProps} />
                   <span className="ws-film-tc">{f.timecode}</span>
                   {f.id === item.id || (f.frameKey && f.frameKey === item.frameKey) ? <span className="ws-film-cur">CURRENT</span> : null}
                 </button>

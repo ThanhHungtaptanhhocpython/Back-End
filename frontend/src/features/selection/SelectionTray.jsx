@@ -1,4 +1,5 @@
 import { CloseOutlined, ExportOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { keyframeImgProps } from "../../shared/imageFallback";
 
 export default function SelectionTray({ keptItems, onRemove, onClear, onExport, onOpenBatch, onOpen, trayRef }) {
   return (
@@ -30,7 +31,7 @@ export default function SelectionTray({ keptItems, onRemove, onClear, onExport, 
           {keptItems.map((item) => (
             <div key={item.id} className="ws-tray-thumb" onClick={() => onOpen(item)}>
               {item.image ? (
-                <img src={item.image} alt={item.frameName} />
+                <img src={item.image} alt={item.frameName} {...keyframeImgProps} />
               ) : (
                 <div
                   className="ws-tray-thumb-missing"

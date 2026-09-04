@@ -1,7 +1,8 @@
 """Jina CLIP v2 text-to-image visual retrieval service.
 
 Owns the cloud-primary retrieval path built for this migration:
-    text (Vietnamese/English) via `encode_text(task="retrieval.query")`, or an
+    text (Vietnamese/English) via `encode_text` (no instruction prefix by
+    default; `JINA_QUERY_TASK`), or an
     image via `encode_image` -> normalized 1024-d query vector ->
     FAISS IndexIDMap2(IndexFlatIP) search -> global_ids.parquet lookup ->
     structured results. Serves textual KIS, grounded Q&A candidate retrieval,
@@ -780,8 +781,12 @@ class JinaRetriever:
         """Encode `query` into a normalized, contiguous (1, 1024) float32 vector.
 
         The query is encoded directly -- Vietnamese or English -- via Jina CLIP
-        v2's official `encode_text(..., task="retrieval.query")` interface; no
-        translation step is required or applied here.
+        v2's official `encode_text(..., task=...)` interface; no translation
+        step is required or applied here. `task` comes from `JINA_QUERY_TASK`
+        (default ""), so by default `task=None` -- no query-instruction prefix,
+        matching how the image corpus was encoded. Set it to "retrieval.query"
+        to prepend Jina's English query prefix. The LoRA adapter applies either
+        way (config.json `default_lora_task`).
         """
         if not query or not query.strip():
             raise JinaRetrieverError("Query text must be a non-empty string.")
@@ -789,10 +794,11 @@ class JinaRetriever:
         model = self._load_model()
         import torch
 
+        task = (getattr(self._settings, "jina_query_task", "") or "").strip() or None
         with torch.inference_mode():
             vec = model.encode_text(
                 [query.strip()],
-                task="retrieval.query",
+                task=task,
                 truncate_dim=int(self._settings.jina_truncate_dim),
             )
         return self._finalize_query_vector(vec)

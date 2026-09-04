@@ -1,5 +1,6 @@
 import { DeleteOutlined, PlusSquareOutlined } from "@ant-design/icons";
 import { fmtDur } from "../../shared/format";
+import { keyframeImgProps } from "../../shared/imageFallback";
 
 export default function ResultCard({ item, focused, isKept, onOpen, onToggleKeep, onExclude, onPivot, onFocusItem, registerRef }) {
   return (
@@ -17,7 +18,7 @@ export default function ResultCard({ item, focused, isKept, onOpen, onToggleKeep
       }}
     >
       <div className="ws-thumb">
-        <img src={item.image} alt={item.frameName} loading="lazy" />
+        <img src={item.image} alt={item.frameName} {...keyframeImgProps} />
         <span className="ws-rank">{String(item.rank).padStart(2, "0")}</span>
         <span className="ws-score" title={item.reason || item.agentVerification?.note || "Match score"}>{Math.round(item.score * 100)}%</span>
         {item.real ? <span className="ws-live">LIVE FEED</span> : null}

@@ -163,6 +163,15 @@ class Settings(BaseSettings):
     # `truncate_dim` passed to encode_text/encode_image; must match the 1024-d
     # FAISS index the corpus was built with (see scripts/cloud/build_jina_index.py).
     jina_truncate_dim: int = 1024
+    # `task` passed to `model.encode_text`. Default "" -> `task=None`: no query
+    # instruction prefix. The corpus was encoded with `encode_image(...)` (no
+    # instruction), and an A/B run (scripts/evaluate_kis_retrieval.py) showed
+    # the no-prefix query equal-or-better on every recall metric -- the fixed
+    # ~11-token English prefix ("Represent the query for retrieving evidence
+    # documents: ") is dead weight in a mean-pooled short query. Set to
+    # "retrieval.query" to restore the prefix. `task=None` still applies the
+    # LoRA adapter via config.json `default_lora_task`.
+    jina_query_task: str = ""
 
     # --- Logging ---
     log_level: str = "INFO"
@@ -319,6 +328,11 @@ class Settings(BaseSettings):
     cloud_assets_manifest_key: str = "hcmai-assets.json"
     cloud_assets_cache_path: Path | None = None
     cloud_assets_keyframe_cache_max_bytes: int = 5 * 1024 * 1024 * 1024
+    # Bounded thread pool that warms the keyframe LRU cache from cloud storage
+    # ahead of the browser's thumbnail requests (see
+    # src/services/assets/keyframe_prefetch.py). No effect when cloud assets
+    # are off.
+    cloud_assets_keyframe_prefetch_workers: int = 16
     # When cloud assets are on, sync the active backend's artifacts (and warm
     # its retriever) in the background at startup, so the first search isn't
     # blocked on a multi-GB download / model load. Progress is visible on the

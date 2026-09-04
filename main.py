@@ -53,6 +53,20 @@ async def _lifespan(_app: "FastAPI"):
     except Exception as exc:  # noqa: BLE001 - never let warm-up break startup
         logging.getLogger(__name__).debug("startup warm not started: %s", exc)
     yield
+    # -- shutdown -----------------------------------------------------------
+    try:
+        from src.services.assets.keyframe_prefetch import shutdown as _kf_prefetch_shutdown
+
+        _kf_prefetch_shutdown()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from src.services.assets import cloud_enabled, get_keyframe_cache
+
+        if cloud_enabled(settings):
+            get_keyframe_cache().flush()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 app = FastAPI(
@@ -163,10 +177,22 @@ def _make_svg_placeholder(video_id: str, frame_info: str) -> str:
 
 from typing import Any
 
+# ---------------------------------------------------------------------------
+# Local-legacy keyframe lookup helpers.
+#
+# These serve the OLD on-disk dataset layout (``<split>/<video_id>/000000.webp``,
+# named by source-frame index) and are used ONLY when cloud assets are OFF.
+# In cloud mode ``serve_keyframe`` goes straight to the LRU cache + Azure and
+# never touches ``KEYFRAMES_ROOT`` -- the cloud "fine keyframes" set has a
+# different naming/extension (``keyframe_0016.jpg``) and letting the local
+# lookup answer for it served frame 0 of every video for every result.
+# ---------------------------------------------------------------------------
+
 _map_keyframes_cache: dict[str, Any] = {}
 
 
 def _load_keyframe_map(video_id: str):
+    """[local-legacy] map-keyframes CSV for ``video_id`` (n -> frame_idx)."""
     import pandas as pd
     from pathlib import Path
 
@@ -212,56 +238,84 @@ def _candidate_video_dirs(root_path, parts, video_id: str):
     return [path for path in candidates if path and path.is_dir()]
 
 
-def _closest_numeric_frame_file(vdir, target_number: int):
-    best = None
-    best_diff = None
-    for file_path in vdir.iterdir():
-        if not file_path.is_file() or file_path.suffix.lower() not in {".webp", ".jpg", ".jpeg", ".png"}:
-            continue
-        try:
-            number = int(file_path.stem)
-        except ValueError:
-            continue
-        diff = abs(number - target_number)
-        if best is None or diff < best_diff:
-            best = file_path
-            best_diff = diff
-    return best
+_KEYFRAME_CACHE_CONTROL = "public, max-age=604800, immutable"
+
+
+def _keyframe_video_id(parts: tuple[str, ...]) -> str:
+    for part in parts:
+        upper = part.upper()
+        if "_V" in upper or upper.startswith("V0"):
+            return part
+    for part in parts:
+        if "_" in part and (part.startswith("L") or part.startswith("V")):
+            return part
+    return "UNKNOWN_VIDEO"
+
+
+def _keyframe_missing_response(video_id: str, stem: str):
+    """A miss is *visible*: 404 + ``no-store`` so the browser never caches it,
+    the client's ``onError`` fires, and the cell self-heals on a later reload.
+    The SVG body is only a friendly fallback for a direct hit in a browser tab."""
+    from fastapi.responses import Response
+
+    return Response(
+        content=_make_svg_placeholder(video_id, f"Frame {stem}"),
+        media_type="image/svg+xml",
+        status_code=404,
+        headers={"Cache-Control": "no-store", "X-Keyframe-Status": "missing"},
+    )
 
 
 @app.get("/keyframes/{image_path:path}")
-async def serve_keyframe(image_path: str):
-    """Serve keyframe image file with tolerant video-folder and frame-id fallback."""
+def serve_keyframe(image_path: str):
+    """Serve a keyframe image.
+
+    Cloud mode (``CLOUD_ASSETS_ENABLED`` + a cloud provider): the image comes
+    *only* from the LRU cache + cloud store (via the keyframe-prefetch helper).
+    ``KEYFRAMES_ROOT`` is never consulted.
+
+    Local-legacy mode (cloud assets off, on-disk BEiT3 dataset): the tolerant
+    ``KEYFRAMES_ROOT`` lookup -- minus the two fallbacks that returned a
+    *wrong* image on a miss (nearest-numeric-frame, and "first file in the
+    folder"). A wrong image is worse than a visible miss.
+
+    Sync ``def`` on purpose: the I/O here is blocking, so Starlette must run it
+    in a worker thread instead of on the event loop that also serves search.
+    """
     from pathlib import Path
-    from fastapi.responses import FileResponse, Response
+    from fastapi.responses import FileResponse
 
     parts = Path(image_path).parts
     filename = parts[-1] if parts else image_path
     stem = Path(filename).stem
+    video_id = _keyframe_video_id(parts)
 
-    video_id = "UNKNOWN_VIDEO"
-    for part in parts:
-        upper = part.upper()
-        if "_V" in upper or upper.startswith("V0"):
-            video_id = part
-            break
-    if video_id == "UNKNOWN_VIDEO":
-        for part in parts:
-            if "_" in part and (part.startswith("L") or part.startswith("V")):
-                video_id = part
-                break
+    from src.services.assets import cloud_enabled
 
+    if cloud_enabled(settings):
+        cloud_file = None
+        try:
+            from src.services.assets.keyframe_prefetch import fetch_blocking
+
+            cloud_file = fetch_blocking(image_path)
+        except Exception:  # noqa: BLE001 - never let this break image serving
+            cloud_file = None
+        if cloud_file is not None and cloud_file.is_file():
+            return FileResponse(
+                str(cloud_file), headers={"Cache-Control": _KEYFRAME_CACHE_CONTROL}
+            )
+        return _keyframe_missing_response(video_id, stem)
+
+    # --- Local-legacy dataset path (cloud assets off) -----------------------
     raw_root = str(settings.get_keyframes_root() or "").strip('"\'')
     if raw_root:
         root_path = Path(raw_root)
         if root_path.exists():
-            exact_candidates = [
-                root_path / image_path,
-                root_path / "keyframes" / image_path,
-            ]
-            for target in exact_candidates:
+            for target in (root_path / image_path, root_path / "keyframes" / image_path):
                 if target.is_file():
-                    return FileResponse(str(target))
+                    return FileResponse(
+                        str(target), headers={"Cache-Control": _KEYFRAME_CACHE_CONTROL}
+                    )
 
             try:
                 requested_number = int(stem)
@@ -271,12 +325,11 @@ async def serve_keyframe(image_path: str):
             for vdir in _candidate_video_dirs(root_path, parts, video_id):
                 if requested_number is not None:
                     mapped_frame_idx = _lookup_frame_idx_from_keyframe_number(video_id, requested_number)
-                    numeric_candidates = []
-                    if mapped_frame_idx is not None:
-                        numeric_candidates.extend([mapped_frame_idx, requested_number])
-                    else:
-                        numeric_candidates.append(requested_number)
-
+                    numeric_candidates = (
+                        [mapped_frame_idx, requested_number]
+                        if mapped_frame_idx is not None
+                        else [requested_number]
+                    )
                     for number in numeric_candidates:
                         for candidate_name in [
                             f"{number:06d}.webp", f"{number:06d}.jpg",
@@ -287,35 +340,20 @@ async def serve_keyframe(image_path: str):
                         ]:
                             test_file = vdir / candidate_name
                             if test_file.is_file():
-                                return FileResponse(str(test_file))
-
-                    closest_target = mapped_frame_idx if mapped_frame_idx is not None else requested_number
-                    closest = _closest_numeric_frame_file(vdir, closest_target)
-                    if closest is not None:
-                        return FileResponse(str(closest))
+                                return FileResponse(
+                                    str(test_file),
+                                    headers={"Cache-Control": _KEYFRAME_CACHE_CONTROL},
+                                )
 
                 for ext in [".webp", ".jpg", ".png", ".jpeg"]:
                     test_file = vdir / f"{stem}{ext}"
                     if test_file.is_file():
-                        return FileResponse(str(test_file))
+                        return FileResponse(
+                            str(test_file),
+                            headers={"Cache-Control": _KEYFRAME_CACHE_CONTROL},
+                        )
 
-                all_frames = sorted([f for f in vdir.iterdir() if f.is_file()])
-                if all_frames:
-                    return FileResponse(str(all_frames[0]))
-
-    # Last resort before the placeholder: if cloud assets are configured, fetch
-    # this keyframe on demand and LRU-cache it locally.
-    try:
-        from src.services.assets import resolve_keyframe_file
-
-        cloud_file = resolve_keyframe_file(image_path)
-        if cloud_file is not None and cloud_file.is_file():
-            return FileResponse(str(cloud_file))
-    except Exception:  # noqa: BLE001 - never let this break image serving
-        pass
-
-    svg_content = _make_svg_placeholder(video_id, f"Frame {stem}")
-    return Response(content=svg_content, media_type="image/svg+xml")
+    return _keyframe_missing_response(video_id, stem)
 
 
 if __name__ == "__main__":

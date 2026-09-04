@@ -17,6 +17,8 @@ _KEYFRAME_CACHE: KeyframeCache | None = None
 _KEYFRAME_CACHE_MAX = -1
 _MANIFEST_CACHE: dict = {"at": 0.0, "manifest": None}
 _MANIFEST_TTL = 300.0
+_ASSET_STORE: AssetStore | None = None
+_ASSET_STORE_KEY: tuple | None = None
 
 
 def cloud_enabled(settings: Settings | None = None) -> bool:
@@ -28,13 +30,40 @@ def cloud_enabled(settings: Settings | None = None) -> bool:
 
 
 def build_asset_store(settings: Settings | None = None) -> AssetStore | None:
+    """Return the shared :class:`AssetStore` for the configured provider.
+
+    Memoized (keyed on the connection-relevant settings) so a burst of
+    keyframe fetches doesn't open a fresh ``BlobServiceClient`` -- and pay a
+    TLS handshake -- per thumbnail. Cleared by :func:`reset_caches`.
+    """
+    global _ASSET_STORE, _ASSET_STORE_KEY
     settings = settings or get_settings()
     provider = settings.cloud_assets_provider
-    if provider == "azure_blob":
-        return AzureBlobAssetStore(settings)
-    if provider == "s3_compatible":
-        return S3AssetStore(settings)
-    return None
+    if provider not in ("azure_blob", "s3_compatible"):
+        return None
+    key = (
+        provider,
+        settings.azure_storage_account_name,
+        settings.azure_storage_connection_string,
+        settings.azure_storage_primary_key,
+        settings.azure_blob_container_keyframes,
+        settings.azure_blob_container_embeddings,
+        settings.azure_blob_container_metadata,
+        settings.s3_endpoint_url,
+        settings.s3_region,
+        settings.s3_bucket,
+        settings.s3_access_key_id,
+        settings.s3_secret_access_key,
+    )
+    with _LOCK:
+        if _ASSET_STORE is None or _ASSET_STORE_KEY != key:
+            _ASSET_STORE = (
+                AzureBlobAssetStore(settings)
+                if provider == "azure_blob"
+                else S3AssetStore(settings)
+            )
+            _ASSET_STORE_KEY = key
+        return _ASSET_STORE
 
 
 def get_artifact_cache(settings: Settings | None = None) -> ArtifactCache:
@@ -65,11 +94,14 @@ def get_keyframe_cache(settings: Settings | None = None) -> KeyframeCache:
 
 def reset_caches() -> None:
     global _ARTIFACT_CACHE, _KEYFRAME_CACHE, _KEYFRAME_CACHE_MAX, _MANIFEST_CACHE
+    global _ASSET_STORE, _ASSET_STORE_KEY
     with _LOCK:
         _ARTIFACT_CACHE = None
         _KEYFRAME_CACHE = None
         _KEYFRAME_CACHE_MAX = -1
         _MANIFEST_CACHE = {"at": 0.0, "manifest": None}
+        _ASSET_STORE = None
+        _ASSET_STORE_KEY = None
 
 
 def get_manifest(store: AssetStore | None = None, *, force: bool = False) -> Manifest | None:
